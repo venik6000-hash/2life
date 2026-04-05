@@ -1,0 +1,15 @@
+FROM node:20-alpine
+WORKDIR /app
+
+# Install dependencies first (layer cache)
+COPY ["server /package.json", "./package.json"]
+RUN npm install --omit=dev
+
+# Copy source
+COPY ["server /", "./"]
+
+# Data directory for backups
+RUN mkdir -p /app/data/backups
+
+EXPOSE 3001
+CMD ["node", "index.js"]

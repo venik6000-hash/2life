@@ -1,0 +1,50 @@
+services:
+
+  # ─── PostgreSQL база данных ───────────────────────────────────────────────────
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: 2life
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d 2life"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ─── Node.js сервер ───────────────────────────────────────────────────────────
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@db:5432/2life
+      JWT_SECRET: ${JWT_SECRET:-change-this-secret-in-production}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin123}
+      NODE_ENV: production
+    volumes:
+      - server_data:/app/data
+
+  # ─── React фронтенд (nginx) ───────────────────────────────────────────────────
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    restart: unless-stopped
+    depends_on:
+      - server
+    ports:
+      - "${PORT:-80}:80"
+
+volumes:
+  postgres_data:   # данные PostgreSQL — не теряются при перезапуске
+  server_data:     # бэкапы сервера
