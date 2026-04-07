@@ -24,3 +24,7 @@ pnpm-debug.log*
 # local tooling
 .claude/
 .omc/
+
+# database backups (contain patient data — never commit)
+server /data/backups/
+server /uploads/

@@ -32,7 +32,16 @@ export function AuthProvider({ children }) {
   }, []);
 
   const logout = useCallback(() => {
-    localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(USER_KEY);
+    // Инвалидируем токен на сервере (jti-blacklist), затем чистим локальное состояние
+    const currentToken = localStorage.getItem(TOKEN_KEY);
+    if (currentToken) {
+      fetch("/api/auth/logout", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${currentToken}` },
+      }).catch(() => {}); // silent — клиент всё равно разлогинится
+    }
+    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(USER_KEY);
     setToken(null); setUser(null); setPermissions(null);
   }, []);
 

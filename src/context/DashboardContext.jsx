@@ -429,27 +429,42 @@ export function DashboardProvider({ children }) {
     const token = localStorage.getItem("dash_token");
     if (!token) return;
 
-    const es = new EventSource(`/api/events?token=${encodeURIComponent(token)}`);
+    let es = null;
+    let cancelled = false;
 
-    es.addEventListener("client-updated", async (e) => {
+    const connect = async () => {
       try {
-        const { clientId } = JSON.parse(e.data);
-        // Не трогаем если у пользователя есть несохранённые правки по этому клиенту
-        if (dirtyClientsRef.current.has(clientId)) return;
-        if (pendingClientOpsRef.current.has(clientId)) return;
-        const res = await authFetch(`/api/clients/${clientId}`);
-        if (!res.ok) return;
-        const fresh = await res.json().catch(() => null);
-        if (!fresh || !fresh.id) return;
-        setCls(prev => prev.map(c => c.id === fresh.id ? fresh : c));
+        const r = await fetch("/api/auth/sse-ticket", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (cancelled || !r.ok) return;
+        const { ticket } = await r.json();
+        if (cancelled) return;
+        es = new EventSource(`/api/events?ticket=${encodeURIComponent(ticket)}`);
+        es.addEventListener("client-updated", async (e) => {
+          try {
+            const { clientId } = JSON.parse(e.data);
+            // Не трогаем если у пользователя есть несохранённые правки по этому клиенту
+            if (dirtyClientsRef.current.has(clientId)) return;
+            if (pendingClientOpsRef.current.has(clientId)) return;
+            const res = await authFetch(`/api/clients/${clientId}`);
+            if (!res.ok) return;
+            const fresh = await res.json().catch(() => null);
+            if (!fresh || !fresh.id) return;
+            setCls(prev => prev.map(c => c.id === fresh.id ? fresh : c));
+          } catch (_) {}
+        });
+        es.onerror = () => {};
       } catch (_) {}
-    });
-
-    es.onerror = () => {
-      // Браузер автоматически переподключается при обрыве — ничего делать не нужно
     };
 
-    return () => es.close();
+    connect();
+
+    return () => {
+      cancelled = true;
+      es?.close();
+    };
   }, [loaded, authFetch]);
 
   const doctorsSaveTimer = useRef(null);

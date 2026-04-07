@@ -13,3 +13,13 @@
 2026-04-03 | Analytics/UI | Исправлено read-only поведение и убраны артефакты отображения строк при скролле.
 2026-04-03 | Roles/API | Исправлено сохранение read/write в ролях: частичные обновления теперь не сбрасывают второй флаг.
 2026-04-03 | Docs | Добавлен `CHANGELOG_ONE_LINE.md`, обновлены `README.md` и `ARCHITECTURE.md` до актуального состояния.
+2026-04-07 | Security | Rate limiting на `POST /api/auth/login`: макс. 5 попыток в минуту с одного IP+логина (express-rate-limit).
+2026-04-07 | Security | Серверная инвалидация JWT при логауте: jti-blacklist в `tokenBlacklist.js`, новый эндпоинт `POST /api/auth/logout`.
+2026-04-07 | Security | JWT_SECRET убран из публичного экспорта middleware; вместо него `signToken()` — единственная точка подписи токенов.
+2026-04-07 | Security | Токены содержат `jti` (crypto.randomUUID) для поддержки точечного отзыва без инвалидации всех сессий.
+2026-04-07 | Security | bcrypt cost factor повышен с 10 до 12, все вызовы `hashSync` заменены на async `bcrypt.hash/compare`.
+2026-04-07 | Security | Минимальная длина пароля увеличена с 6 до 8 символов во всех эндпоинтах.
+2026-04-07 | Security | `docker-compose.yml`: слабые fallback-значения (`admin123`, `change-this-secret`) заменены на `:?`-ошибки — контейнер не стартует без явно заданных секретов.
+2026-04-07 | Security | Восстановлен `.env.example` с placeholder-значениями (был перезаписан реальными секретами).
+2026-04-07 | Security | Все `res.status(500).json({ error: e.message })` заменены на `"Внутренняя ошибка сервера"` + `console.error` — внутренние детали не утекают клиенту.
+2026-04-07 | Security | `AuthContext.jsx`: `logout()` теперь вызывает `POST /api/auth/logout` перед очисткой localStorage для серверной инвалидации токена.

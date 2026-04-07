@@ -1,3 +1,4 @@
+require("dotenv").config({ path: require("path").join(__dirname, "../.env") });
 const express = require("express");
 const cors    = require("cors");
 
@@ -15,7 +16,10 @@ const adminRouter   = require("./routes/admin");
 const app  = express();
 const PORT = 3001;
 
-app.use(cors());
+app.use(cors({
+  origin: process.env.CORS_ORIGIN || "http://localhost:3000",
+  credentials: true,
+}));
 app.use(express.json({ limit: "50mb" }));
 
 app.use("/api", authRouter);

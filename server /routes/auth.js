@@ -1,38 +1,57 @@
-const express  = require("express");
-const bcrypt   = require("bcryptjs");
-const jwt      = require("jsonwebtoken");
-const router   = express.Router();
+const express    = require("express");
+const bcrypt     = require("bcryptjs");
+const rateLimit  = require("express-rate-limit");
+const router     = express.Router();
 
 const { getUser, listUsers, createUser, updatePass, setActive, setAllClientsAccess, pool } = require("../services/db");
-const { requireAuth, JWT_SECRET, TOKEN_TTL } = require("../middleware/auth");
-const { getPermissionsForRole } = require("../services/permissions");
+const { requireAuth, signToken }   = require("../middleware/auth");
+const { blacklistToken }           = require("../services/tokenBlacklist");
+const { getPermissionsForRole }    = require("../services/permissions");
+
+const BCRYPT_ROUNDS = 12;
+
+// Rate limiter: макс. 5 попыток входа в минуту с одного IP+логина
+const loginLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Слишком много попыток входа. Попробуйте через минуту." },
+  keyGenerator: (req) => {
+    const username = String(req.body?.username || "").toLowerCase().trim();
+    return `${req.ip}:${username}`;
+  },
+});
 
 // POST /api/auth/login
-router.post("/auth/login", async (req, res) => {
+router.post("/auth/login", loginLimiter, async (req, res) => {
   try {
     const { username, password } = req.body || {};
     if (!username || !password) {
       return res.status(400).json({ error: "Введите логин и пароль" });
     }
     const user = await getUser(String(username).trim().toLowerCase());
-    if (!user || !bcrypt.compareSync(password, user.password_hash)) {
+    if (!user || !(await bcrypt.compare(password, user.password_hash))) {
       return res.status(401).json({ error: "Неверный логин или пароль" });
     }
-    const token = jwt.sign(
-      { id: user.id, username: user.username, role: user.role },
-      JWT_SECRET,
-      { expiresIn: TOKEN_TTL }
-    );
+    const token = signToken({ id: user.id, username: user.username, role: user.role });
     const permissions = await getPermissionsForRole(user.role);
     res.json({
       ok: true,
       token,
       user: { id: user.id, username: user.username, role: user.role, all_clients_access: !!user.all_clients_access },
-      permissions
+      permissions,
     });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    console.error("[auth] login error:", e);
+    res.status(500).json({ error: "Внутренняя ошибка сервера" });
   }
+});
+
+// POST /api/auth/logout — серверная инвалидация токена
+router.post("/auth/logout", requireAuth(), (req, res) => {
+  if (req.user?.jti) blacklistToken(req.user.jti);
+  res.json({ ok: true });
 });
 
 // GET /api/auth/me — кто я
@@ -48,8 +67,16 @@ router.get("/auth/me", requireAuth(), async (req, res) => {
     const permissions = await getPermissionsForRole(currentUser.role);
     res.json({ ok: true, user: currentUser, permissions });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    console.error("[auth] /me error:", e);
+    res.status(500).json({ error: "Внутренняя ошибка сервера" });
   }
+});
+
+// POST /api/auth/sse-ticket — одноразовый тикет для SSE-соединения (30 сек TTL)
+router.post("/auth/sse-ticket", requireAuth(), (req, res) => {
+  const { createTicket } = require("../services/sseTickets");
+  const ticket = createTicket(req.user);
+  res.json({ ok: true, ticket });
 });
 
 // POST /api/auth/change-password — смена своего пароля
@@ -59,30 +86,32 @@ router.post("/auth/change-password", requireAuth(), async (req, res) => {
     if (!currentPassword || !newPassword) {
       return res.status(400).json({ error: "Укажите текущий и новый пароль" });
     }
-    if (String(newPassword).length < 6) {
-      return res.status(400).json({ error: "Новый пароль должен быть не короче 6 символов" });
+    if (String(newPassword).length < 8) {
+      return res.status(400).json({ error: "Новый пароль должен быть не короче 8 символов" });
     }
     const r = await pool.query("SELECT * FROM users WHERE id = $1", [req.user.id]);
     const user = r.rows[0] ?? null;
-    if (!user || !bcrypt.compareSync(currentPassword, user.password_hash)) {
+    if (!user || !(await bcrypt.compare(currentPassword, user.password_hash))) {
       return res.status(401).json({ error: "Неверный текущий пароль" });
     }
-    await updatePass(bcrypt.hashSync(newPassword, 10), req.user.id);
+    await updatePass(await bcrypt.hash(newPassword, BCRYPT_ROUNDS), req.user.id);
     res.json({ ok: true });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    console.error("[auth] change-password error:", e);
+    res.status(500).json({ error: "Внутренняя ошибка сервера" });
   }
 });
 
 // ----- Admin: управление пользователями -----
 
 // GET /api/admin/users
-router.get("/admin/users", requireAuth("admin"), async (req, res) => {
+router.get("/admin/users", requireAuth("admin"), async (_req, res) => {
   try {
     const users = await listUsers();
     res.json({ ok: true, users });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    console.error("[auth] list users error:", e);
+    res.status(500).json({ error: "Внутренняя ошибка сервера" });
   }
 });
 
@@ -99,17 +128,18 @@ router.post("/admin/users", requireAuth("admin"), async (req, res) => {
     if (!allValidRoles.includes(role)) {
       return res.status(400).json({ error: `Недопустимая роль. Допустимые: ${allValidRoles.join(", ")}` });
     }
-    if (String(password).length < 6) {
-      return res.status(400).json({ error: "Пароль должен быть не короче 6 символов" });
+    if (String(password).length < 8) {
+      return res.status(400).json({ error: "Пароль должен быть не короче 8 символов" });
     }
-    const hash = bcrypt.hashSync(password, 10);
+    const hash = await bcrypt.hash(password, BCRYPT_ROUNDS);
     const result = await createUser(String(username).trim().toLowerCase(), hash, role);
     res.json({ ok: true, id: result.id, username, role });
   } catch (e) {
     if (e.code === "23505") {
       return res.status(409).json({ error: "Пользователь с таким логином уже существует" });
     }
-    res.status(500).json({ error: e.message });
+    console.error("[auth] create user error:", e);
+    res.status(500).json({ error: "Внутренняя ошибка сервера" });
   }
 });
 
@@ -120,10 +150,10 @@ router.patch("/admin/users/:id", requireAuth("admin"), async (req, res) => {
     const { password, role, active, all_clients_access } = req.body || {};
 
     if (password != null) {
-      if (String(password).length < 6) {
-        return res.status(400).json({ error: "Пароль должен быть не короче 6 символов" });
+      if (String(password).length < 8) {
+        return res.status(400).json({ error: "Пароль должен быть не короче 8 символов" });
       }
-      await updatePass(bcrypt.hashSync(password, 10), id);
+      await updatePass(await bcrypt.hash(password, BCRYPT_ROUNDS), id);
     }
     if (role != null) {
       const validRolesRes = await pool.query("SELECT name FROM roles");
@@ -142,7 +172,8 @@ router.patch("/admin/users/:id", requireAuth("admin"), async (req, res) => {
     }
     res.json({ ok: true });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    console.error("[auth] patch user error:", e);
+    res.status(500).json({ error: "Внутренняя ошибка сервера" });
   }
 });
 
@@ -183,7 +214,8 @@ router.delete("/admin/users/:id", requireAuth("admin"), async (req, res) => {
     res.json({ ok: true });
   } catch (e) {
     try { await client.query("ROLLBACK"); } catch (_) {}
-    res.status(500).json({ error: e.message });
+    console.error("[auth] delete user error:", e);
+    res.status(500).json({ error: "Внутренняя ошибка сервера" });
   } finally {
     client.release();
   }

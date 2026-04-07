@@ -8,12 +8,15 @@ const initDefaultAdmin = async () => {
   if (count > 0) return;
 
   const username = process.env.ADMIN_USERNAME || "admin";
-  const password = process.env.ADMIN_PASSWORD || "admin123";
-  const hash = bcrypt.hashSync(password, 10);
+  const password = process.env.ADMIN_PASSWORD;
+  if (!password) {
+    console.error("[setup] FATAL: ADMIN_PASSWORD не задан. Установите переменную окружения ADMIN_PASSWORD и перезапустите сервер.");
+    process.exit(1);
+  }
+  const hash = await bcrypt.hash(password, 12);
 
   await createUser(username, hash, "admin");
-  console.log(`[setup] Создан первый admin: логин="${username}", пароль="${password}"`);
-  console.log("[setup] Смените пароль после первого входа через /api/auth/change-password");
+  console.log(`[setup] Создан первый admin: логин="${username}". Смените пароль после входа через /api/auth/change-password`);
 };
 
 const ALL_SECTIONS = ['overview','questionnaire','nutrition','protocol','injections','analytics','lab','journal'];
