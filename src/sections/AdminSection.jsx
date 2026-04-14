@@ -773,7 +773,7 @@ export default function AdminSection() {
                 <div>
                   <div style={{ fontSize: 11, color: $.txM, marginBottom: 4 }}>Роль</div>
                   <select value={userForm.role} onChange={e => setUserForm(f => ({ ...f, role: e.target.value }))} style={{ ...inp, width: 160 }}>
-                    {roles.map(r => <option key={r.id || r.name} value={r.name}>{r.displayName || r.display_name} ({r.name})</option>)}
+                    {roles.map(r => <option key={r.id || r.name} value={r.name}>{r.displayName || r.display_name}</option>)}
                   </select>
                 </div>
                 <button onClick={handleCreateUser} disabled={userFormLoading} style={bt("ac")}>

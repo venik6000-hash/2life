@@ -6,8 +6,14 @@ export const SECTIONS = [
   {id:"overview",ic:"◉",lb:"Обзор"},{id:"questionnaire",ic:"📋",lb:"Анкета"},
   {id:"nutrition",ic:"🥗",lb:"Питание"},{id:"protocol",ic:"💊",lb:"Протокол"},
   {id:"injections",ic:"💉",lb:"Инъекции"},
-  {id:"analytics",ic:"📊",lb:"Анализы"},{id:"lab",ic:"🔬",lb:"Направление"},{id:"journal",ic:"📓",lb:"Журнал"}
+  {id:"analytics",ic:"📊",lb:"Анализы"},{id:"lab",ic:"🔬",lb:"Направление"},{id:"journal",ic:"📓",lb:"Журнал"},
+  {id:"messenger",ic:"💬",lb:"Мессенджер"},
 ];
+
+const isClientRole = (role) => {
+  const normalized = String(role || "").trim().toLowerCase();
+  return normalized === "viewer" || normalized === "client";
+};
 
 const DashboardContext = createContext(null);
 
@@ -135,13 +141,15 @@ export function DashboardProvider({ children }) {
   const isAdmin = useMemo(() => !!(permissions?.isAdmin || user?.role === "admin"), [permissions, user?.role]);
   const canReadSection = useCallback((sectionId) => {
     if (isAdmin) return true;
+    if (sectionId === "messenger" && isClientRole(user?.role)) return true;
     const p = permissions?.sections?.[sectionId];
     return !!(p?.read || p?.write);
-  }, [isAdmin, permissions]);
+  }, [isAdmin, permissions, user?.role]);
   const canWriteSection = useCallback((sectionId) => {
     if (isAdmin) return true;
+    if (sectionId === "messenger" && isClientRole(user?.role)) return true;
     return !!permissions?.sections?.[sectionId]?.write;
-  }, [isAdmin, permissions]);
+  }, [isAdmin, permissions, user?.role]);
   const canCreateClient = useMemo(() => !!(isAdmin || permissions?.canCreateClient), [isAdmin, permissions]);
   const canDeleteClient = useMemo(() => !!(isAdmin || permissions?.canDeleteClient), [isAdmin, permissions]);
   const canImportData = useMemo(() => !!(isAdmin || permissions?.canImportData), [isAdmin, permissions]);

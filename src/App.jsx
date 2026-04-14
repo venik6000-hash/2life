@@ -2,6 +2,7 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 import { ThemeProvider } from './context/ThemeContext';
 import { EditorProvider } from './context/EditorContext';
 import { DashboardProvider } from './context/DashboardContext';
+import { MessengerProvider } from './context/MessengerContext';
 import Dashboard from './dashboard';
 import LoginScreen from './components/LoginScreen';
 
@@ -13,7 +14,9 @@ function AppInner() {
     <ThemeProvider>
       <EditorProvider>
         <DashboardProvider>
-          <Dashboard />
+          <MessengerProvider>
+            <Dashboard />
+          </MessengerProvider>
         </DashboardProvider>
       </EditorProvider>
     </ThemeProvider>

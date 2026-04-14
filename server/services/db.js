@@ -189,6 +189,89 @@ const initSchema = async () => {
 
     CREATE INDEX IF NOT EXISTS idx_ca_user ON client_assignments(user_id);
     CREATE INDEX IF NOT EXISTS idx_ca_client ON client_assignments(client_id);
+
+    -- ── Messenger ───────────────────────────────────────────────────────────
+
+    CREATE TABLE IF NOT EXISTS user_public_keys (
+      id                        SERIAL PRIMARY KEY,
+      user_id                   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE UNIQUE,
+      public_key_jwk            TEXT NOT NULL,
+      encrypted_private_key_jwk TEXT NOT NULL DEFAULT '',
+      key_derivation_salt       TEXT NOT NULL DEFAULT '',
+      key_derivation_iv         TEXT NOT NULL DEFAULT '',
+      created_at                TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS chats (
+      id         SERIAL PRIMARY KEY,
+      client_id  TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+      title      TEXT NOT NULL DEFAULT '',
+      created_by INTEGER NOT NULL REFERENCES users(id),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_chats_client ON chats(client_id);
+
+    CREATE TABLE IF NOT EXISTS chat_participants (
+      id                 SERIAL PRIMARY KEY,
+      chat_id            INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+      user_id            INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      role_in_chat       TEXT NOT NULL DEFAULT 'member',
+      encrypted_chat_key TEXT NOT NULL DEFAULT '',
+      joined_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(chat_id, user_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_cp_user ON chat_participants(user_id);
+    CREATE INDEX IF NOT EXISTS idx_cp_chat ON chat_participants(chat_id);
+
+    CREATE TABLE IF NOT EXISTS messages (
+      id         SERIAL PRIMARY KEY,
+      chat_id    INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+      sender_id  INTEGER NOT NULL REFERENCES users(id),
+      ciphertext TEXT NOT NULL,
+      iv         TEXT NOT NULL,
+      msg_type   TEXT NOT NULL DEFAULT 'text',
+      file_id    TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_msg_chat_created ON messages(chat_id, created_at);
+
+    CREATE TABLE IF NOT EXISTS message_hidden_for_users (
+      id         SERIAL PRIMARY KEY,
+      message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+      user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      hidden_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(message_id, user_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_mh_user_msg ON message_hidden_for_users(user_id, message_id);
+    CREATE INDEX IF NOT EXISTS idx_mh_msg ON message_hidden_for_users(message_id);
+
+    CREATE TABLE IF NOT EXISTS message_receipts (
+      id                   SERIAL PRIMARY KEY,
+      chat_id              INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+      user_id              INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      last_read_message_id INTEGER NOT NULL REFERENCES messages(id),
+      read_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(chat_id, user_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_mr_chat ON message_receipts(chat_id);
+
+    CREATE TABLE IF NOT EXISTS chat_files (
+      id            TEXT PRIMARY KEY,
+      chat_id       INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+      uploader_id   INTEGER NOT NULL REFERENCES users(id),
+      original_name TEXT NOT NULL DEFAULT '',
+      mime_type     TEXT NOT NULL DEFAULT 'application/octet-stream',
+      size_bytes    INTEGER NOT NULL DEFAULT 0,
+      storage_path  TEXT NOT NULL DEFAULT '',
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_cf_chat ON chat_files(chat_id);
   `);
 
   // Forward-compatible column migrations
@@ -221,6 +304,65 @@ const initSchema = async () => {
   if (!userCols.includes("all_clients_access")) {
     try { await pool.query("ALTER TABLE users ADD COLUMN all_clients_access BOOLEAN NOT NULL DEFAULT false"); } catch (_) {}
   }
+
+  // Role migration: "Наблюдатель" -> "Клиент", and ensure messenger access is configured.
+  try {
+    await pool.query("UPDATE roles SET display_name = 'Клиент' WHERE name IN ('viewer', 'client')");
+  } catch (_) {}
+
+  try {
+    // Ensure every role has explicit messenger section permissions.
+    await pool.query(`
+      INSERT INTO role_sections (role_id, section_id, can_read, can_write)
+      SELECT r.id, 'messenger', true, true
+      FROM roles r
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM role_sections rs
+        WHERE rs.role_id = r.id
+          AND rs.section_id = 'messenger'
+      )
+    `);
+  } catch (_) {}
+
+  try {
+    // Client role must only have messenger access.
+    const clientRolesRes = await pool.query("SELECT id FROM roles WHERE name IN ('viewer', 'client')");
+    for (const row of clientRolesRes.rows) {
+      await pool.query(
+        "UPDATE role_sections SET can_read = false, can_write = false WHERE role_id = $1 AND section_id <> 'messenger'",
+        [row.id]
+      );
+      await pool.query(
+        "UPDATE role_sections SET can_read = true, can_write = true WHERE role_id = $1 AND section_id = 'messenger'",
+        [row.id]
+      );
+      await pool.query("UPDATE role_permissions SET granted = false WHERE role_id = $1", [row.id]);
+    }
+  } catch (_) {}
+
+  const messageColsRes = await pool.query(
+    `SELECT column_name FROM information_schema.columns WHERE table_name = 'messages'`
+  );
+  const messageCols = messageColsRes.rows.map(r => r.column_name);
+
+  if (!messageCols.includes("edited_at")) {
+    try { await pool.query("ALTER TABLE messages ADD COLUMN edited_at TIMESTAMPTZ"); } catch (_) {}
+  }
+  if (!messageCols.includes("deleted_for_all")) {
+    try { await pool.query("ALTER TABLE messages ADD COLUMN deleted_for_all BOOLEAN NOT NULL DEFAULT false"); } catch (_) {}
+  }
+  if (!messageCols.includes("deleted_for_all_at")) {
+    try { await pool.query("ALTER TABLE messages ADD COLUMN deleted_for_all_at TIMESTAMPTZ"); } catch (_) {}
+  }
+  if (!messageCols.includes("deleted_by")) {
+    try { await pool.query("ALTER TABLE messages ADD COLUMN deleted_by INTEGER REFERENCES users(id)"); } catch (_) {}
+  }
+
+  // Backfill in case column existed but had nulls from legacy data.
+  try {
+    await pool.query("UPDATE messages SET deleted_for_all = false WHERE deleted_for_all IS NULL");
+  } catch (_) {}
 };
 
 // ─── Users ──────────────────────────────────────────────────────────────────
@@ -582,6 +724,228 @@ const deleteAssignmentsByClient = async (clientId) => {
   await pool.query("DELETE FROM client_assignments WHERE client_id = $1", [clientId]);
 };
 
+// ─── Messenger: public keys ──────────────────────────────────────────────────
+
+const upsertPublicKey = async (userId, publicKeyJwk, encryptedPrivateKeyJwk, keyDerivationSalt, keyDerivationIv) => {
+  await pool.query(
+    `INSERT INTO user_public_keys (user_id, public_key_jwk, encrypted_private_key_jwk, key_derivation_salt, key_derivation_iv)
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (user_id) DO UPDATE SET
+       public_key_jwk = EXCLUDED.public_key_jwk,
+       encrypted_private_key_jwk = EXCLUDED.encrypted_private_key_jwk,
+       key_derivation_salt = EXCLUDED.key_derivation_salt,
+       key_derivation_iv = EXCLUDED.key_derivation_iv`,
+    [userId, publicKeyJwk, encryptedPrivateKeyJwk, keyDerivationSalt, keyDerivationIv]
+  );
+};
+
+const getPublicKey = async (userId) => {
+  const r = await pool.query("SELECT * FROM user_public_keys WHERE user_id = $1", [userId]);
+  return r.rows[0] ?? null;
+};
+
+// ─── Messenger: chats ────────────────────────────────────────────────────────
+
+const createChat = async (clientId, title, createdBy) => {
+  const r = await pool.query(
+    "INSERT INTO chats (client_id, title, created_by) VALUES ($1, $2, $3) RETURNING *",
+    [clientId, title, createdBy]
+  );
+  return r.rows[0];
+};
+
+const getChatById = async (chatId) => {
+  const r = await pool.query("SELECT * FROM chats WHERE id = $1", [chatId]);
+  return r.rows[0] ?? null;
+};
+
+const getChatsByUser = async (userId) => {
+  const r = await pool.query(
+    `SELECT c.*, cp.role_in_chat, cp.encrypted_chat_key
+     FROM chats c
+     JOIN chat_participants cp ON cp.chat_id = c.id AND cp.user_id = $1
+     ORDER BY c.id DESC`,
+    [userId]
+  );
+  return r.rows;
+};
+
+// ─── Messenger: participants ──────────────────────────────────────────────────
+
+const addChatParticipant = async (chatId, userId, roleInChat, encryptedChatKey) => {
+  const r = await pool.query(
+    `INSERT INTO chat_participants (chat_id, user_id, role_in_chat, encrypted_chat_key)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (chat_id, user_id) DO UPDATE SET encrypted_chat_key = EXCLUDED.encrypted_chat_key
+     RETURNING *`,
+    [chatId, userId, roleInChat, encryptedChatKey]
+  );
+  return r.rows[0];
+};
+
+const removeChatParticipant = async (chatId, userId) => {
+  await pool.query("DELETE FROM chat_participants WHERE chat_id = $1 AND user_id = $2", [chatId, userId]);
+};
+
+const getChatParticipants = async (chatId) => {
+  const r = await pool.query(
+    `SELECT cp.*, u.username, u.role
+     FROM chat_participants cp
+     JOIN users u ON u.id = cp.user_id
+     WHERE cp.chat_id = $1`,
+    [chatId]
+  );
+  return r.rows;
+};
+
+const isParticipant = async (chatId, userId) => {
+  const r = await pool.query(
+    "SELECT 1 FROM chat_participants WHERE chat_id = $1 AND user_id = $2",
+    [chatId, userId]
+  );
+  return r.rows.length > 0;
+};
+
+const getParticipantRole = async (chatId, userId) => {
+  const r = await pool.query(
+    "SELECT role_in_chat FROM chat_participants WHERE chat_id = $1 AND user_id = $2",
+    [chatId, userId]
+  );
+  return r.rows[0]?.role_in_chat ?? null;
+};
+
+// ─── Messenger: messages ─────────────────────────────────────────────────────
+
+const insertMessage = async (chatId, senderId, ciphertext, iv, msgType, fileId) => {
+  const r = await pool.query(
+    `INSERT INTO messages (chat_id, sender_id, ciphertext, iv, msg_type, file_id)
+     VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+    [chatId, senderId, ciphertext, iv, msgType, fileId || null]
+  );
+  return r.rows[0];
+};
+
+const getMessageById = async (chatId, messageId) => {
+  const r = await pool.query(
+    `SELECT m.*, u.username AS sender_username
+     FROM messages m
+     JOIN users u ON u.id = m.sender_id
+     WHERE m.chat_id = $1 AND m.id = $2
+     LIMIT 1`,
+    [chatId, messageId]
+  );
+  return r.rows[0] ?? null;
+};
+
+const updateMessageContent = async (chatId, messageId, ciphertext, iv) => {
+  const r = await pool.query(
+    `UPDATE messages
+     SET ciphertext = $3, iv = $4, edited_at = NOW()
+     WHERE chat_id = $1 AND id = $2 AND deleted_for_all = false
+     RETURNING *`,
+    [chatId, messageId, ciphertext, iv]
+  );
+  return r.rows[0] ?? null;
+};
+
+const deleteMessageForAll = async (chatId, messageId, deletedBy) => {
+  const r = await pool.query(
+    `UPDATE messages
+     SET deleted_for_all = true,
+         deleted_for_all_at = NOW(),
+         deleted_by = $3
+     WHERE chat_id = $1 AND id = $2 AND deleted_for_all = false
+     RETURNING *`,
+    [chatId, messageId, deletedBy]
+  );
+  return r.rows[0] ?? null;
+};
+
+const hideMessageForUser = async (messageId, userId) => {
+  await pool.query(
+    `INSERT INTO message_hidden_for_users (message_id, user_id)
+     VALUES ($1, $2)
+     ON CONFLICT (message_id, user_id) DO NOTHING`,
+    [messageId, userId]
+  );
+};
+
+const getMessages = async (chatId, userId, beforeId, limit) => {
+  const lim = Math.min(limit || 50, 100);
+  let query, params;
+  if (beforeId) {
+    query = `
+      SELECT m.*, u.username AS sender_username
+      FROM messages m
+      JOIN users u ON u.id = m.sender_id
+      WHERE m.chat_id = $1
+        AND m.deleted_for_all = false
+        AND m.id < $3
+        AND NOT EXISTS (
+          SELECT 1 FROM message_hidden_for_users mh
+          WHERE mh.message_id = m.id AND mh.user_id = $2
+        )
+      ORDER BY m.id DESC
+      LIMIT $4
+    `;
+    params = [chatId, userId, beforeId, lim];
+  } else {
+    query = `
+      SELECT m.*, u.username AS sender_username
+      FROM messages m
+      JOIN users u ON u.id = m.sender_id
+      WHERE m.chat_id = $1
+        AND m.deleted_for_all = false
+        AND NOT EXISTS (
+          SELECT 1 FROM message_hidden_for_users mh
+          WHERE mh.message_id = m.id AND mh.user_id = $2
+        )
+      ORDER BY m.id DESC
+      LIMIT $3
+    `;
+    params = [chatId, userId, lim];
+  }
+  const r = await pool.query(query, params);
+  return r.rows.reverse();
+};
+
+// ─── Messenger: read receipts ─────────────────────────────────────────────────
+
+const upsertReceipt = async (chatId, userId, messageId) => {
+  await pool.query(
+    `INSERT INTO message_receipts (chat_id, user_id, last_read_message_id, read_at)
+     VALUES ($1, $2, $3, NOW())
+     ON CONFLICT (chat_id, user_id) DO UPDATE
+       SET last_read_message_id = GREATEST(message_receipts.last_read_message_id, EXCLUDED.last_read_message_id),
+           read_at = NOW()`,
+    [chatId, userId, messageId]
+  );
+};
+
+const getReceiptsByChat = async (chatId) => {
+  const r = await pool.query(
+    "SELECT user_id, last_read_message_id, read_at FROM message_receipts WHERE chat_id = $1",
+    [chatId]
+  );
+  return r.rows;
+};
+
+// ─── Messenger: files ────────────────────────────────────────────────────────
+
+const insertChatFile = async (id, chatId, uploaderId, originalName, mimeType, sizeBytes, storagePath) => {
+  const r = await pool.query(
+    `INSERT INTO chat_files (id, chat_id, uploader_id, original_name, mime_type, size_bytes, storage_path)
+     VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+    [id, chatId, uploaderId, originalName, mimeType, sizeBytes, storagePath]
+  );
+  return r.rows[0];
+};
+
+const getChatFile = async (fileId) => {
+  const r = await pool.query("SELECT * FROM chat_files WHERE id = $1", [fileId]);
+  return r.rows[0] ?? null;
+};
+
 module.exports = {
   pool,
   initSchema,
@@ -612,5 +976,17 @@ module.exports = {
   listRefData, insertRefData, updateRefData, deleteRefData, listDistinctAnalyticsMarkers,
   // client assignments
   upsertClientAssignment, deleteClientAssignment,
-  getAssignmentsByUser, getAssignmentsByClient, deleteAssignmentsByClient
+  getAssignmentsByUser, getAssignmentsByClient, deleteAssignmentsByClient,
+  // messenger: public keys
+  upsertPublicKey, getPublicKey,
+  // messenger: chats
+  createChat, getChatById, getChatsByUser,
+  // messenger: participants
+  addChatParticipant, removeChatParticipant, getChatParticipants, isParticipant, getParticipantRole,
+  // messenger: messages
+  insertMessage, getMessageById, updateMessageContent, deleteMessageForAll, hideMessageForUser, getMessages,
+  // messenger: receipts
+  upsertReceipt, getReceiptsByChat,
+  // messenger: files
+  insertChatFile, getChatFile,
 };

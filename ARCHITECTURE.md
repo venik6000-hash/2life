@@ -16,10 +16,11 @@ src/main.jsx
        │         ├─ ThemeProvider
        │         ├─ EditorProvider
        │         └─ DashboardProvider
-       │              └─ src/dashboard.jsx   ← оркестратор (~270 строк)
-       │                   ├─ Sidebar
-       │                   ├─ Header  (скрыт для раздела admin)
-       │                   └─ <активная секция>
+       │              └─ MessengerProvider
+       │                   └─ src/dashboard.jsx   ← оркестратор
+       │                        ├─ Sidebar
+       │                        ├─ Header  (скрыт для разделов admin/messenger)
+       │                        └─ <активная секция>
        └─ ModalsSection  (всегда)
 ```
 
@@ -27,13 +28,12 @@ src/main.jsx
 - `src/context/ThemeContext.jsx` — тёмная/светлая тема, объект цветов `$`.
 - `src/context/EditorContext.jsx` — глобальный inline-редактор `Ed`.
 - `src/context/DashboardContext.jsx` — клиенты, этапы, автосохранение, патч-логика.
+- `src/context/MessengerContext.jsx` — E2E-ключи, WS-соединение, чаты/сообщения/файлы.
 - `src/sections/*` — крупные бизнес-экраны (один файл = один раздел).
 - `src/components/*` — мелкие переиспользуемые UI-блоки.
 - `src/utils/*` — чистые утилиты и вычисления.
 - `src/data/*` — справочники и шаблоны.
-- `server /` — API, PostgreSQL, импорт Excel, бэкапы, реалтайм (SSE).
-
-> Внимание: папка сервера называется `server /` (с пробелом в имени).
+- `server/` — API, PostgreSQL, импорт Excel, бэкапы, реалтайм (SSE + WebSocket).
 
 ## 3. Поток данных
 
@@ -56,17 +56,19 @@ src/main.jsx
 | `analytics`     | 📊     | Анализы     | `Analytics.jsx`        |
 | `lab`           | 🔬     | Направление | `LabOrder.jsx`         |
 | `journal`       | 📓     | Журнал      | `Journal.jsx`          |
+| `messenger`     | 💬     | Мессенджер  | `Messenger.jsx`        |
 | `admin`         | —      | Админка     | `AdminSection.jsx`     |
 
 > `admin` не входит в `SECTIONS` (нет в сайдбаре) — рендерится напрямую, Header скрыт.
 
-## 5. Серверный слой (`server /`)
+## 5. Серверный слой (`server/`)
 
 ### Точка входа: `index.js`
 - Запускает Express на порту 3001.
 - При старте: `initSchema()` → `initDefaultAdmin()` → `initDefaultRoles()` → `initDefaultDeficitPresets()`.
-- Подключает роутеры: `auth`, `clients`, `doctors`, `import`, `admin`.
+- Подключает роутеры: `auth`, `clients`, `doctors`, `import`, `admin`, `messenger`.
 - Запускает авто-бэкап (`startAutoBackup`).
+- Поднимает WebSocket сервер (`/ws`) через `services/ws.js`.
 
 ### Хранилище: PostgreSQL
 - `services/db.js` — `pg.Pool`, DDL-схема, все SQL-запросы.
@@ -82,6 +84,7 @@ src/main.jsx
 | `doctors.js` | `/api/doctors`   | Список врачей для UI + bulk-сохранение реестра (admin) |
 | `import.js`  | `/api/import-questionnaire`, `/api/import-analytics` | Загрузка Excel (анкета, анализы) |
 | `admin.js`   | `/api/admin`     | Роли, права, справочники, CRUD врачей, активность, статистика |
+| `messenger.js` | `/api/chats`, `/api/crypto`, `/api/users` | Чаты, участники, сообщения, файлы, ключи E2E |
 
 ### Сервисы (`services/`)
 
@@ -95,6 +98,8 @@ src/main.jsx
 | `permissions.js` | Получение прав роли (`getPermissionsForRole`)           |
 | `setup.js`       | Инициализация дефолтных данных при первом запуске       |
 | `sse.js`         | Server-Sent Events: `addConnection`, `broadcast`        |
+| `ws.js`          | WebSocket-хаб мессенджера: маршрутизация событий по участникам |
+| `wsTickets.js`   | Одноразовые WS-тикеты (30 сек) для browser WebSocket-аутентификации |
 
 ### Middleware (`middleware/`)
 - `auth.js`:
@@ -116,7 +121,7 @@ src/main.jsx
 - `roles` — список ролей (`name`, `display_name`, `is_system`).
 - `role_sections` — доступ к разделам (`can_read`, `can_write`).
 - `role_permissions` — action-права (`create_client`, `delete_client`, `import_data`).
-- Для пользователя итоговые права формируются в `server /services/permissions.js` (`getPermissionsForRole`).
+- Для пользователя итоговые права формируются в `server/services/permissions.js` (`getPermissionsForRole`).
 
 ### 6.2 Что возвращает `/api/auth/me` в `permissions`
 
@@ -159,11 +164,12 @@ src/main.jsx
 - Endpoint `PUT /api/admin/roles/:id/sections` поддерживает частичные обновления секций.
 - Если в payload у секции передан только один флаг (`read` или `write`), второй берётся из текущего состояния в БД и не сбрасывается в `false`.
 
-## 7. Реалтайм синхронизация (SSE)
+## 7. Реалтайм синхронизация
 
-- `GET /api/events` — браузер держит постоянное соединение.
-- При сохранении изменений сервер вызывает `broadcast("client-updated", { clientId }, excludeRes)`.
-- Все остальные вкладки получают событие и обновляют стейт без перезагрузки.
+- Клиентские разделы дашборда: `GET /api/events` (SSE) для синхронизации карточек клиентов.
+- Мессенджер: `GET /api/auth/ws-ticket` → `ws://.../ws?ticket=...` (WebSocket).
+- События мессенджера: `new_message`, `message_edited`, `message_deleted_all`, `message_deleted_self`, `receipts_update`, `participant_added`, `participant_removed`, `chat_created`.
+- Сообщение, отправленное одним участником, доставляется всем участникам чата (включая отправителя для multi-device).
 
 ## 8. Границы ответственности
 
@@ -194,11 +200,14 @@ src/main.jsx
 | Конкретный раздел               | `src/sections/<Section>.jsx`                    |
 | Глобальное состояние            | `src/context/DashboardContext.jsx`              |
 | Тему                            | `src/context/ThemeContext.jsx`, `src/styles/`   |
-| Логин / права пользователей     | `src/context/AuthContext.jsx`, `server /routes/auth.js` |
-| Импорт Excel                    | `server /routes/import.js`, `server /parsers/`  |
-| API клиентов                    | `server /routes/clients.js`                     |
-| Схему БД                        | `server /services/db.js` (функция `initSchema`) |
-| Реалтайм обновления             | `server /services/sse.js`                       |
+| Логин / права пользователей     | `src/context/AuthContext.jsx`, `server/routes/auth.js` |
+| Импорт Excel                    | `server/routes/import.js`, `server/parsers/`  |
+| API клиентов                    | `server/routes/clients.js`                     |
+| Схему БД                        | `server/services/db.js` (функция `initSchema`) |
+| Реалтайм карточек (SSE)         | `server/services/sse.js`                       |
+| Реалтайм мессенджера (WS)       | `server/services/ws.js`, `src/utils/websocket.js` |
+| Крипто-утилиты мессенджера      | `src/utils/crypto.js`, `src/utils/cryptoSession.js` |
+| UI мессенджера                  | `src/sections/Messenger.jsx`, `src/context/MessengerContext.jsx` |
 | Роли и права (UI)               | `src/sections/AdminSection.jsx`                 |
 
 ## 12. Section -> API Mapping
@@ -215,6 +224,7 @@ src/main.jsx
 | `analytics`     | `GET /api/clients`, `GET /api/clients/:clientId` | `PUT /api/clients/:clientId/analytics`, `POST /api/import-analytics` |
 | `lab`           | `GET /api/clients`, `GET /api/clients/:clientId` | `PATCH /api/clients/:clientId` |
 | `journal`       | `GET /api/clients`, `GET /api/clients/:clientId` | `PATCH /api/clients/:clientId` |
+| `messenger`     | `GET /api/chats`, `GET /api/chats/:id/messages`, `GET /api/chats/:id/files/:fileId` | `POST /api/chats`, `POST /api/chats/:id/messages`, `POST /api/chats/:id/files`, `PATCH/DELETE /api/chats/:id/messages/:messageId`, `POST /api/chats/:id/read`, `POST/DELETE /api/chats/:id/participants/*` |
 
 ### 12.2 Field mapping для `PATCH /api/clients/:clientId`
 
@@ -248,3 +258,32 @@ src/main.jsx
 - Файл: `CHANGELOG_ONE_LINE.md`.
 - Назначение: короткая хронология изменений в формате «1 строка = 1 изменение».
 - Формат записи: `YYYY-MM-DD | область | изменение`.
+
+## 14. Messenger Snapshot (2026-04-14)
+
+### 14.1 Доменная модель
+- Один чат привязан к одной карточке клиента: `chats.client_id`.
+- Участники: `chat_participants` (`owner`/`member`) + `encrypted_chat_key` для каждого участника.
+- Сообщения: `messages` (`ciphertext`, `iv`, `msg_type`, `file_id`, `edited_at`, `deleted_for_all`).
+- Персональное скрытие: `message_hidden_for_users` (удаление "у себя").
+- Подтверждения чтения: `message_receipts` (`last_read_message_id`), UI-статус "✓✓".
+- Файлы: `chat_files` + бинарный `.enc` файл на диске (`server/uploads/chat`).
+- Публичные ключи пользователей: `user_public_keys`.
+
+### 14.2 Криптоконтур (frontend)
+- `src/utils/crypto.js`: ECDH P-256 (identity), AES-KW (обёртка ключа чата), AES-GCM (сообщения/файлы).
+- Приватный identity key шифруется паролем пользователя (PBKDF2 + AES-GCM) и хранится на сервере только в зашифрованном виде.
+- Сервер не расшифровывает содержимое сообщений/файлов; хранит ciphertext + iv и зашифрованные blob.
+
+### 14.3 Ограничения и права (клиентская роль)
+- Роль `viewer` отображается как "Клиент"; совместимость с `client` сохранена в `permissions.js`.
+- Для клиентской роли принудительно оставлен доступ только к разделу `messenger` (миграция в `initSchema`).
+- Клиент не может: создавать чаты, добавлять участников, получать список всех аккаунтов (`GET /api/users` вернёт 403).
+- Клиент может: видеть только чаты, где он участник; писать, отправлять файлы/фото, редактировать и удалять свои сообщения.
+
+### 14.4 UX-функции мессенджера
+- Контекстное меню сообщения: переслать, редактировать (только text), удалить у себя/у всех.
+- Пакетная отправка файлов: grouped bundles; для фото — максимум 10 фото в одном сообщении.
+- Если отправлено >10 фото, формируются несколько сообщений-бандлов (пример: 14 = 10 + 4).
+- Фото-бандлы отображаются как адаптивная сетка превью (без имён фото), файлы — списком с именами.
+- Overlay просмотр фото: открытие без скачивания, навигация клавишами `ArrowLeft/ArrowRight` и кнопками.

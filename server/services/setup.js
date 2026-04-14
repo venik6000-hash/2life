@@ -19,7 +19,7 @@ const initDefaultAdmin = async () => {
   console.log(`[setup] Создан первый admin: логин="${username}". Смените пароль после входа через /api/auth/change-password`);
 };
 
-const ALL_SECTIONS = ['overview','questionnaire','nutrition','protocol','injections','analytics','lab','journal'];
+const ALL_SECTIONS = ['overview','questionnaire','nutrition','protocol','injections','analytics','lab','journal','messenger'];
 const ALL_PERMISSIONS = ['delete_client','create_client','import_data'];
 const DEFAULT_DEFICIT_PRESETS = [
   { id: "iron",      label: "Железодефицит",        markerKey: "нутриенты::ферритин",                            triggerMode: "auto", priority: 100 },
@@ -43,20 +43,25 @@ const initDefaultRoles = async () => {
     { name: 'admin',        display_name: 'Администратор', is_system: true,  write: true,  permissions: { delete_client: true,  create_client: true,  import_data: true } },
     { name: 'doctor',       display_name: 'Врач',           is_system: true,  write: true,  permissions: { delete_client: false, create_client: true,  import_data: true } },
     { name: 'nutritionist', display_name: 'Нутрициолог',    is_system: false, write: true,  permissions: { delete_client: false, create_client: false, import_data: true } },
-    { name: 'viewer',       display_name: 'Наблюдатель',    is_system: false, write: false, permissions: { delete_client: false, create_client: false, import_data: false } },
+    { name: 'viewer',       display_name: 'Клиент',         is_system: false, write: false, permissions: { delete_client: false, create_client: false, import_data: false } },
   ];
 
   for (const r of roles) {
     const res = await insertRole(r.name, r.display_name, r.is_system);
     const roleId = res.id;
     for (const sec of ALL_SECTIONS) {
-      await upsertRoleSection(roleId, sec, true, r.write);
+      if (r.name === "viewer") {
+        const isMessenger = sec === "messenger";
+        await upsertRoleSection(roleId, sec, isMessenger, isMessenger);
+      } else {
+        await upsertRoleSection(roleId, sec, true, r.write);
+      }
     }
     for (const perm of ALL_PERMISSIONS) {
       await upsertRolePermission(roleId, perm, r.permissions[perm]);
     }
   }
-  console.log('[setup] Созданы роли по умолчанию: admin, doctor, nutritionist, viewer');
+  console.log('[setup] Созданы роли по умолчанию: admin, doctor, nutritionist, viewer(Клиент)');
 };
 
 const initDefaultDeficitPresets = async () => {

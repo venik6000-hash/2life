@@ -14,6 +14,7 @@ import AnalyticsSection from "./sections/Analytics";
 import QuestionnaireSection from "./sections/Questionnaire";
 import ModalsSection from "./sections/Modals";
 import AdminSection from "./sections/AdminSection";
+import MessengerSection from "./sections/Messenger";
 
 const stageAutoTitle = (stageNumber) => {
   if (stageNumber === 2) return "Энергобуст";
@@ -266,6 +267,7 @@ export default function Dashboard() {
     analytics: renderAnalyticsSection,
     lab: renderLabOrderSection,
     journal: renderJournalSection,
+    messenger: () => <MessengerSection />,
     admin: () => <AdminSection />
   };
   const isSectionReadOnly = activeSectionId !== "admin" && !canWriteSection(activeSectionId);
@@ -275,7 +277,7 @@ export default function Dashboard() {
       <Sidebar />
       <div style={{flex:1,display:"flex",flexDirection:"column",minHeight:0,minWidth:0}}>
         {activeSectionId !== "admin" && <Header pdf={printSectionToPdf} />}
-        <div ref={mainScrollRef} onScroll={e=>{if(activeSectionId==="analytics") localStorage.setItem("dash_analytics_scroll_y", String(e.currentTarget.scrollTop))}} style={{flex:1,overflow:"auto",padding:activeSectionId==="admin"?0:20,minWidth:0}}>
+        <div ref={mainScrollRef} onScroll={e=>{if(activeSectionId==="analytics") localStorage.setItem("dash_analytics_scroll_y", String(e.currentTarget.scrollTop))}} style={{flex:1,overflow:(activeSectionId==="messenger"?"hidden":"auto"),padding:(activeSectionId==="admin"||activeSectionId==="messenger")?0:20,minWidth:0,display:(activeSectionId==="messenger"?"flex":"block"),flexDirection:"column"}}>
           {isSectionReadOnly && (
             <div style={{marginBottom:10,padding:"8px 10px",borderRadius:8,border:`1px solid ${themeColors.brd}`,background:themeColors.bgI,fontSize:12,color:themeColors.txM}}>
               Режим только просмотра: для этого раздела запрещено редактирование.
@@ -284,7 +286,7 @@ export default function Dashboard() {
           <div
             ref={printContentRef}
             style={{
-              ...(activeSectionId==="admin"?{height:"100%"}:{}),
+              ...((activeSectionId==="admin"||activeSectionId==="messenger")?{height:"100%",flex:1,display:"flex",flexDirection:"column"}:{}),
               ...(isSectionReadOnly && activeSectionId === "questionnaire" ? { pointerEvents: "none" } : {})
             }}
           >

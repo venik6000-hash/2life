@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useAuth } from "../context/AuthContext";
+import { setPendingPassword } from "../utils/cryptoSession";
 
 export default function LoginScreen() {
   const { login } = useAuth();
@@ -13,6 +14,7 @@ export default function LoginScreen() {
     setError("");
     setLoading(true);
     try {
+      setPendingPassword(password);
       await login(username.trim(), password);
     } catch (err) {
       setError(err.message);

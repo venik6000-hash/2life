@@ -2,6 +2,7 @@ const express    = require("express");
 const bcrypt     = require("bcryptjs");
 const rateLimit  = require("express-rate-limit");
 const router     = express.Router();
+const { ipKeyGenerator } = rateLimit;
 
 const { getUser, listUsers, createUser, updatePass, setActive, setAllClientsAccess, pool } = require("../services/db");
 const { requireAuth, signToken }   = require("../middleware/auth");
@@ -19,7 +20,7 @@ const loginLimiter = rateLimit({
   message: { error: "Слишком много попыток входа. Попробуйте через минуту." },
   keyGenerator: (req) => {
     const username = String(req.body?.username || "").toLowerCase().trim();
-    return `${req.ip}:${username}`;
+    return `${ipKeyGenerator(req.ip)}:${username}`;
   },
 });
 
@@ -79,6 +80,13 @@ router.post("/auth/sse-ticket", requireAuth(), (req, res) => {
   res.json({ ok: true, ticket });
 });
 
+// POST /api/auth/ws-ticket — одноразовый тикет для WebSocket-соединения (30 сек TTL)
+router.post("/auth/ws-ticket", requireAuth(), (req, res) => {
+  const { createWsTicket } = require("../services/wsTickets");
+  const ticket = createWsTicket(req.user);
+  res.json({ ok: true, ticket });
+});
+
 // POST /api/auth/change-password — смена своего пароля
 router.post("/auth/change-password", requireAuth(), async (req, res) => {
   try {
@@ -124,7 +132,7 @@ router.post("/admin/users", requireAuth("admin"), async (req, res) => {
     }
     const validRolesRes = await pool.query("SELECT name FROM roles");
     const validRoles = validRolesRes.rows.map(r => r.name);
-    const allValidRoles = validRoles.length > 0 ? validRoles : ["admin", "doctor", "nutritionist", "viewer"];
+    const allValidRoles = validRoles.length > 0 ? validRoles : ["admin", "doctor", "nutritionist", "viewer", "client"];
     if (!allValidRoles.includes(role)) {
       return res.status(400).json({ error: `Недопустимая роль. Допустимые: ${allValidRoles.join(", ")}` });
     }
@@ -158,7 +166,7 @@ router.patch("/admin/users/:id", requireAuth("admin"), async (req, res) => {
     if (role != null) {
       const validRolesRes = await pool.query("SELECT name FROM roles");
       const validRoles = validRolesRes.rows.map(r => r.name);
-      const allValidRoles = validRoles.length > 0 ? validRoles : ["admin", "doctor", "nutritionist", "viewer"];
+      const allValidRoles = validRoles.length > 0 ? validRoles : ["admin", "doctor", "nutritionist", "viewer", "client"];
       if (!allValidRoles.includes(role)) {
         return res.status(400).json({ error: "Недопустимая роль" });
       }

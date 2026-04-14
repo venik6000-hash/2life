@@ -25,6 +25,6 @@ pnpm-debug.log*
 .claude/
 .omc/
 
-# database backups (contain patient data — never commit)
-server /data/backups/
-server /uploads/
+# database backups / uploads (never commit)
+server/data/backups/
+server/uploads/
