@@ -765,6 +765,221 @@ const qExtractDigestionNormalizedFromRaw = (raw, fallback = null) => {
   return out;
 };
 
+const qExtractFemaleHealthNormalizedFromRaw = (raw, fallback = null) => {
+  const out = {
+    cycle: "",
+    pms: "",
+    pmsTiming: "",
+    pmsFrequency: "",
+    pmsDuration: "",
+    duringMenstruation: "",
+    pain: "",
+    flow: "",
+    discharge: "",
+    thrush: "",
+    contraception: "",
+    breastfeeding: "",
+    libido: "",
+    gynecologistVisitFrequency: "",
+    lastGynecologistVisitDate: "",
+    lastBreastUltrasoundDate: "",
+    gynecologyDiagnoses: "",
+    comments: ""
+  };
+
+  let start = -1;
+  let end = raw.length;
+  for (let i = 0; i < raw.length; i++) {
+    const c0 = qText(qCell(qRow(raw, i), 0));
+    if (start === -1 && qNorm(c0) === "женское здоровье") {
+      start = i;
+      continue;
+    }
+    if (start !== -1 && i > start && c0 && QUESTIONNAIRE_SECTION_TITLES.has(c0)) {
+      end = i;
+      break;
+    }
+  }
+  if (start === -1) return fallback && typeof fallback === "object" ? fallback : out;
+
+  const femaleFields = new Set(Object.keys(out));
+
+  const appendFemaleValue = (key, value) => {
+    if (!key || !femaleFields.has(key) || !value) return;
+    qAppendUnique(out, key, value);
+  };
+
+  const resolveFemaleKeyByPrompt = (prompt, fallbackTopic) => {
+    const p = qNorm(prompt);
+    if (/менструальн.*цикл/.test(p)) return "cycle";
+    if (/перед менструац/.test(p)) return "pms";
+    if (/за сколько.*до.*менструац/.test(p)) return "pmsTiming";
+    if (/как часто/.test(p)) {
+      if ((fallbackTopic || "").startsWith("pms")) return "pmsFrequency";
+      if (fallbackTopic === "gynecologistVisitFrequency") return "gynecologistVisitFrequency";
+    }
+    if (/как давно.*длит|как долго.*длит/.test(p)) {
+      if ((fallbackTopic || "").startsWith("pms")) return "pmsDuration";
+    }
+    if (/во время менструац/.test(p)) return "duringMenstruation";
+    if (/болезнен/.test(p)) return "pain";
+    if (/обильност/.test(p)) return "flow";
+    if (/необычн.*выделен/.test(p)) return "discharge";
+    if (/молочниц/.test(p)) return "thrush";
+    if (/контрацеп/.test(p)) return "contraception";
+    if (/кормлен.*груд/.test(p)) return "breastfeeding";
+    if (/либидо/.test(p)) return "libido";
+    if (/частота посещения гинеколог/.test(p)) return "gynecologistVisitFrequency";
+    if (/дата последнего посещения/.test(p)) return "lastGynecologistVisitDate";
+    if (/узи молочн.*желез/.test(p)) return "lastBreastUltrasoundDate";
+    if (/диагноз.*гинеколог/.test(p)) return "gynecologyDiagnoses";
+    if (fallbackTopic && femaleFields.has(fallbackTopic)) return fallbackTopic;
+    return "cycle";
+  };
+
+  const topicByJoined = (joined, current) => {
+    if (joined.includes("менструальный цикл")) return "cycle";
+    if (joined.includes("перед менструа")) return "pms";
+    if (joined.includes("за сколько") && joined.includes("менструац")) return "pmsTiming";
+    if (joined.includes("как часто")) {
+      if (joined.includes("гинеколог")) return "gynecologistVisitFrequency";
+      if ((current || "").startsWith("pms")) return "pmsFrequency";
+    }
+    if (joined.includes("как долго длится") || joined.includes("как давно длится")) {
+      if ((current || "").startsWith("pms")) return "pmsDuration";
+    }
+    if (joined.includes("во время менструац")) return "duringMenstruation";
+    if (joined.includes("болезнен")) return "pain";
+    if (joined.includes("обильност")) return "flow";
+    if (joined.includes("необычн") && joined.includes("выделен")) return "discharge";
+    if (joined.includes("молочниц")) return "thrush";
+    if (joined.includes("контрацеп")) return "contraception";
+    if (joined.includes("кормление груд")) return "breastfeeding";
+    if (joined.includes("либидо")) return "libido";
+    if (joined.includes("частота посещения гинеколог")) return "gynecologistVisitFrequency";
+    if (joined.includes("дата последнего посещения")) return "lastGynecologistVisitDate";
+    if (joined.includes("узи молочных желез")) return "lastBreastUltrasoundDate";
+    if (joined.includes("диагноз") && joined.includes("гинеколог")) return "gynecologyDiagnoses";
+    return current;
+  };
+
+  const extractTextValueForPrompt = (rowTexts, promptRegex) => {
+    const values = rowTexts.filter(t => !promptRegex.test(qNorm(t)));
+    return values.join(" ").trim();
+  };
+
+  let activeTopic = "cycle";
+  let promptByZone = {};
+  let promptAnchors = [];
+
+  for (let r = start; r < end; r++) {
+    const row = qRow(raw, r);
+    const rowTexts = qRowTexts(row);
+    const joined = qNorm(rowTexts.join(" | "));
+
+    if (/комментарий/.test(joined) && /жен/.test(joined)) {
+      const rowComment = rowTexts.filter(t => !/^комментарий/i.test(t)).join(" ").trim();
+      if (rowComment) out.comments = out.comments ? `${out.comments}\n${rowComment}` : rowComment;
+      const next = qRowTexts(qRow(raw, r + 1))
+        .filter(t => !/^комментарий/i.test(t))
+        .join(" ")
+        .trim();
+      if (next) out.comments = out.comments ? `${out.comments}\n${next}` : next;
+      continue;
+    }
+
+    activeTopic = topicByJoined(joined, activeTopic);
+
+    if (/дата последнего посещения/.test(joined)) {
+      const val = extractTextValueForPrompt(rowTexts, /дата последнего посещения/i);
+      if (val) appendFemaleValue("lastGynecologistVisitDate", val);
+      continue;
+    }
+    if (/узи молочн.*желез/.test(joined)) {
+      const val = extractTextValueForPrompt(rowTexts, /дата последнего узи молочн.*желез/i);
+      if (val) appendFemaleValue("lastBreastUltrasoundDate", val);
+      continue;
+    }
+    if (/диагноз.*гинеколог/.test(joined)) {
+      const val = extractTextValueForPrompt(rowTexts, /имеющ.*диагноз.*гинеколог/i);
+      if (val) appendFemaleValue("gynecologyDiagnoses", val);
+      const next = qRowTexts(qRow(raw, r + 1)).join(" ").trim();
+      if (next && !/комментарий|уровень стресса|вредные привычки|анам(?:е|н)з/.test(qNorm(next))) {
+        appendFemaleValue("gynecologyDiagnoses", next);
+      }
+      continue;
+    }
+
+    const newPromptAnchors = [];
+    row.forEach((cell, idx) => {
+      const t = qNorm(cell);
+      if (!t) return;
+      if (/менструальн.*цикл|перед менструац|за сколько.*до.*менструац|как часто|как долго.*длит|как давно.*длит|во время менструац|болезнен|обильност|необычн.*выделен|молочниц|контрацеп|кормлен.*груд|либидо|частота посещения гинеколог|дата последнего посещения|узи молочн.*желез|диагноз.*гинеколог/.test(t)) {
+        newPromptAnchors.push({ idx, prompt: qText(cell) });
+      }
+    });
+    if (newPromptAnchors.length) {
+      promptAnchors = newPromptAnchors;
+      promptByZone = {};
+      newPromptAnchors.forEach(({ idx, prompt }) => {
+        const z = qZoneForIndex(idx);
+        if (!promptByZone[z]) promptByZone[z] = prompt;
+      });
+    }
+
+    const checked = qExtractCheckedAnswers(row, qRow(raw, r - 1), qRow(raw, r + 1));
+    checked.forEach(({ zone, col, answer }) => {
+      const ans = qText(answer);
+      if (!ans || qLooksLikeScaleValue(ans)) return;
+
+      let prompt = promptByZone[zone] || "";
+      if (promptAnchors.length && Number.isFinite(col)) {
+        const nearest = promptAnchors.reduce((best, cur) => {
+          if (!best) return cur;
+          return Math.abs(cur.idx - col) < Math.abs(best.idx - col) ? cur : best;
+        }, null);
+        if (nearest && Math.abs(nearest.idx - col) <= 4) prompt = nearest.prompt;
+      }
+
+      const target = resolveFemaleKeyByPrompt(prompt, activeTopic);
+      appendFemaleValue(target, ans);
+    });
+  }
+
+  if (out.comments) {
+    const lines = out.comments.split("\n").map(s => s.trim()).filter(Boolean);
+    out.comments = [...new Set(lines)].join("\n");
+  }
+  if (fallback && typeof fallback === "object") {
+    const allowed = new Set([
+      "cycle",
+      "pms",
+      "pmsTiming",
+      "pmsFrequency",
+      "pmsDuration",
+      "duringMenstruation",
+      "pain",
+      "flow",
+      "discharge",
+      "thrush",
+      "contraception",
+      "breastfeeding",
+      "libido",
+      "gynecologistVisitFrequency",
+      "lastGynecologistVisitDate",
+      "lastBreastUltrasoundDate",
+      "gynecologyDiagnoses",
+      "comments"
+    ]);
+    Object.entries(fallback).forEach(([k, v]) => {
+      if (!allowed.has(k)) return;
+      if (v == null || v === "") return;
+      if (!(k in out) || out[k] == null || out[k] === "") out[k] = v;
+    });
+  }
+  return out;
+};
+
 const qExtractMaleHealthNormalizedFromRaw = (raw, fallback = null) => {
   const out = {
     libido: "",
@@ -2533,6 +2748,7 @@ const parseQuestionnaireWorkbook = (wb) => {
   questionnaire.normalized.wellbeing = qExtractWellbeingNormalizedFromRaw(raw);
   questionnaire.normalized.appearance = qExtractAppearanceNormalizedFromRaw(raw);
   questionnaire.normalized.digestion = qExtractDigestionNormalizedFromRaw(raw);
+  questionnaire.normalized.femaleHealth = qExtractFemaleHealthNormalizedFromRaw(raw, questionnaire.normalized.femaleHealth);
   questionnaire.normalized.maleHealth = qExtractMaleHealthNormalizedFromRaw(raw);
   questionnaire.normalized.respiratory = qExtractRespiratoryNormalizedFromRaw(raw);
   questionnaire.normalized.cardio = qExtractCardioNormalizedFromRaw(raw);

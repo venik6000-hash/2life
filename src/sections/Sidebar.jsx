@@ -1,17 +1,33 @@
 import { useTheme } from "../context/ThemeContext";
 import { useDashboard } from "../context/DashboardContext";
 import { useAuth } from "../context/AuthContext";
+import { sortClientsByName } from "../utils/clientSort";
 
 export default function Sidebar() {
   const { $ } = useTheme();
   const {
     so, setSo, pk, setPk, cls, cl, cid, si, setSi, sec, setSec, setCid, setPri, setMd, removeStage,
-    visibleSections, canCreateClient, canWriteSection
+    visibleSections, canCreateClient, canWriteSection, renameClientById
   } = useDashboard();
   const { user } = useAuth();
 
   const bt = v=>({padding:"7px 14px",borderRadius:7,border:"none",cursor:"pointer",fontWeight:600,fontSize:12,fontFamily:"inherit",background:v==="g"?"transparent":$[v]||$.ac,color:v==="g"?$.txS:"#fff",...(v==="g"?{border:`1px solid ${$.brd}`}:{}),transition:"all .15s"});
   const city = cl ? (cl.stages?.[si]?.city ?? cl.city ?? "") : "";
+  const sortedClients = sortClientsByName(cls);
+  const canRenameClients = user?.role === "admin";
+
+  const handleRenameClient = (client) => {
+    if (!canRenameClients) return;
+    const currentName = String(client?.name || client?.shortName || "").trim();
+    const nextName = prompt("Новое имя клиента:", currentName);
+    if (nextName == null) return;
+    const cleaned = String(nextName).trim();
+    if (!cleaned) {
+      alert("Имя клиента не может быть пустым");
+      return;
+    }
+    renameClientById(client.id, cleaned);
+  };
 
   return (
     <div style={{width:so?232:54,minWidth:so?232:54,background:$.bgC,borderRight:`1px solid ${$.brd}`,display:"flex",flexDirection:"column",transition:"all .25s",overflow:"hidden",flexShrink:0}}>
@@ -25,7 +41,11 @@ export default function Sidebar() {
           {so&&<div style={{flex:1,overflow:"hidden"}}><div style={{fontSize:12,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{cl.shortName}</div><div style={{fontSize:10,color:$.txM}}>{city||"—"}</div></div>}
         </div>
         {pk&&so&&<div style={{marginTop:6,background:$.bgC,border:`1px solid ${$.brd}`,borderRadius:7,overflow:"hidden",boxShadow:$.sh}}>
-          {cls.map(c=><div key={c.id} onClick={()=>{setCid(c.id);setSi(0);setPk(false);setSec("overview");setPri(0)}} style={{padding:"8px 10px",display:"flex",alignItems:"center",gap:8,cursor:"pointer",background:c.id===cid?$.acD:"transparent",borderBottom:`1px solid ${$.brd}`,fontSize:12}}><div style={{width:24,height:24,borderRadius:"50%",background:`linear-gradient(135deg,${c.color},${c.color}88)`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:700,color:"#fff"}}>{c.avatar}</div><span>{c.shortName}</span></div>)}
+          {sortedClients.map(c=><div key={c.id} onClick={()=>{setCid(c.id);setSi(0);setPk(false);setSec("overview");setPri(0)}} style={{padding:"8px 10px",display:"flex",alignItems:"center",gap:8,cursor:"pointer",background:c.id===cid?$.acD:"transparent",borderBottom:`1px solid ${$.brd}`,fontSize:12}}>
+            <div style={{width:24,height:24,borderRadius:"50%",background:`linear-gradient(135deg,${c.color},${c.color}88)`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:700,color:"#fff"}}>{c.avatar}</div>
+            <span style={{flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c.shortName || c.name}</span>
+            {canRenameClients && <button onClick={e=>{e.stopPropagation();handleRenameClient(c)}} title="Переименовать клиента" style={{background:"none",border:"none",cursor:"pointer",color:$.txM,fontSize:12,padding:"2px 4px",lineHeight:1}}>✎</button>}
+          </div>)}
           {canCreateClient && (
             <div onClick={()=>{setMd("newCl");setPk(false)}} style={{padding:"8px 10px",cursor:"pointer",color:$.ac,fontSize:12,fontWeight:600}}>+ Новый клиент</div>
           )}

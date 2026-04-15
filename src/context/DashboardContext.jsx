@@ -54,6 +54,15 @@ const deepEqual = (a, b) => {
   return false;
 };
 
+const buildClientIdentity = (name = "", fallbackAvatar = "Н") => {
+  const cleaned = String(name || "").trim();
+  const parts = cleaned.split(/\s+/).filter(Boolean);
+  return {
+    shortName: parts.slice(0, 2).join(" ") || cleaned,
+    avatar: parts.slice(0, 2).map(w => (w[0] || "").toUpperCase()).join("") || fallbackAvatar
+  };
+};
+
 const buildPatchOps = (prevValue, nextValue, path = []) => {
   const ops = [];
 
@@ -538,13 +547,32 @@ export function DashboardProvider({ children }) {
     const nextName = String(value || "").trim();
     if (!nextName) return;
     uC(c => {
-      const parts = nextName.split(/\s+/).filter(Boolean);
+      const identity = buildClientIdentity(nextName, c.avatar);
       c.name = nextName;
-      c.shortName = parts.slice(0, 2).join(" ") || nextName;
-      c.avatar = parts.slice(0, 2).map(w => (w[0] || "").toUpperCase()).join("") || c.avatar;
+      c.shortName = identity.shortName || nextName;
+      c.avatar = identity.avatar || c.avatar;
       return c;
     });
   }, [uC, canWriteSection]);
+
+  const renameClientById = useCallback((clientId, value) => {
+    if (!isAdmin) return;
+    const targetId = String(clientId || "").trim();
+    if (!targetId) return;
+    const nextName = String(value || "").trim();
+    if (!nextName) return;
+    setCls(prev => prev.map(c => {
+      if (String(c.id) !== targetId) return c;
+      const prevClient = JSON.parse(JSON.stringify(c));
+      const nextClient = JSON.parse(JSON.stringify(c));
+      const identity = buildClientIdentity(nextName, nextClient.avatar);
+      nextClient.name = nextName;
+      nextClient.shortName = identity.shortName || nextName;
+      nextClient.avatar = identity.avatar || nextClient.avatar;
+      queueClientPatchOps(targetId, prevClient, nextClient);
+      return nextClient;
+    }));
+  }, [isAdmin, queueClientPatchOps]);
 
   const removeStage = useCallback((stageIndex) => {
     if (!canWriteSection("overview")) return;
@@ -715,7 +743,7 @@ export function DashboardProvider({ children }) {
       visibleSections, canReadSection, canWriteSection, canWriteActiveSection,
       canCreateClient, canDeleteClient, canImportData, isAdmin,
       cl, st, stageProfile, autoBmiValue,
-      uC, uS, updateClientName, removeStage, removeClient, createClient, importStageExcel,
+      uC, uS, updateClientName, renameClientById, removeStage, removeClient, createClient, importStageExcel,
     }}>
       {children}
     </DashboardContext.Provider>

@@ -3,6 +3,7 @@ import { useAuth } from "../context/AuthContext";
 import { useTheme } from "../context/ThemeContext";
 import { ANALYTICS_MARKER_DEFAULTS, ANALYTICS_MARKER_FALLBACK_DEFAULTS, normalizeAnalyticsKey } from "../data/analyticsData";
 import { parseDeficitPresetPayload, serializeDeficitPresetPayload } from "../utils/analyticsUtils";
+import { sortClientsByName } from "../utils/clientSort";
 import {
   buildDefaultLabOrderTemplates,
   markersToLabOrderText,
@@ -218,13 +219,19 @@ export default function AdminSection() {
 
   const fetchAllClients = useCallback(() => {
     authFetch("/api/clients").then(r => r.json()).then(d => {
-      if (Array.isArray(d)) setAllClients(d.map(c => ({ id: c.id, name: c.name })));
+      if (Array.isArray(d)) {
+        const sorted = sortClientsByName(d.map(c => ({ id: c.id, name: c.name })));
+        setAllClients(sorted);
+      }
     });
   }, [authFetch]);
 
   const fetchUserClients = useCallback((userId) => {
     authFetch(`/api/admin/users/${userId}/clients`).then(r => r.json()).then(d => {
-      if (d.ok) setUserClientsMap(prev => ({ ...prev, [userId]: d.clients }));
+      if (d.ok) {
+        const sorted = Array.isArray(d.clients) ? sortClientsByName(d.clients) : [];
+        setUserClientsMap(prev => ({ ...prev, [userId]: sorted }));
+      }
     });
   }, [authFetch]);
 
@@ -796,11 +803,13 @@ export default function AdminSection() {
                 <tbody>
                   {users.map(u => {
                     const isExpanded = expandedUserId === u.id;
-                    const assignedClients = userClientsMap[u.id] || [];
+                    const assignedClients = sortClientsByName(userClientsMap[u.id] || []);
                     const isAdmin = u.role === "admin";
                     const hasAllClientsAccess = !!u.all_clients_access;
                     const hasGlobalClientAccess = isAdmin || hasAllClientsAccess;
-                    const unassigned = allClients.filter(c => !assignedClients.some(a => a.id === c.id));
+                    const unassigned = sortClientsByName(
+                      allClients.filter(c => !assignedClients.some(a => a.id === c.id))
+                    );
                     return (
                       <Fragment key={u.id}>
                         <tr style={{ borderBottom: isExpanded ? "none" : `1px solid ${$.brd}`, opacity: u.active ? 1 : 0.5 }}>
