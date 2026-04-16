@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, Fragment } from "react";
 import { useAuth } from "../context/AuthContext";
 import { useTheme } from "../context/ThemeContext";
+import { recoverIdentityKeys, rewrapPrivateKey } from "../utils/crypto";
 import { ANALYTICS_MARKER_DEFAULTS, ANALYTICS_MARKER_FALLBACK_DEFAULTS, normalizeAnalyticsKey } from "../data/analyticsData";
 import { parseDeficitPresetPayload, serializeDeficitPresetPayload } from "../utils/analyticsUtils";
 import { sortClientsByName } from "../utils/clientSort";
@@ -327,11 +328,74 @@ export default function AdminSection() {
   };
 
   const handleChangeUserPassword = async (u) => {
-    const password = prompt(`Новый пароль для "${u.username}" (минимум 6 символов):`);
+    if (u.id === user?.id) {
+      const currentPassword = prompt("Текущий пароль:");
+      if (currentPassword == null) return;
+      if (!String(currentPassword).trim()) {
+        alert("Введите текущий пароль");
+        return;
+      }
+
+      const nextPasswordRaw = prompt("Новый пароль (минимум 8 символов):");
+      if (nextPasswordRaw == null) return;
+      const nextPassword = String(nextPasswordRaw).trim();
+      if (nextPassword.length < 8) {
+        alert("Пароль должен быть не короче 8 символов");
+        return;
+      }
+
+      let payload = {
+        currentPassword,
+        newPassword: nextPassword,
+      };
+      const keysRes = await authFetch("/api/crypto/keys");
+      const keysData = await readResponseSafe(keysRes);
+      if (!keysRes.ok) {
+        alert(keysData?.error || "Не удалось получить ключи мессенджера");
+        return;
+      }
+
+      const bundle = keysData?.keys;
+      const hasBundle = !!(
+        bundle &&
+        bundle.encrypted_private_key_jwk &&
+        bundle.key_derivation_salt &&
+        bundle.key_derivation_iv
+      );
+      if (hasBundle) {
+        try {
+          const { keyPair } = await recoverIdentityKeys(currentPassword, bundle);
+          const rewrapped = await rewrapPrivateKey(keyPair.privateKey, nextPassword);
+          payload = {
+            ...payload,
+            messengerKeys: {
+              encryptedPrivateKeyJwk: rewrapped.encryptedPrivateKeyJwk,
+              keyDerivationSalt: rewrapped.keyDerivationSalt,
+              keyDerivationIv: rewrapped.keyDerivationIv,
+            }
+          };
+        } catch (_) {}
+      }
+
+      const r = await authFetch("/api/auth/change-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      const d = await readResponseSafe(r);
+      if (!r.ok) {
+        alert(d?.error || "Не удалось сменить пароль");
+        return;
+      }
+      alert("Пароль обновлён. Теперь вход и мессенджер используют один пароль.");
+      return;
+    }
+
+    const password = prompt(`Новый пароль для "${u.username}" (минимум 8 символов):`);
     if (password == null) return;
     const nextPassword = String(password).trim();
-    if (nextPassword.length < 6) {
-      alert("Пароль должен быть не короче 6 символов");
+    if (nextPassword.length < 8) {
+      alert("Пароль должен быть не короче 8 символов");
       return;
     }
     const r = await authFetch(`/api/admin/users/${u.id}`, {
@@ -344,7 +408,7 @@ export default function AdminSection() {
       alert(d?.error || "Не удалось сменить пароль");
       return;
     }
-    alert(`Пароль пользователя "${u.username}" обновлён`);
+    alert(`Пароль пользователя "${u.username}" обновлён. Пароли входа и мессенджера синхронизированы.`);
   };
 
   const handleDeleteUser = async (u) => {

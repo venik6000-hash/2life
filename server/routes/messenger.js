@@ -4,6 +4,7 @@ const path     = require("path");
 const fs       = require("fs");
 const { v4: uuidv4 } = require("uuid");
 const { requireAuth } = require("../middleware/auth");
+const { encryptPrivateKeyForRecovery, publicJwkFromRecovery } = require("../services/messengerRecovery");
 const { hasAllClientsAccess, getAssignmentsByUser,
   createChat, getChatById, getChatsByUser,
   addChatParticipant, removeChatParticipant, getChatParticipants,
@@ -18,6 +19,25 @@ const { broadcastToChat, sendTo } = require("../services/ws");
 const { ensureDir } = require("../services/storage");
 
 const router = express.Router();
+const hasText = (value) => String(value || "").trim() !== "";
+const hasCompleteOwnKeyBundle = (row) => (
+  !!row &&
+  hasText(row.public_key_jwk) &&
+  hasText(row.encrypted_private_key_jwk) &&
+  hasText(row.key_derivation_salt) &&
+  hasText(row.key_derivation_iv)
+);
+const hasOwnEncryptedBundle = (row) => (
+  !!row &&
+  hasText(row.encrypted_private_key_jwk) &&
+  hasText(row.key_derivation_salt) &&
+  hasText(row.key_derivation_iv)
+);
+const hasRecoveryBundle = (row) => (
+  !!row &&
+  hasText(row.recovery_encrypted_private_key_jwk) &&
+  hasText(row.recovery_key_iv)
+);
 
 // ── File upload setup ─────────────────────────────────────────────────────────
 const CHAT_UPLOADS_DIR = path.join(__dirname, "../uploads/chat");
@@ -58,8 +78,34 @@ const requireParticipant = async (req, res, chatId) => {
 router.get("/crypto/keys", requireAuth(), async (req, res) => {
   try {
     const row = await getPublicKey(req.user.id);
-    if (!row) return res.json({ keys: null });
-    res.json({ keys: row });
+    if (!row || !hasOwnEncryptedBundle(row)) return res.json({ keys: null, recoveryReady: false });
+
+    if (!hasText(row.public_key_jwk) && hasRecoveryBundle(row)) {
+      try {
+        const recoveredPublicJwk = publicJwkFromRecovery(
+          row.recovery_encrypted_private_key_jwk,
+          row.recovery_key_iv
+        );
+        await upsertPublicKey(
+          req.user.id,
+          recoveredPublicJwk,
+          row.encrypted_private_key_jwk,
+          row.key_derivation_salt,
+          row.key_derivation_iv
+        );
+        row.public_key_jwk = recoveredPublicJwk;
+      } catch (_) {}
+    }
+
+    res.json({
+      keys: {
+        public_key_jwk: row.public_key_jwk,
+        encrypted_private_key_jwk: row.encrypted_private_key_jwk,
+        key_derivation_salt: row.key_derivation_salt,
+        key_derivation_iv: row.key_derivation_iv,
+      },
+      recoveryReady: hasRecoveryBundle(row),
+    });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -68,9 +114,31 @@ router.get("/crypto/keys", requireAuth(), async (req, res) => {
 // GET /api/crypto/keys/:userId  — another user's PUBLIC key only (no private data)
 router.get("/crypto/keys/:userId", requireAuth(), async (req, res) => {
   try {
-    const row = await getPublicKey(Number(req.params.userId));
+    const targetUserId = Number(req.params.userId);
+    const row = await getPublicKey(targetUserId);
     if (!row) return res.status(404).json({ error: "Ключ не найден" });
-    res.json({ publicKeyJwk: row.public_key_jwk });
+
+    let publicKeyJwk = row.public_key_jwk;
+    if (!hasText(publicKeyJwk) && hasRecoveryBundle(row)) {
+      try {
+        publicKeyJwk = publicJwkFromRecovery(
+          row.recovery_encrypted_private_key_jwk,
+          row.recovery_key_iv
+        );
+        await upsertPublicKey(
+          targetUserId,
+          publicKeyJwk,
+          row.encrypted_private_key_jwk || "",
+          row.key_derivation_salt || "",
+          row.key_derivation_iv || ""
+        );
+      } catch (_) {
+        publicKeyJwk = "";
+      }
+    }
+
+    if (!hasText(publicKeyJwk)) return res.status(404).json({ error: "Ключ не найден" });
+    res.json({ publicKeyJwk });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -79,14 +147,26 @@ router.get("/crypto/keys/:userId", requireAuth(), async (req, res) => {
 // POST /api/crypto/keys  — store / update own key pair
 router.post("/crypto/keys", requireAuth(), async (req, res) => {
   try {
-    const { publicKeyJwk, encryptedPrivateKeyJwk, keyDerivationSalt, keyDerivationIv } = req.body;
+    const { publicKeyJwk, encryptedPrivateKeyJwk, keyDerivationSalt, keyDerivationIv, privateKeyJwk } = req.body;
     if (!publicKeyJwk) return res.status(400).json({ error: "publicKeyJwk обязателен" });
+
+    let recoveryEncryptedPrivateKeyJwk = "";
+    let recoveryKeyIv = "";
+    if (privateKeyJwk) {
+      const privateKeyJwkStr = typeof privateKeyJwk === "string" ? privateKeyJwk : JSON.stringify(privateKeyJwk);
+      const recovery = encryptPrivateKeyForRecovery(privateKeyJwkStr);
+      recoveryEncryptedPrivateKeyJwk = recovery.recoveryEncryptedPrivateKeyJwk;
+      recoveryKeyIv = recovery.recoveryKeyIv;
+    }
+
     await upsertPublicKey(
       req.user.id,
       typeof publicKeyJwk === "string" ? publicKeyJwk : JSON.stringify(publicKeyJwk),
       encryptedPrivateKeyJwk || "",
       keyDerivationSalt || "",
-      keyDerivationIv || ""
+      keyDerivationIv || "",
+      recoveryEncryptedPrivateKeyJwk,
+      recoveryKeyIv
     );
     res.json({ ok: true });
   } catch (e) {

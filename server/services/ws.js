@@ -72,6 +72,14 @@ const handleMessage = async (ws, user, raw) => {
 
   const { type } = msg;
 
+  // ── ping/pong heartbeat ──────────────────────────────────────────────────
+  if (type === "ping") {
+    if (ws.readyState === 1 /* OPEN */) {
+      ws.send(JSON.stringify({ type: "pong", ts: Date.now() }));
+    }
+    return;
+  }
+
   // ── send_message ──────────────────────────────────────────────────────────
   if (type === "send_message") {
     const { chatId, ciphertext, iv, msgType = "text", fileId } = msg;

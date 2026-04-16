@@ -199,6 +199,8 @@ const initSchema = async () => {
       encrypted_private_key_jwk TEXT NOT NULL DEFAULT '',
       key_derivation_salt       TEXT NOT NULL DEFAULT '',
       key_derivation_iv         TEXT NOT NULL DEFAULT '',
+      recovery_encrypted_private_key_jwk TEXT NOT NULL DEFAULT '',
+      recovery_key_iv           TEXT NOT NULL DEFAULT '',
       created_at                TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
@@ -357,6 +359,22 @@ const initSchema = async () => {
   }
   if (!messageCols.includes("deleted_by")) {
     try { await pool.query("ALTER TABLE messages ADD COLUMN deleted_by INTEGER REFERENCES users(id)"); } catch (_) {}
+  }
+
+  const publicKeyColsRes = await pool.query(
+    `SELECT column_name FROM information_schema.columns WHERE table_name = 'user_public_keys'`
+  );
+  const publicKeyCols = publicKeyColsRes.rows.map(r => r.column_name);
+
+  if (!publicKeyCols.includes("recovery_encrypted_private_key_jwk")) {
+    try {
+      await pool.query("ALTER TABLE user_public_keys ADD COLUMN recovery_encrypted_private_key_jwk TEXT NOT NULL DEFAULT ''");
+    } catch (_) {}
+  }
+  if (!publicKeyCols.includes("recovery_key_iv")) {
+    try {
+      await pool.query("ALTER TABLE user_public_keys ADD COLUMN recovery_key_iv TEXT NOT NULL DEFAULT ''");
+    } catch (_) {}
   }
 
   // Backfill in case column existed but had nulls from legacy data.
@@ -726,16 +744,35 @@ const deleteAssignmentsByClient = async (clientId) => {
 
 // ─── Messenger: public keys ──────────────────────────────────────────────────
 
-const upsertPublicKey = async (userId, publicKeyJwk, encryptedPrivateKeyJwk, keyDerivationSalt, keyDerivationIv) => {
+const upsertPublicKey = async (
+  userId,
+  publicKeyJwk,
+  encryptedPrivateKeyJwk,
+  keyDerivationSalt,
+  keyDerivationIv,
+  recoveryEncryptedPrivateKeyJwk = "",
+  recoveryKeyIv = ""
+) => {
   await pool.query(
-    `INSERT INTO user_public_keys (user_id, public_key_jwk, encrypted_private_key_jwk, key_derivation_salt, key_derivation_iv)
-     VALUES ($1, $2, $3, $4, $5)
+    `INSERT INTO user_public_keys (
+       user_id, public_key_jwk, encrypted_private_key_jwk, key_derivation_salt, key_derivation_iv,
+       recovery_encrypted_private_key_jwk, recovery_key_iv
+     )
+     VALUES ($1, $2, $3, $4, $5, COALESCE($6, ''), COALESCE($7, ''))
      ON CONFLICT (user_id) DO UPDATE SET
        public_key_jwk = EXCLUDED.public_key_jwk,
        encrypted_private_key_jwk = EXCLUDED.encrypted_private_key_jwk,
        key_derivation_salt = EXCLUDED.key_derivation_salt,
-       key_derivation_iv = EXCLUDED.key_derivation_iv`,
-    [userId, publicKeyJwk, encryptedPrivateKeyJwk, keyDerivationSalt, keyDerivationIv]
+       key_derivation_iv = EXCLUDED.key_derivation_iv,
+       recovery_encrypted_private_key_jwk = COALESCE(
+         NULLIF(EXCLUDED.recovery_encrypted_private_key_jwk, ''),
+         user_public_keys.recovery_encrypted_private_key_jwk
+       ),
+       recovery_key_iv = COALESCE(
+         NULLIF(EXCLUDED.recovery_key_iv, ''),
+         user_public_keys.recovery_key_iv
+       )`,
+    [userId, publicKeyJwk, encryptedPrivateKeyJwk, keyDerivationSalt, keyDerivationIv, recoveryEncryptedPrivateKeyJwk, recoveryKeyIv]
   );
 };
 

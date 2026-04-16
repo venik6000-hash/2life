@@ -13,6 +13,7 @@ const WS_URL = (() => {
 
 const MIN_RETRY_MS  = 1_000;
 const MAX_RETRY_MS  = 30_000;
+const HEARTBEAT_MS  = 25_000;
 
 export class MsgSocket {
   constructor({ onMessage, onOpen, onClose, getTicket }) {
@@ -24,10 +25,14 @@ export class MsgSocket {
     this._retryDelay = MIN_RETRY_MS;
     this._stopped    = false;
     this._retryTimer = null;
+    this._heartbeatTimer = null;
   }
 
   async connect() {
     if (this._stopped) return;
+    if (this._ws && (this._ws.readyState === WebSocket.OPEN || this._ws.readyState === WebSocket.CONNECTING)) {
+      return;
+    }
     try {
       const ticket = await this._getTicket();
       const url    = `${WS_URL}?ticket=${encodeURIComponent(ticket)}`;
@@ -36,6 +41,7 @@ export class MsgSocket {
 
       ws.onopen = () => {
         this._retryDelay = MIN_RETRY_MS;
+        this._startHeartbeat();
         this._onOpen?.();
       };
 
@@ -47,11 +53,13 @@ export class MsgSocket {
       };
 
       ws.onclose = () => {
+        this._stopHeartbeat();
         this._onClose?.();
         if (!this._stopped) this._scheduleReconnect();
       };
 
       ws.onerror = () => {
+        this._stopHeartbeat();
         ws.close();
       };
     } catch {
@@ -60,10 +68,23 @@ export class MsgSocket {
   }
 
   _scheduleReconnect() {
+    clearTimeout(this._retryTimer);
     this._retryTimer = setTimeout(() => {
       this.connect();
     }, this._retryDelay);
     this._retryDelay = Math.min(this._retryDelay * 2, MAX_RETRY_MS);
+  }
+
+  _startHeartbeat() {
+    this._stopHeartbeat();
+    this._heartbeatTimer = setInterval(() => {
+      this.send({ type: "ping", ts: Date.now() });
+    }, HEARTBEAT_MS);
+  }
+
+  _stopHeartbeat() {
+    clearInterval(this._heartbeatTimer);
+    this._heartbeatTimer = null;
   }
 
   send(payload) {
@@ -77,6 +98,7 @@ export class MsgSocket {
   disconnect() {
     this._stopped = true;
     clearTimeout(this._retryTimer);
+    this._stopHeartbeat();
     this._ws?.close();
     this._ws = null;
   }

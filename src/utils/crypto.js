@@ -41,6 +41,9 @@ export const generateIdentityKeyPair = () =>
 export const exportPublicKeyJwk = async (publicKey) =>
   JSON.stringify(await subtle.exportKey("jwk", publicKey));
 
+export const exportPrivateKeyJwk = async (privateKey) =>
+  JSON.stringify(await subtle.exportKey("jwk", privateKey));
+
 /**
  * Encrypt the ECDH private key as JWK, then AES-GCM encrypt the JSON bytes.
  * Returns base64(ciphertext). The IV is generated internally and returned separately.
@@ -160,11 +163,13 @@ export const setupIdentityKeys = async (password) => {
   const wrappingKey = await deriveWrappingKey(password, salt);
   const keyPair = await generateIdentityKeyPair();
   const publicKeyJwk = await exportPublicKeyJwk(keyPair.publicKey);
+  const privateKeyJwk = await exportPrivateKeyJwk(keyPair.privateKey);
   const { wrapped: encryptedPrivateKeyJwk, iv: keyDerivationIv } = await wrapPrivateKey(keyPair.privateKey, wrappingKey);
 
   return {
     keyPair,
     publicKeyJwk,
+    privateKeyJwk,
     encryptedPrivateKeyJwk,
     keyDerivationSalt: b64(salt),
     keyDerivationIv,
@@ -180,7 +185,23 @@ export const recoverIdentityKeys = async (password, bundle) => {
   const salt = unb64(key_derivation_salt);
   const wrappingKey = await deriveWrappingKey(password, salt);
   const privateKey = await unwrapPrivateKey(encrypted_private_key_jwk, wrappingKey, key_derivation_iv);
-  const publicKey  = await importPublicKeyJwk(public_key_jwk);
+  let publicKey;
+  if (public_key_jwk) {
+    publicKey = await importPublicKeyJwk(public_key_jwk);
+  } else {
+    const privateJwk = await subtle.exportKey("jwk", privateKey);
+    if (!privateJwk?.kty || !privateJwk?.crv || !privateJwk?.x || !privateJwk?.y) {
+      throw new Error("Не удалось восстановить публичный ключ");
+    }
+    publicKey = await importPublicKeyJwk({
+      kty: privateJwk.kty,
+      crv: privateJwk.crv,
+      x: privateJwk.x,
+      y: privateJwk.y,
+      ext: true,
+      key_ops: [],
+    });
+  }
   return { keyPair: { privateKey, publicKey } };
 };
 

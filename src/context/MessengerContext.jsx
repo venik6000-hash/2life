@@ -3,7 +3,7 @@ import { useAuth } from "./AuthContext";
 import { MsgSocket } from "../utils/websocket";
 import {
   setupIdentityKeys, recoverIdentityKeys,
-  generateChatKey, exportPublicKeyJwk, importPublicKeyJwk,
+  generateChatKey, exportPublicKeyJwk, exportPrivateKeyJwk, importPublicKeyJwk,
   wrapChatKeyForParticipant, unwrapChatKey,
   encryptMessage, decryptMessage,
   encryptFile, decryptFile,
@@ -29,6 +29,8 @@ export function MessengerProvider({ children }) {
   const [wsConnected, setWsConnected]   = useState(false);
 
   const wsRef = useRef(null);
+  const chatKeyRepairInFlightRef = useRef(new Map()); // chatId -> Promise<CryptoKey|null>
+  const chatKeyRepairFailedRef = useRef(new Set());   // chatId that already failed repair attempt
   const normalizeChatList = useCallback((items = []) => {
     // Product requirement: 1 chat per client.
     // If duplicates exist in DB, keep the newest one (items come ordered DESC by id).
@@ -115,6 +117,129 @@ export function MessengerProvider({ children }) {
     return key;
   }, [authFetch]);
 
+  const parseWrappedChatKey = useCallback((rawWrappedKey, fallbackWrappedBy) => {
+    let wrappedKey = rawWrappedKey;
+    let wrappedBy = fallbackWrappedBy;
+    try {
+      const parsed = JSON.parse(rawWrappedKey);
+      if (parsed?.key) {
+        wrappedKey = parsed.key;
+        wrappedBy = parsed.wrappedBy ?? wrappedBy;
+      }
+    } catch {
+      // keep plain base64 value
+    }
+    return { wrappedKey, wrappedBy };
+  }, []);
+
+  const backfillOwnChatKey = useCallback(async (chatId, chatKey) => {
+    if (!chatId || !chatKey || !identityKeyRef.current || !user?.id) return;
+    const wrappedForSelf = await wrapChatKeyForParticipant(
+      identityKeyRef.current.privateKey,
+      identityKeyRef.current.publicKey,
+      chatKey
+    );
+    const encryptedChatKey = JSON.stringify({ wrappedBy: user.id, key: wrappedForSelf });
+
+    const res = await authFetch(`/api/chats/${chatId}/participants`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId: user.id, encryptedChatKey }),
+    });
+    if (!res.ok) return false;
+
+    setChats((prev) => prev.map((c) => {
+      if (c.id !== chatId) return c;
+      const participants = Array.isArray(c.participants) ? c.participants : [];
+      return {
+        ...c,
+        participants: participants.map((p) => (
+          p.user_id === user.id ? { ...p, encrypted_chat_key: encryptedChatKey } : p
+        )),
+      };
+    }));
+    return true;
+  }, [authFetch, user?.id]);
+
+  const repairChatKeyAsOwner = useCallback(async (chat) => {
+    const chatId = chat?.id;
+    if (!chatId || !identityKeyRef.current || !user?.id) return null;
+    if (chatKeyRepairFailedRef.current.has(chatId)) return null;
+
+    const roleInChat = String(chat?.role_in_chat || "");
+    const canRepair = roleInChat === "owner" || user?.role === "admin";
+    if (!canRepair) return null;
+
+    if (chatKeyRepairInFlightRef.current.has(chatId)) {
+      return chatKeyRepairInFlightRef.current.get(chatId);
+    }
+
+    const repairPromise = (async () => {
+      const participants = Array.isArray(chat?.participants) ? chat.participants : [];
+      if (participants.length === 0) return null;
+
+      const nextChatKey = await generateChatKey();
+      const patchedKeysByUser = new Map();
+      let selfPatched = false;
+
+      for (const participant of participants) {
+        const participantId = Number(participant?.user_id);
+        if (!Number.isInteger(participantId) || participantId <= 0) continue;
+
+        const participantPublicKey = await getPublicKey(participantId);
+        if (!participantPublicKey) continue;
+
+        const wrappedKey = await wrapChatKeyForParticipant(
+          identityKeyRef.current.privateKey,
+          participantPublicKey,
+          nextChatKey
+        );
+        const encryptedChatKey = JSON.stringify({ wrappedBy: user.id, key: wrappedKey });
+
+        const res = await authFetch(`/api/chats/${chatId}/participants`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ userId: participantId, encryptedChatKey }),
+        });
+        if (!res.ok) continue;
+
+        patchedKeysByUser.set(participantId, encryptedChatKey);
+        if (participantId === user.id) selfPatched = true;
+      }
+
+      if (!selfPatched) {
+        chatKeyRepairFailedRef.current.add(chatId);
+        return null;
+      }
+
+      setChats((prev) => prev.map((c) => {
+        if (c.id !== chatId) return c;
+        const currentParticipants = Array.isArray(c.participants) ? c.participants : [];
+        return {
+          ...c,
+          participants: currentParticipants.map((p) => (
+            patchedKeysByUser.has(p.user_id)
+              ? { ...p, encrypted_chat_key: patchedKeysByUser.get(p.user_id) }
+              : p
+          )),
+        };
+      }));
+
+      chatKeyRepairFailedRef.current.delete(chatId);
+      return nextChatKey;
+    })()
+      .catch(() => {
+        chatKeyRepairFailedRef.current.add(chatId);
+        return null;
+      })
+      .finally(() => {
+        chatKeyRepairInFlightRef.current.delete(chatId);
+      });
+
+    chatKeyRepairInFlightRef.current.set(chatId, repairPromise);
+    return repairPromise;
+  }, [authFetch, getPublicKey, user?.id, user?.role]);
+
   // ── Crypto setup ───────────────────────────────────────────────────────────
 
   const unlockCrypto = useCallback(async (password) => {
@@ -128,6 +253,24 @@ export function MessengerProvider({ children }) {
         // Recover existing key pair using password
         const { keyPair: kp } = await recoverIdentityKeys(password, data.keys);
         keyPair = kp;
+
+        // Backfill recovery bundle once, so admin password resets can keep chat history.
+        if (!data.recoveryReady || !data.keys.public_key_jwk) {
+          try {
+            const restoredPublicKeyJwk = await exportPublicKeyJwk(kp.publicKey);
+            await authFetch("/api/crypto/keys", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                publicKeyJwk: restoredPublicKeyJwk,
+                encryptedPrivateKeyJwk: data.keys.encrypted_private_key_jwk,
+                keyDerivationSalt: data.keys.key_derivation_salt,
+                keyDerivationIv: data.keys.key_derivation_iv,
+                privateKeyJwk: await exportPrivateKeyJwk(kp.privateKey),
+              }),
+            });
+          } catch (_) { /* non-blocking */ }
+        }
       } else {
         // First time — generate new identity key pair and store on server
         const bundle = await setupIdentityKeys(password);
@@ -139,6 +282,7 @@ export function MessengerProvider({ children }) {
             encryptedPrivateKeyJwk: bundle.encryptedPrivateKeyJwk,
             keyDerivationSalt:     bundle.keyDerivationSalt,
             keyDerivationIv:       bundle.keyDerivationIv,
+            privateKeyJwk:         bundle.privateKeyJwk,
           }),
         });
         keyPair = bundle.keyPair;
@@ -177,17 +321,38 @@ export function MessengerProvider({ children }) {
 
     // Find own participant record
     const myParticipant = (chat.participants || []).find((p) => p.user_id === user.id);
-    if (!myParticipant?.encrypted_chat_key) return null;
+    if (!myParticipant?.encrypted_chat_key) {
+      // Self-heal legacy chats where own wrapped key is empty:
+      // try to derive the same shared secret from participant entries wrapped by current user.
+      for (const participant of (chat.participants || [])) {
+        if (!participant || participant.user_id === user.id || !participant.encrypted_chat_key) continue;
+        try {
+          const { wrappedKey, wrappedBy } = parseWrappedChatKey(participant.encrypted_chat_key, chat.created_by);
+          if (!wrappedKey || Number(wrappedBy) !== Number(user.id)) continue;
+          const participantPublicKey = await getPublicKey(participant.user_id);
+          if (!participantPublicKey) continue;
+          const recoveredChatKey = await unwrapChatKey(
+            identityKeyRef.current.privateKey,
+            participantPublicKey,
+            wrappedKey
+          );
+          chatKeysRef.current.set(chatId, recoveredChatKey);
+          try { await backfillOwnChatKey(chatId, recoveredChatKey); } catch { /* non-blocking */ }
+          return recoveredChatKey;
+        } catch {
+          // try next participant
+        }
+      }
+      const repairedChatKey = await repairChatKeyAsOwner(chat);
+      if (repairedChatKey) {
+        chatKeysRef.current.set(chatId, repairedChatKey);
+        return repairedChatKey;
+      }
+      return null;
+    }
 
     try {
-      let wrappedKey = myParticipant.encrypted_chat_key;
-      let wrappedBy  = chat.created_by; // default: chat creator wrapped it
-
-      // If stored as JSON: { wrappedBy, key }
-      try {
-        const parsed = JSON.parse(wrappedKey);
-        if (parsed.key) { wrappedKey = parsed.key; wrappedBy = parsed.wrappedBy ?? wrappedBy; }
-      } catch { /* plain base64 string */ }
+      const { wrappedKey, wrappedBy } = parseWrappedChatKey(myParticipant.encrypted_chat_key, chat.created_by);
 
       const senderPublicKey = await getPublicKey(wrappedBy);
       if (!senderPublicKey) return null;
@@ -196,9 +361,14 @@ export function MessengerProvider({ children }) {
       chatKeysRef.current.set(chatId, chatKey);
       return chatKey;
     } catch {
+      const repairedChatKey = await repairChatKeyAsOwner(chat);
+      if (repairedChatKey) {
+        chatKeysRef.current.set(chatId, repairedChatKey);
+        return repairedChatKey;
+      }
       return null;
     }
-  }, [user?.id, getPublicKey]);
+  }, [user?.id, getPublicKey, parseWrappedChatKey, backfillOwnChatKey, repairChatKeyAsOwner]);
 
   // ── Decrypt messages ───────────────────────────────────────────────────────
 
