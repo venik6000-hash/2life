@@ -108,8 +108,6 @@ const handleMessage = async (ws, user, raw) => {
 
     // Deliver to all participants including sender (for multi-device)
     await broadcastToChat(chatId, payload, null);
-    // Also send to sender if not already covered
-    sendTo(user.id, payload);
   }
 
   // ── edit_message ──────────────────────────────────────────────────────────
@@ -145,7 +143,6 @@ const handleMessage = async (ws, user, raw) => {
       },
     };
     await broadcastToChat(chatId, payload, null);
-    sendTo(user.id, payload);
   }
 
   // ── delete_message ────────────────────────────────────────────────────────
@@ -171,7 +168,6 @@ const handleMessage = async (ws, user, raw) => {
       if (!deleted) return;
       const payload = { type: "message_deleted_all", chatId, messageId, userId: user.id };
       await broadcastToChat(chatId, payload, null);
-      sendTo(user.id, payload);
     }
   }
 
@@ -188,7 +184,6 @@ const handleMessage = async (ws, user, raw) => {
     const receipts = await getReceiptsByChat(chatId);
     const payload = { type: "receipts_update", chatId, receipts };
     await broadcastToChat(chatId, payload, null);
-    sendTo(user.id, payload);
   }
 
   // ── typing ────────────────────────────────────────────────────────────────

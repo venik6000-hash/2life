@@ -254,10 +254,6 @@ export default function Dashboard() {
     />
   );
 
-  // MODALS
-  const RenderModals = () => (
-    <ModalsSection md={activeModalId} {...modalsProps} />
-  );
   const sectionRenderers = {
     overview: renderOverviewSection,
     questionnaire: renderQuestionnaireSection,
@@ -294,7 +290,7 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
-      <RenderModals />
+      <ModalsSection md={activeModalId} {...modalsProps} />
     </div>
   );
 }

@@ -6,11 +6,11 @@ const { v4: uuidv4 } = require("uuid");
 const { requireAuth } = require("../middleware/auth");
 const { encryptPrivateKeyForRecovery, publicJwkFromRecovery } = require("../services/messengerRecovery");
 const { pool, hasAllClientsAccess, getAssignmentsByUser,
-  createChat, getChatById, getChatsByUser,
-  addChatParticipant, removeChatParticipant, getChatParticipants,
+  createChat, getChatById, getChatsByUser, updateChatMeta, setChatPinned,
+  addChatParticipant, removeChatParticipant, getChatParticipants, getChatParticipantsForChats,
   isParticipant, getParticipantRole,
   insertMessage, getMessageById, updateMessageContent, deleteMessageForAll, hideMessageForUser, getMessages,
-  upsertReceipt, getReceiptsByChat,
+  upsertReceipt, getReceiptsByChat, getReceiptsForChats,
   insertChatFile, getChatFile,
   upsertPublicKey, getPublicKey,
   listUsers,
@@ -24,6 +24,39 @@ const { broadcastToChat, sendTo } = require("../services/ws");
 const { ensureDir } = require("../services/storage");
 
 const router = express.Router();
+const CHAT_ACCESS_SYNC_TTL_MS = Math.max(0, Number(process.env.CHAT_ACCESS_SYNC_TTL_MS || 5000));
+const userChatSyncCache = new Map(); // userId -> { syncedAt: number, inFlight: Promise|null }
+
+const syncUserChatAccessCached = async (userId) => {
+  const safeUserId = Number(userId);
+  if (!Number.isInteger(safeUserId) || safeUserId <= 0) return;
+
+  const now = Date.now();
+  const cached = userChatSyncCache.get(safeUserId);
+
+  if (cached?.inFlight) {
+    await cached.inFlight;
+    return;
+  }
+
+  if (cached && (now - cached.syncedAt) < CHAT_ACCESS_SYNC_TTL_MS) {
+    return;
+  }
+
+  const inFlight = syncUserChatAccessByClientPermissions(pool, safeUserId)
+    .then((result) => {
+      userChatSyncCache.set(safeUserId, { syncedAt: Date.now(), inFlight: null });
+      return result;
+    })
+    .catch((error) => {
+      userChatSyncCache.delete(safeUserId);
+      throw error;
+    });
+
+  userChatSyncCache.set(safeUserId, { syncedAt: cached?.syncedAt || 0, inFlight });
+  await inFlight;
+};
+
 const hasText = (value) => String(value || "").trim() !== "";
 const hasCompleteOwnKeyBundle = (row) => (
   !!row &&
@@ -43,6 +76,8 @@ const hasRecoveryBundle = (row) => (
   hasText(row.recovery_encrypted_private_key_jwk) &&
   hasText(row.recovery_key_iv)
 );
+const sanitizeChatTitle = (value) => String(value || "").trim().slice(0, 80) || "Чат";
+const sanitizeChatIcon = (value) => String(value || "").trim().slice(0, 8);
 
 // ── File upload setup ─────────────────────────────────────────────────────────
 const CHAT_UPLOADS_DIR = path.join(__dirname, "../uploads/chat");
@@ -68,6 +103,18 @@ const canAccessClient = async (user, clientId) => {
   if (all) return true;
   const assignments = await getAssignmentsByUser(user.id);
   return assignments.some((a) => a.client_id === clientId);
+};
+
+const isStaffUserId = async (userId) => {
+  const safeUserId = Number(userId);
+  if (!Number.isInteger(safeUserId) || safeUserId <= 0) return false;
+  const r = await pool.query(
+    "SELECT active, role FROM users WHERE id = $1 LIMIT 1",
+    [safeUserId]
+  );
+  const row = r.rows[0] || null;
+  if (!row || row.active === false) return false;
+  return !isClientRole(row.role);
 };
 
 // Ensure caller is a participant; return 403 if not
@@ -184,21 +231,32 @@ router.post("/crypto/keys", requireAuth(), async (req, res) => {
 // GET /api/chats?clientId=xxx  — list chats the caller participates in (scoped to client if given)
 router.get("/chats", requireAuth(), async (req, res) => {
   try {
-    await syncUserChatAccessByClientPermissions(pool, req.user.id);
+    await syncUserChatAccessCached(req.user.id);
 
     const { clientId } = req.query;
     let chats = await getChatsByUser(req.user.id);
 
     if (clientId) {
-      chats = chats.filter((c) => c.client_id === clientId);
+      chats = chats.filter((c) => c.client_id === clientId || !c.client_id);
     }
 
-    // Enrich with participant list
-    const enriched = await Promise.all(chats.map(async (c) => {
-      const participants = await getChatParticipants(c.id);
-      const receipts     = await getReceiptsByChat(c.id);
-      return { ...c, participants, receipts };
-    }));
+    const chatIds = chats
+      .map((c) => Number(c?.id))
+      .filter((id) => Number.isInteger(id) && id > 0);
+
+    const [participantsByChat, receiptsByChat] = await Promise.all([
+      getChatParticipantsForChats(chatIds),
+      getReceiptsForChats(chatIds),
+    ]);
+
+    const enriched = chats.map((chat) => {
+      const chatId = Number(chat?.id);
+      return {
+        ...chat,
+        participants: participantsByChat.get(chatId) || [],
+        receipts: receiptsByChat.get(chatId) || [],
+      };
+    });
 
     res.json({ chats: enriched });
   } catch (e) {
@@ -207,40 +265,103 @@ router.get("/chats", requireAuth(), async (req, res) => {
 });
 
 // POST /api/chats  — create new chat
-// body: { clientId, title, participants: [{ userId, encryptedChatKey }] }
+// body: { clientId?, title?, icon?, isInternal?, isPinned?, participants: [{ userId, encryptedChatKey }] }
 router.post("/chats", requireAuth(), async (req, res) => {
   try {
     if (isClientRole(req.user?.role)) {
       return res.status(403).json({ error: "Клиент не может создавать чаты" });
     }
 
-    const { clientId, title, participants = [] } = req.body;
-    if (!clientId) return res.status(400).json({ error: "clientId обязателен" });
+    const {
+      clientId: rawClientId,
+      title,
+      icon,
+      isInternal,
+      isPinned,
+      participants = [],
+    } = req.body || {};
 
-    const access = await canAccessClient(req.user, clientId);
-    if (!access) return res.status(403).json({ error: "Нет доступа к клиенту" });
+    const wantsInternal = !!isInternal || !hasText(rawClientId);
+    const clientId = wantsInternal ? null : String(rawClientId).trim();
+    if (!wantsInternal && !clientId) {
+      return res.status(400).json({ error: "clientId обязателен для клиентского чата" });
+    }
 
-    const chat = await createChat(clientId, title || "Чат", req.user.id);
+    if (!wantsInternal) {
+      const access = await canAccessClient(req.user, clientId);
+      if (!access) return res.status(403).json({ error: "Нет доступа к клиенту" });
+    }
+
+    const chat = await createChat({
+      clientId,
+      title: sanitizeChatTitle(title),
+      icon: sanitizeChatIcon(icon),
+      createdBy: req.user.id,
+      isInternal: wantsInternal,
+    });
 
     // Add creator as owner (with their encrypted chat key)
-    const creatorKey = participants.find((p) => p.userId === req.user.id);
-    await addChatParticipant(chat.id, req.user.id, "owner", creatorKey?.encryptedChatKey || "");
+    const creatorKey = Array.isArray(participants)
+      ? participants.find((p) => Number(p?.userId) === req.user.id)
+      : null;
+    await addChatParticipant(
+      chat.id,
+      req.user.id,
+      "owner",
+      creatorKey?.encryptedChatKey || "",
+      !!isPinned
+    );
 
     // Add other participants
-    for (const p of participants) {
-      if (p.userId === req.user.id) continue;
-      await addChatParticipant(chat.id, p.userId, "member", p.encryptedChatKey || "");
+    if (Array.isArray(participants)) {
+      const handled = new Set([req.user.id]);
+      for (const p of participants) {
+        const targetUserId = Number(p?.userId);
+        if (!Number.isInteger(targetUserId) || targetUserId <= 0) continue;
+        if (handled.has(targetUserId)) continue;
+        handled.add(targetUserId);
+
+        if (wantsInternal) {
+          const isStaff = await isStaffUserId(targetUserId);
+          if (!isStaff) continue;
+        } else {
+          const hasAccessToClient = await userHasClientAccess(pool, targetUserId, clientId);
+          if (!hasAccessToClient) continue;
+        }
+
+        await addChatParticipant(chat.id, targetUserId, "member", p?.encryptedChatKey || "");
+      }
     }
 
-    await syncChatParticipantsByClientAccess(pool, chat.id);
+    if (!wantsInternal) {
+      await syncChatParticipantsByClientAccess(pool, chat.id);
+    }
+
     const chatParticipants = await getChatParticipants(chat.id);
+    const receipts = await getReceiptsByChat(chat.id);
 
-    // Notify all new participants via WS
+    // Notify all participants via WS with personal pin-state.
     for (const p of chatParticipants) {
-      sendTo(p.user_id, { type: "chat_created", chat: { ...chat, participants: chatParticipants } });
+      sendTo(p.user_id, {
+        type: "chat_created",
+        chat: {
+          ...chat,
+          is_pinned: !!p.is_pinned,
+          participants: chatParticipants,
+          receipts,
+        },
+      });
     }
 
-    res.json({ chat: { ...chat, participants: chatParticipants } });
+    const ownParticipant = chatParticipants.find((p) => p.user_id === req.user.id);
+    res.json({
+      chat: {
+        ...chat,
+        is_pinned: !!ownParticipant?.is_pinned,
+        participants: chatParticipants,
+        receipts,
+      }
+    });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -256,8 +377,75 @@ router.get("/chats/:chatId", requireAuth(), async (req, res) => {
     if (!(await requireParticipant(req, res, chatId))) return;
 
     const participants = await getChatParticipants(chatId);
-    const receipts     = await getReceiptsByChat(chatId);
-    res.json({ chat: { ...chat, participants, receipts } });
+    const receipts = await getReceiptsByChat(chatId);
+    const ownParticipant = participants.find((p) => p.user_id === req.user.id);
+    res.json({ chat: { ...chat, is_pinned: !!ownParticipant?.is_pinned, participants, receipts } });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// PATCH /api/chats/:chatId — update chat metadata and/or pin status
+// body: { title?, icon?, isPinned? }
+router.patch("/chats/:chatId", requireAuth(), async (req, res) => {
+  try {
+    const chatId = Number(req.params.chatId);
+    if (!Number.isInteger(chatId) || chatId <= 0) {
+      return res.status(400).json({ error: "Некорректный chatId" });
+    }
+    const chat = await getChatById(chatId);
+    if (!chat) return res.status(404).json({ error: "Чат не найден" });
+    if (!(await requireParticipant(req, res, chatId))) return;
+
+    const body = req.body || {};
+    const hasTitle = Object.prototype.hasOwnProperty.call(body, "title");
+    const hasIcon = Object.prototype.hasOwnProperty.call(body, "icon");
+    const hasPinned = Object.prototype.hasOwnProperty.call(body, "isPinned");
+
+    let nextChat = chat;
+    if (hasTitle || hasIcon) {
+      const role = await getParticipantRole(chatId, req.user.id);
+      if (role !== "owner" && req.user.role !== "admin") {
+        return res.status(403).json({ error: "Только владелец чата может менять название и иконку" });
+      }
+
+      if (!chat.is_internal) {
+        return res.status(400).json({ error: "Название и иконку можно менять только у внутренних чатов" });
+      }
+
+      nextChat = await updateChatMeta(chatId, {
+        title: hasTitle ? sanitizeChatTitle(body.title) : null,
+        icon: hasIcon ? sanitizeChatIcon(body.icon) : null,
+      }) || chat;
+
+      const payload = {
+        type: "chat_updated",
+        chatId,
+        chat: {
+          id: nextChat.id,
+          title: nextChat.title,
+          icon: nextChat.icon,
+          is_internal: !!nextChat.is_internal,
+          client_id: nextChat.client_id,
+        },
+      };
+      await broadcastToChat(chatId, payload, null);
+      sendTo(req.user.id, payload);
+    }
+
+    if (hasPinned) {
+      await setChatPinned(chatId, req.user.id, !!body.isPinned);
+      sendTo(req.user.id, {
+        type: "chat_updated",
+        chatId,
+        chat: { id: chatId, is_pinned: !!body.isPinned },
+      });
+    }
+
+    const participants = await getChatParticipants(chatId);
+    const receipts = await getReceiptsByChat(chatId);
+    const ownParticipant = participants.find((p) => p.user_id === req.user.id);
+    res.json({ chat: { ...nextChat, is_pinned: !!ownParticipant?.is_pinned, participants, receipts } });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -427,9 +615,16 @@ router.post("/chats/:chatId/participants", requireAuth(), async (req, res) => {
     const { encryptedChatKey = "" } = req.body || {};
     if (!Number.isInteger(userId) || userId <= 0) return res.status(400).json({ error: "userId обязателен" });
 
-    const hasAccessToClient = await userHasClientAccess(pool, userId, chat.client_id);
-    if (!hasAccessToClient) {
-      return res.status(403).json({ error: "Пользователь не имеет доступа к клиенту этого чата" });
+    if (chat.client_id) {
+      const hasAccessToClient = await userHasClientAccess(pool, userId, chat.client_id);
+      if (!hasAccessToClient) {
+        return res.status(403).json({ error: "Пользователь не имеет доступа к клиенту этого чата" });
+      }
+    } else {
+      const isStaff = await isStaffUserId(userId);
+      if (!isStaff) {
+        return res.status(403).json({ error: "Во внутренний чат можно добавлять только сотрудников" });
+      }
     }
 
     await addChatParticipant(chatId, userId, "member", encryptedChatKey);
@@ -443,7 +638,11 @@ router.post("/chats/:chatId/participants", requireAuth(), async (req, res) => {
 
     // Ensure the newly added user receives the full chat payload right away.
     // Without this, their UI may not have this chat in local state yet.
-    sendTo(userId, { type: "chat_created", chat: { ...chat, participants, receipts } });
+    const newParticipant = participants.find((p) => p.user_id === userId);
+    sendTo(userId, {
+      type: "chat_created",
+      chat: { ...chat, is_pinned: !!newParticipant?.is_pinned, participants, receipts },
+    });
 
     res.json({ participants });
   } catch (e) {
@@ -471,9 +670,11 @@ router.delete("/chats/:chatId/participants/:userId", requireAuth(), async (req, 
       return res.status(403).json({ error: "Недостаточно прав" });
     }
 
-    const targetHasClientAccess = await userHasClientAccess(pool, targetUserId, chat.client_id);
-    if (targetHasClientAccess) {
-      return res.status(400).json({ error: "Нельзя удалить участника вручную, пока у него есть доступ к этому клиенту" });
+    if (chat.client_id) {
+      const targetHasClientAccess = await userHasClientAccess(pool, targetUserId, chat.client_id);
+      if (targetHasClientAccess) {
+        return res.status(400).json({ error: "Нельзя удалить участника вручную, пока у него есть доступ к этому клиенту" });
+      }
     }
 
     await removeChatParticipant(chatId, targetUserId);

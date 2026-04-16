@@ -205,20 +205,24 @@ const initSchema = async () => {
     );
 
     CREATE TABLE IF NOT EXISTS chats (
-      id         SERIAL PRIMARY KEY,
-      client_id  TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
-      title      TEXT NOT NULL DEFAULT '',
-      created_by INTEGER NOT NULL REFERENCES users(id),
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      id          SERIAL PRIMARY KEY,
+      client_id   TEXT REFERENCES clients(id) ON DELETE CASCADE,
+      is_internal BOOLEAN NOT NULL DEFAULT false,
+      title       TEXT NOT NULL DEFAULT '',
+      icon        TEXT NOT NULL DEFAULT '',
+      created_by  INTEGER NOT NULL REFERENCES users(id),
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
     CREATE INDEX IF NOT EXISTS idx_chats_client ON chats(client_id);
+    CREATE INDEX IF NOT EXISTS idx_chats_internal ON chats(is_internal);
 
     CREATE TABLE IF NOT EXISTS chat_participants (
       id                 SERIAL PRIMARY KEY,
       chat_id            INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
       user_id            INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       role_in_chat       TEXT NOT NULL DEFAULT 'member',
+      is_pinned          BOOLEAN NOT NULL DEFAULT false,
       encrypted_chat_key TEXT NOT NULL DEFAULT '',
       joined_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       UNIQUE(chat_id, user_id)
@@ -305,6 +309,42 @@ const initSchema = async () => {
 
   if (!userCols.includes("all_clients_access")) {
     try { await pool.query("ALTER TABLE users ADD COLUMN all_clients_access BOOLEAN NOT NULL DEFAULT false"); } catch (_) {}
+  }
+
+  const chatColsRes = await pool.query(
+    `SELECT column_name FROM information_schema.columns WHERE table_name = 'chats'`
+  );
+  const chatCols = chatColsRes.rows.map(r => r.column_name);
+
+  if (!chatCols.includes("is_internal")) {
+    try { await pool.query("ALTER TABLE chats ADD COLUMN is_internal BOOLEAN NOT NULL DEFAULT false"); } catch (_) {}
+  }
+  if (!chatCols.includes("icon")) {
+    try { await pool.query("ALTER TABLE chats ADD COLUMN icon TEXT NOT NULL DEFAULT ''"); } catch (_) {}
+  }
+  try { await pool.query("ALTER TABLE chats ALTER COLUMN client_id DROP NOT NULL"); } catch (_) {}
+  try {
+    await pool.query(`
+      UPDATE chats
+      SET is_internal = true
+      WHERE client_id IS NULL
+    `);
+  } catch (_) {}
+  try {
+    await pool.query(`
+      UPDATE chats
+      SET is_internal = false
+      WHERE client_id IS NOT NULL
+        AND is_internal IS DISTINCT FROM false
+    `);
+  } catch (_) {}
+
+  const chatParticipantColsRes = await pool.query(
+    `SELECT column_name FROM information_schema.columns WHERE table_name = 'chat_participants'`
+  );
+  const chatParticipantCols = chatParticipantColsRes.rows.map(r => r.column_name);
+  if (!chatParticipantCols.includes("is_pinned")) {
+    try { await pool.query("ALTER TABLE chat_participants ADD COLUMN is_pinned BOOLEAN NOT NULL DEFAULT false"); } catch (_) {}
   }
 
   // Role migration: "Наблюдатель" -> "Клиент", and ensure messenger access is configured.
@@ -783,10 +823,14 @@ const getPublicKey = async (userId) => {
 
 // ─── Messenger: chats ────────────────────────────────────────────────────────
 
-const createChat = async (clientId, title, createdBy) => {
+const createChat = async ({ clientId = null, title, icon = "", createdBy, isInternal = false }) => {
+  const safeTitle = String(title || "").trim() || "Чат";
+  const safeIcon = String(icon || "").trim();
   const r = await pool.query(
-    "INSERT INTO chats (client_id, title, created_by) VALUES ($1, $2, $3) RETURNING *",
-    [clientId, title, createdBy]
+    `INSERT INTO chats (client_id, is_internal, title, icon, created_by)
+     VALUES ($1, $2, $3, $4, $5)
+     RETURNING *`,
+    [clientId || null, !!isInternal, safeTitle, safeIcon, createdBy]
   );
   return r.rows[0];
 };
@@ -798,24 +842,62 @@ const getChatById = async (chatId) => {
 
 const getChatsByUser = async (userId) => {
   const r = await pool.query(
-    `SELECT c.*, cp.role_in_chat, cp.encrypted_chat_key
+    `SELECT c.*, cp.role_in_chat, cp.encrypted_chat_key, cp.is_pinned
      FROM chats c
      JOIN chat_participants cp ON cp.chat_id = c.id AND cp.user_id = $1
-     ORDER BY c.id DESC`,
+     ORDER BY cp.is_pinned DESC, c.id DESC`,
     [userId]
   );
   return r.rows;
 };
 
+const updateChatMeta = async (chatId, patch = {}) => {
+  const updates = [];
+  const params = [];
+
+  if (patch.title != null) {
+    params.push(String(patch.title || "").trim() || "Чат");
+    updates.push(`title = $${params.length}`);
+  }
+  if (patch.icon != null) {
+    params.push(String(patch.icon || "").trim());
+    updates.push(`icon = $${params.length}`);
+  }
+  if (updates.length === 0) return getChatById(chatId);
+
+  params.push(chatId);
+  const r = await pool.query(
+    `UPDATE chats
+     SET ${updates.join(", ")}
+     WHERE id = $${params.length}
+     RETURNING *`,
+    params
+  );
+  return r.rows[0] ?? null;
+};
+
+const setChatPinned = async (chatId, userId, isPinned) => {
+  const r = await pool.query(
+    `UPDATE chat_participants
+     SET is_pinned = $1
+     WHERE chat_id = $2 AND user_id = $3
+     RETURNING *`,
+    [!!isPinned, chatId, userId]
+  );
+  return r.rows[0] ?? null;
+};
+
 // ─── Messenger: participants ──────────────────────────────────────────────────
 
-const addChatParticipant = async (chatId, userId, roleInChat, encryptedChatKey) => {
+const addChatParticipant = async (chatId, userId, roleInChat, encryptedChatKey, isPinned = false) => {
   const r = await pool.query(
-    `INSERT INTO chat_participants (chat_id, user_id, role_in_chat, encrypted_chat_key)
-     VALUES ($1, $2, $3, $4)
-     ON CONFLICT (chat_id, user_id) DO UPDATE SET encrypted_chat_key = EXCLUDED.encrypted_chat_key
+    `INSERT INTO chat_participants (chat_id, user_id, role_in_chat, encrypted_chat_key, is_pinned)
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (chat_id, user_id) DO UPDATE SET
+       role_in_chat = EXCLUDED.role_in_chat,
+       encrypted_chat_key = EXCLUDED.encrypted_chat_key
      RETURNING *`,
-    [chatId, userId, roleInChat, encryptedChatKey]
+    [chatId, userId, roleInChat, encryptedChatKey, !!isPinned]
   );
   return r.rows[0];
 };
@@ -833,6 +915,48 @@ const getChatParticipants = async (chatId) => {
     [chatId]
   );
   return r.rows;
+};
+
+const getChatParticipantsForChats = async (chatIds) => {
+  if (!Array.isArray(chatIds) || chatIds.length === 0) return new Map();
+  const r = await pool.query(
+    `SELECT cp.*, u.username, u.role
+     FROM chat_participants cp
+     JOIN users u ON u.id = cp.user_id
+     WHERE cp.chat_id = ANY($1::int[])
+     ORDER BY cp.chat_id, cp.id`,
+    [chatIds]
+  );
+  const byChat = new Map();
+  for (const row of r.rows) {
+    const list = byChat.get(row.chat_id);
+    if (list) list.push(row);
+    else byChat.set(row.chat_id, [row]);
+  }
+  return byChat;
+};
+
+const getReceiptsForChats = async (chatIds) => {
+  if (!Array.isArray(chatIds) || chatIds.length === 0) return new Map();
+  const r = await pool.query(
+    `SELECT chat_id, user_id, last_read_message_id, read_at
+     FROM message_receipts
+     WHERE chat_id = ANY($1::int[])
+     ORDER BY chat_id`,
+    [chatIds]
+  );
+  const byChat = new Map();
+  for (const row of r.rows) {
+    const entry = {
+      user_id: row.user_id,
+      last_read_message_id: row.last_read_message_id,
+      read_at: row.read_at,
+    };
+    const list = byChat.get(row.chat_id);
+    if (list) list.push(entry);
+    else byChat.set(row.chat_id, [entry]);
+  }
+  return byChat;
 };
 
 const isParticipant = async (chatId, userId) => {
@@ -1017,13 +1141,13 @@ module.exports = {
   // messenger: public keys
   upsertPublicKey, getPublicKey,
   // messenger: chats
-  createChat, getChatById, getChatsByUser,
+  createChat, getChatById, getChatsByUser, updateChatMeta, setChatPinned,
   // messenger: participants
-  addChatParticipant, removeChatParticipant, getChatParticipants, isParticipant, getParticipantRole,
+  addChatParticipant, removeChatParticipant, getChatParticipants, getChatParticipantsForChats, isParticipant, getParticipantRole,
   // messenger: messages
   insertMessage, getMessageById, updateMessageContent, deleteMessageForAll, hideMessageForUser, getMessages,
   // messenger: receipts
-  upsertReceipt, getReceiptsByChat,
+  upsertReceipt, getReceiptsByChat, getReceiptsForChats,
   // messenger: files
   insertChatFile, getChatFile,
 };

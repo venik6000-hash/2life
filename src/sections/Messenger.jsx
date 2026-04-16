@@ -547,7 +547,8 @@ function EmojiPicker({ onPick, $ }) {
 function ChatWindow({
   chat, chats, $, user, messages,
   sendMsg, sendFiles, forwardMsg, editMsg, deleteMsg,
-  markRead, downloadFile, downloadFiles, getFileUrl, showParticipants, setShowParticipants
+  markRead, downloadFile, downloadFiles, getFileUrl, showParticipants, setShowParticipants,
+  updateChatSettings,
 }) {
   const [text, setText]               = useState("");
   const [showEmoji, setShowEmoji]     = useState(false);
@@ -557,6 +558,7 @@ function ChatWindow({
   const [contextMenu, setContextMenu] = useState(null); // { x, y, msg }
   const [forwardTarget, setForwardTarget] = useState(null); // message object
   const [actionError, setActionError] = useState("");
+  const [metaBusy, setMetaBusy] = useState(false);
   const [imageViewer, setImageViewer] = useState(null); // { items, index, url, name, loading, error }
   const bottomRef  = useRef(null);
   const fileRef    = useRef(null);
@@ -881,17 +883,80 @@ function ChatWindow({
   const canEdit = contextMenu?.msg && contextMenu.msg.sender_id === user.id && contextMenu.msg.msg_type === "text";
   const canDeleteForAll = contextMenu?.msg && (contextMenu.msg.sender_id === user.id || user.role === "admin");
   const forwardChats = (chats || []).filter((c) => c.id !== chat.id);
+  const meInChat = (chat.participants || []).find((p) => p.user_id === user.id) || null;
+  const canEditInternalChat = (!!chat.is_internal) && (meInChat?.role_in_chat === "owner" || user.role === "admin");
+
+  const handleTogglePin = async () => {
+    if (metaBusy) return;
+    setMetaBusy(true);
+    setActionError("");
+    const result = await updateChatSettings(chat.id, { isPinned: !chat.is_pinned });
+    if (!result?.ok) {
+      setActionError(result?.error || "Не удалось обновить закрепление");
+    }
+    setMetaBusy(false);
+  };
+
+  const handleEditInternalMeta = async () => {
+    if (!canEditInternalChat || metaBusy) return;
+    const titleInput = window.prompt("Название чата", chat.title || "Чат");
+    if (titleInput == null) return;
+    const iconInput = window.prompt("Иконка чата", chat.icon || "💬");
+    if (iconInput == null) return;
+
+    setMetaBusy(true);
+    setActionError("");
+    const result = await updateChatSettings(chat.id, { title: titleInput, icon: iconInput });
+    if (!result?.ok) {
+      setActionError(result?.error || "Не удалось обновить чат");
+    }
+    setMetaBusy(false);
+  };
 
   return (
     <div style={{display:"flex",flexDirection:"column",height:"100%"}}>
       {/* Header */}
       <div style={{padding:"10px 16px",borderBottom:`1px solid ${$.brd}`,display:"flex",alignItems:"center",gap:10,flexShrink:0}}>
         <div style={{flex:1}}>
-          <div style={{fontWeight:700,fontSize:14}}>{chat.title}</div>
+          <div style={{fontWeight:700,fontSize:14,display:"flex",alignItems:"center",gap:8}}>
+            <span style={{fontSize:16,lineHeight:1}}>{chat.icon || (chat.is_internal ? "💬" : "👤")}</span>
+            <span>{chat.title}</span>
+            {chat.is_pinned && <span style={{fontSize:12,color:$.ac}}>📌</span>}
+          </div>
           <div style={{fontSize:11,color:$.txM}}>
             {(chat.participants||[]).map((p)=>p.username).join(", ")}
           </div>
         </div>
+        <button
+          onClick={handleTogglePin}
+          title={chat.is_pinned ? "Открепить чат" : "Закрепить чат"}
+          disabled={metaBusy}
+          style={{
+            background:chat.is_pinned ? $.acD : $.bgI,
+            border:`1px solid ${chat.is_pinned ? $.ac : $.brd}`,
+            borderRadius:7,
+            padding:"5px 8px",
+            cursor:metaBusy ? "default" : "pointer",
+            fontSize:12,
+            color:chat.is_pinned ? $.ac : $.txM,
+            opacity:metaBusy ? .6 : 1,
+          }}
+        >
+          📌
+        </button>
+        {canEditInternalChat && (
+          <button
+            onClick={handleEditInternalMeta}
+            title="Изменить имя и иконку"
+            disabled={metaBusy}
+            style={{
+              background:$.bgI,border:`1px solid ${$.brd}`,borderRadius:7,padding:"5px 8px",
+              cursor:metaBusy ? "default" : "pointer",fontSize:12,color:$.tx,opacity:metaBusy ? .6 : 1
+            }}
+          >
+            ✎
+          </button>
+        )}
         <button
           onClick={()=>setShowParticipants(!showParticipants)}
           title="Участники"
@@ -1179,7 +1244,11 @@ function ParticipantsPanel({ chat, $, user, addParticipant, removeParticipant, o
   }, [authFetch, canManageParticipants, user.role]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const participantIds = new Set((chat.participants || []).map((p) => p.user_id));
-  const available = allUsers.filter((u) => u.id !== user.id && !participantIds.has(u.id));
+  const available = allUsers.filter((u) => (
+    u.id !== user.id &&
+    !participantIds.has(u.id) &&
+    (!chat.is_internal || !isClientRole(u.role))
+  ));
 
   const handleAdd = async (userId, username) => {
     setAdding(userId);
@@ -1270,18 +1339,25 @@ function ParticipantsPanel({ chat, $, user, addParticipant, removeParticipant, o
 }
 
 // ─── ChatList ─────────────────────────────────────────────────────────────────
-function ChatList({ chats, activeChatId, setActiveChatId, $, user, createNewChat, clientId, messages, canCreateChat }) {
+function ChatList({ chats, activeChatId, setActiveChatId, $, user, createNewChat, messages, canCreateChat }) {
   const [creating, setCreating] = useState(false);
 
   const handleCreate = async () => {
-    if (!canCreateChat || !clientId || creating) return;
-    const existing = chats.find((c) => c.client_id === clientId);
-    if (existing) {
-      setActiveChatId(existing.id);
-      return;
-    }
+    if (!canCreateChat || creating) return;
+    const titleInput = window.prompt("Название внутреннего чата", "Личный чат");
+    if (titleInput == null) return;
+    const iconInput = window.prompt("Иконка (эмодзи или короткий текст)", "💬");
+    if (iconInput == null) return;
+    const shouldPin = window.confirm("Закрепить чат наверху списка?");
+
     setCreating(true);
-    const created = await createNewChat(clientId, "Чат", []);
+    const created = await createNewChat({
+      title: titleInput,
+      icon: iconInput,
+      isInternal: true,
+      isPinned: shouldPin,
+      participantUserIds: [],
+    });
     if (created?.id) setActiveChatId(created.id);
     setCreating(false);
   };
@@ -1311,6 +1387,29 @@ function ChatList({ chats, activeChatId, setActiveChatId, $, user, createNewChat
     return text.length > 40 ? `${text.slice(0, 40)}…` : text;
   };
 
+  const getActivityTimestamp = useCallback((chat) => {
+    const list = messages[chat.id] || [];
+    const last = list[list.length - 1];
+    const source = chat._lastMsgAt || last?.created_at || chat.created_at;
+    const parsed = Date.parse(source || 0);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }, [messages]);
+
+  const sortedChats = useMemo(() => {
+    const items = Array.isArray(chats) ? [...chats] : [];
+    items.sort((a, b) => {
+      const aPinned = !!a.is_pinned;
+      const bPinned = !!b.is_pinned;
+      if (aPinned !== bPinned) return aPinned ? -1 : 1;
+
+      const bTs = getActivityTimestamp(b);
+      const aTs = getActivityTimestamp(a);
+      if (bTs !== aTs) return bTs - aTs;
+      return Number(b.id || 0) - Number(a.id || 0);
+    });
+    return items;
+  }, [chats, getActivityTimestamp]);
+
   return (
     <div style={{width:240,minWidth:240,borderRight:`1px solid ${$.brd}`,display:"flex",flexDirection:"column",background:$.bgC}}>
       <div style={{padding:"12px 14px",borderBottom:`1px solid ${$.brd}`,fontWeight:700,fontSize:14,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
@@ -1319,11 +1418,11 @@ function ChatList({ chats, activeChatId, setActiveChatId, $, user, createNewChat
           <button
             title="Новый чат"
             onClick={handleCreate}
-            disabled={creating || !clientId}
+            disabled={creating}
             style={{
               background:$.ac,color:"#fff",border:"none",borderRadius:6,width:26,height:26,
-              cursor:creating || !clientId ? "default" : "pointer",
-              opacity:creating || !clientId ? .5 : 1,
+              cursor:creating ? "default" : "pointer",
+              opacity:creating ? .5 : 1,
               fontSize:16,display:"flex",alignItems:"center",justifyContent:"center"
             }}
           >+</button>
@@ -1336,10 +1435,11 @@ function ChatList({ chats, activeChatId, setActiveChatId, $, user, createNewChat
             Нет доступных чатов.
           </div>
         )}
-        {chats.map((c) => {
+        {sortedChats.map((c) => {
           const unread = getUnreadCount(c);
           const msgs   = messages[c.id] || [];
           const last   = msgs[msgs.length - 1];
+          const icon = c.icon || (c.is_internal ? "💬" : "👤");
           return (
             <div
               key={c.id}
@@ -1350,8 +1450,14 @@ function ChatList({ chats, activeChatId, setActiveChatId, $, user, createNewChat
                 transition:"background .1s",
               }}
             >
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
-                <span style={{fontWeight:600,fontSize:13,color:c.id===activeChatId?$.ac:$.tx}}>{c.title}</span>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8}}>
+                <div style={{display:"flex",alignItems:"center",gap:8,minWidth:0}}>
+                  <span style={{fontSize:15,lineHeight:1,flexShrink:0}}>{icon}</span>
+                  <span style={{fontWeight:600,fontSize:13,color:c.id===activeChatId?$.ac:$.tx,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
+                    {c.title}
+                  </span>
+                  {c.is_pinned && <span style={{fontSize:11,color:$.ac,flexShrink:0}}>📌</span>}
+                </div>
                 <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:2}}>
                   {last && <span style={{fontSize:10,color:$.txM}}>{fmtTime(last.created_at)}</span>}
                   {unread > 0 && <span style={{background:$.ac,color:"#fff",borderRadius:10,fontSize:10,fontWeight:700,padding:"1px 6px",minWidth:18,textAlign:"center"}}>{unread}</span>}
@@ -1423,7 +1529,7 @@ export default function MessengerSection() {
     chats, chatsLoaded, activeChatId, setActiveChatId, messages,
     unlockCrypto,
     loadChats, loadMessages, sendMsg, sendFiles, forwardMsg, editMsg, deleteMsg, downloadFile, downloadFiles, getFileUrl, markRead,
-    createNewChat, addParticipant, removeParticipant,
+    createNewChat, updateChatSettings, addParticipant, removeParticipant,
   } = useMessenger();
 
   const [showParticipants, setShowParticipants] = useState(false);
@@ -1435,8 +1541,11 @@ export default function MessengerSection() {
   // Load chats when client changes or crypto becomes ready
   useEffect(() => {
     if (!cryptoReady) return;
-    if (!hasGlobalClientAccess && !cid) return;
-    loadChats(hasGlobalClientAccess ? undefined : cid);
+    if (hasGlobalClientAccess) {
+      loadChats();
+      return;
+    }
+    loadChats(cid || undefined);
   }, [cryptoReady, hasGlobalClientAccess, cid]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Admin: auto-create one default chat for each client if missing.
@@ -1452,7 +1561,7 @@ export default function MessengerSection() {
     (async () => {
       for (const client of missingClients) {
         const title = client.shortName || client.name || "Чат";
-        await createNewChat(client.id, title, []);
+        await createNewChat({ clientId: client.id, title, participantUserIds: [] });
       }
       await loadChats();
     })().finally(() => {
@@ -1480,7 +1589,6 @@ export default function MessengerSection() {
         $={$}
         user={user}
         createNewChat={createNewChat}
-        clientId={cid}
         messages={messages}
         canCreateChat={canCreateChat}
       />
@@ -1514,6 +1622,7 @@ export default function MessengerSection() {
                 getFileUrl={getFileUrl}
                 showParticipants={showParticipants}
                 setShowParticipants={setShowParticipants}
+                updateChatSettings={updateChatSettings}
               />
             </div>
             {showParticipants && (

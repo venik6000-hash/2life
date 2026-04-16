@@ -499,12 +499,12 @@ export function DashboardProvider({ children }) {
     return () => clearTimeout(doctorsSaveTimer.current);
   }, [doctors, loaded, authFetch, user?.role]);
 
-  const cl = cls.find(c=>c.id===cid);
+  const cl = useMemo(() => cls.find(c=>c.id===cid), [cls, cid]);
   const st = cl?.stages?.[si];
   const stageHeight = st?.height ?? cl?.height ?? "";
   const stageWeightCurrent = st?.weightCurrent ?? cl?.weightCurrent ?? "";
   const autoBmiValue = calculateBmiValue(stageHeight, stageWeightCurrent);
-  const stageProfile = {
+  const stageProfile = useMemo(() => ({
     email: st?.email ?? cl?.email ?? "",
     phone: st?.phone ?? cl?.phone ?? "",
     city: st?.city ?? cl?.city ?? "",
@@ -513,15 +513,15 @@ export function DashboardProvider({ children }) {
     weightGoal: st?.weightGoal ?? cl?.weightGoal ?? "",
     bmi: autoBmiValue == null ? "" : String(autoBmiValue),
     waist: st?.waist ?? cl?.waist ?? ""
-  };
+  }), [st, cl, stageHeight, stageWeightCurrent, autoBmiValue]);
 
   const uC = useCallback(fn=>{
     if (!canWriteActiveSection) return;
     if (!cid) return;
     setCls(p=>p.map(c=>{
       if (c.id !== cid) return c;
-      const prevClient = JSON.parse(JSON.stringify(c));
-      const draftClient = JSON.parse(JSON.stringify(c));
+      const prevClient = structuredClone(c);
+      const draftClient = structuredClone(c);
       const nextClient = fn(draftClient);
       const resolvedClient = nextClient && typeof nextClient === "object" ? nextClient : draftClient;
       queueClientPatchOps(cid, prevClient, resolvedClient);
@@ -563,8 +563,8 @@ export function DashboardProvider({ children }) {
     if (!nextName) return;
     setCls(prev => prev.map(c => {
       if (String(c.id) !== targetId) return c;
-      const prevClient = JSON.parse(JSON.stringify(c));
-      const nextClient = JSON.parse(JSON.stringify(c));
+      const prevClient = structuredClone(c);
+      const nextClient = structuredClone(c);
       const identity = buildClientIdentity(nextName, nextClient.avatar);
       nextClient.name = nextName;
       nextClient.shortName = identity.shortName || nextName;
@@ -624,7 +624,7 @@ export function DashboardProvider({ children }) {
       .catch(e => console.error("Delete error:", e));
   }, [cl, cls, authFetch, canDeleteClient]);
 
-  const createClient = ({name="",dob="",email="",phone="",city=""}={}) => {
+  const createClient = useCallback(({name="",dob="",email="",phone="",city=""}={}) => {
     if (!canCreateClient) return;
     const id = "c-"+Date.now();
     const nm = String(name || "").trim() || "Новый клиент";
@@ -650,9 +650,9 @@ export function DashboardProvider({ children }) {
     setSec("overview");
     setPri(0);
     setMd(null);
-  };
+  }, [canCreateClient]);
 
-  const importStageExcel = async (file, kind = "auto") => {
+  const importStageExcel = useCallback(async (file, kind = "auto") => {
     if (!canImportData) {
       alert("У вас нет прав на импорт данных");
       return;
@@ -733,18 +733,27 @@ export function DashboardProvider({ children }) {
       return;
     }
     alert("Ошибка импорта: " + (questionnaireAttempt.data?.error || analyticsAttempt.data?.error || "Файл не удалось распознать как анализы или анкету"));
-  };
+  }, [canImportData, canWriteSection, sec, si, uC, uS, setSec, authFetch]);
+
+  const contextValue = useMemo(() => ({
+    cls, setCls, cid, setCid, si, setSi, sec, setSec,
+    so, setSo, pk, setPk, md, setMd, pri, setPri, nri, setNri,
+    doctors, setDoctors, deficitPresets, labOrderTemplates, loaded,
+    visibleSections, canReadSection, canWriteSection, canWriteActiveSection,
+    canCreateClient, canDeleteClient, canImportData, isAdmin,
+    cl, st, stageProfile, autoBmiValue,
+    uC, uS, updateClientName, renameClientById, removeStage, removeClient, createClient, importStageExcel,
+  }), [
+    cls, cid, si, sec, so, pk, md, pri, nri,
+    doctors, deficitPresets, labOrderTemplates, loaded,
+    visibleSections, canReadSection, canWriteSection, canWriteActiveSection,
+    canCreateClient, canDeleteClient, canImportData, isAdmin,
+    cl, st, stageProfile, autoBmiValue,
+    uC, uS, updateClientName, renameClientById, removeStage, removeClient, createClient, importStageExcel,
+  ]);
 
   return (
-    <DashboardContext.Provider value={{
-      cls, setCls, cid, setCid, si, setSi, sec, setSec,
-      so, setSo, pk, setPk, md, setMd, pri, setPri, nri, setNri,
-      doctors, setDoctors, deficitPresets, labOrderTemplates, loaded,
-      visibleSections, canReadSection, canWriteSection, canWriteActiveSection,
-      canCreateClient, canDeleteClient, canImportData, isAdmin,
-      cl, st, stageProfile, autoBmiValue,
-      uC, uS, updateClientName, renameClientById, removeStage, removeClient, createClient, importStageExcel,
-    }}>
+    <DashboardContext.Provider value={contextValue}>
       {children}
     </DashboardContext.Provider>
   );

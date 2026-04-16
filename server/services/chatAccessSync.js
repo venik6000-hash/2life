@@ -316,6 +316,8 @@ const syncUserChatAccessByClientPermissions = async (db, userId) => {
   const updatedChatIds = [];
 
   for (const chat of chats) {
+    if (!chat?.client_id) continue;
+
     const shouldHaveAccess = allowedClientIds.has(chat.client_id);
     const current = currentByChatId.get(chat.id);
     const roleInChat = chat.created_by === safeUserId ? "owner" : "member";
@@ -366,6 +368,15 @@ const syncUserChatAccessByClientPermissions = async (db, userId) => {
 const syncChatParticipantsByClientAccess = async (db, chatId) => {
   const chat = await getChatMeta(db, chatId);
   if (!chat) return null;
+  if (!chat.client_id) {
+    return {
+      chatId: chat.id,
+      clientId: null,
+      addedUserIds: [],
+      removedUserIds: [],
+      updatedUserIds: [],
+    };
+  }
 
   const allowedUserIds = await getUsersWithClientAccess(db, chat.client_id);
   const allowedSet = new Set(allowedUserIds);
@@ -387,9 +398,12 @@ const syncChatParticipantsByClientAccess = async (db, chatId) => {
         chat,
         targetUserId: userId,
         keyResolver,
-        participants: await getChatParticipantRows(db, chat.id),
+        participants,
       });
       await upsertParticipant(db, chat.id, userId, roleInChat, encryptedChatKey);
+      const nextRow = { user_id: userId, role_in_chat: roleInChat, encrypted_chat_key: encryptedChatKey || "" };
+      participants.push(nextRow);
+      currentByUserId.set(userId, nextRow);
       addedUserIds.push(userId);
       continue;
     }
@@ -401,12 +415,14 @@ const syncChatParticipantsByClientAccess = async (db, chatId) => {
         chat,
         targetUserId: userId,
         keyResolver,
-        participants: await getChatParticipantRows(db, chat.id),
+        participants,
       });
     }
 
     if (current.role_in_chat !== roleInChat || hasText(encryptedChatKey)) {
       await upsertParticipant(db, chat.id, userId, roleInChat, encryptedChatKey);
+      current.role_in_chat = roleInChat;
+      if (hasText(encryptedChatKey)) current.encrypted_chat_key = encryptedChatKey;
       updatedUserIds.push(userId);
     }
   }

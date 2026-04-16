@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, useRef, useCallback } from "react";
+import { createContext, useContext, useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useAuth } from "./AuthContext";
 import { MsgSocket } from "../utils/websocket";
 import {
@@ -525,6 +525,15 @@ export function MessengerProvider({ children }) {
         break;
       }
 
+      case "chat_updated": {
+        const nextChat = event?.chat;
+        if (!nextChat?.id) break;
+        setChats((prev) => prev.map((c) => (
+          c.id === nextChat.id ? { ...c, ...nextChat } : c
+        )));
+        break;
+      }
+
       default:
         break;
     }
@@ -1003,8 +1012,24 @@ export function MessengerProvider({ children }) {
 
   // ── API: create chat ──────────────────────────────────────────────────────
 
-  const createNewChat = useCallback(async (clientId, title, participantUserIds) => {
+  const createNewChat = useCallback(async (payload, legacyTitle, legacyParticipantUserIds) => {
     if (!identityKeyRef.current) return null;
+    const normalizedPayload = (
+      payload && typeof payload === "object" && !Array.isArray(payload)
+        ? payload
+        : { clientId: payload, title: legacyTitle, participantUserIds: legacyParticipantUserIds }
+    );
+    const {
+      clientId = null,
+      title = "Чат",
+      icon = "",
+      participantUserIds = [],
+      isInternal = false,
+      isPinned = false,
+    } = normalizedPayload;
+    const safeTitle = String(title || "").trim().slice(0, 80) || "Чат";
+    const safeIcon = String(icon || "").trim().slice(0, 8);
+    const wantsInternal = !!isInternal || !clientId;
 
     // Generate a new chat key
     const chatKey = await generateChatKey();
@@ -1023,7 +1048,14 @@ export function MessengerProvider({ children }) {
     const res = await authFetch("/api/chats", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ clientId, title, participants }),
+      body: JSON.stringify({
+        clientId: wantsInternal ? null : clientId,
+        title: safeTitle,
+        icon: safeIcon,
+        isInternal: wantsInternal,
+        isPinned: !!isPinned,
+        participants,
+      }),
     });
     if (!res.ok) return null;
     const data = await res.json();
@@ -1037,6 +1069,35 @@ export function MessengerProvider({ children }) {
     });
     return data.chat;
   }, [user?.id, authFetch, getPublicKey, normalizeChatList]);
+
+  const updateChatSettings = useCallback(async (chatId, patch = {}) => {
+    if (!chatId || !patch || typeof patch !== "object") return { ok: false, error: "Некорректные данные" };
+
+    const body = {};
+    if (Object.prototype.hasOwnProperty.call(patch, "title")) {
+      body.title = String(patch.title || "").trim().slice(0, 80) || "Чат";
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, "icon")) {
+      body.icon = String(patch.icon || "").trim().slice(0, 8);
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, "isPinned")) {
+      body.isPinned = !!patch.isPinned;
+    }
+    if (Object.keys(body).length === 0) return { ok: false, error: "Нет изменений" };
+
+    const res = await authFetch(`/api/chats/${chatId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) return { ok: false, error: data?.error || "Ошибка сервера" };
+
+    if (data?.chat) {
+      setChats((prev) => prev.map((c) => (c.id === chatId ? { ...c, ...data.chat } : c)));
+    }
+    return { ok: true, chat: data?.chat || null };
+  }, [authFetch]);
 
   // ── API: add participant ──────────────────────────────────────────────────
 
@@ -1090,18 +1151,23 @@ export function MessengerProvider({ children }) {
     };
   }, []);
 
+  const contextValue = useMemo(() => ({
+    cryptoReady, cryptoError, wsConnected,
+    chats, chatsLoaded, activeChatId, setActiveChatId, messages,
+    unlockCrypto,
+    buildMessengerKeysForPassword,
+    loadChats, loadMessages, sendMsg, sendFile, sendFiles, forwardMsg, editMsg, deleteMsg, downloadFile, downloadFiles, getFileUrl, markRead,
+    createNewChat, updateChatSettings, addParticipant, removeParticipant, sendTyping,
+  }), [
+    cryptoReady, cryptoError, wsConnected,
+    chats, chatsLoaded, activeChatId, messages,
+    unlockCrypto, buildMessengerKeysForPassword,
+    loadChats, loadMessages, sendMsg, sendFile, sendFiles, forwardMsg, editMsg, deleteMsg, downloadFile, downloadFiles, getFileUrl, markRead,
+    createNewChat, updateChatSettings, addParticipant, removeParticipant, sendTyping,
+  ]);
+
   return (
-    <MessengerContext.Provider value={{
-      // state
-      cryptoReady, cryptoError, wsConnected,
-      chats, chatsLoaded, activeChatId, setActiveChatId, messages,
-      // crypto
-      unlockCrypto,
-      buildMessengerKeysForPassword,
-      // chat operations
-      loadChats, loadMessages, sendMsg, sendFile, sendFiles, forwardMsg, editMsg, deleteMsg, downloadFile, downloadFiles, getFileUrl, markRead,
-      createNewChat, addParticipant, removeParticipant, sendTyping,
-    }}>
+    <MessengerContext.Provider value={contextValue}>
       {children}
     </MessengerContext.Provider>
   );
