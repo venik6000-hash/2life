@@ -1430,13 +1430,14 @@ export default function MessengerSection() {
   const autoCreateRef = useRef(false);
   const activeChat = chats.find((c) => c.id === activeChatId) || null;
   const canCreateChat = !isClientRole(user?.role);
+  const hasGlobalClientAccess = isAdmin || !!user?.all_clients_access;
 
   // Load chats when client changes or crypto becomes ready
   useEffect(() => {
     if (!cryptoReady) return;
-    if (!isAdmin && !cid) return;
-    loadChats(isAdmin ? undefined : cid);
-  }, [cryptoReady, isAdmin, cid]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!hasGlobalClientAccess && !cid) return;
+    loadChats(hasGlobalClientAccess ? undefined : cid);
+  }, [cryptoReady, hasGlobalClientAccess, cid]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Admin: auto-create one default chat for each client if missing.
   useEffect(() => {

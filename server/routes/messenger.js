@@ -5,7 +5,7 @@ const fs       = require("fs");
 const { v4: uuidv4 } = require("uuid");
 const { requireAuth } = require("../middleware/auth");
 const { encryptPrivateKeyForRecovery, publicJwkFromRecovery } = require("../services/messengerRecovery");
-const { hasAllClientsAccess, getAssignmentsByUser,
+const { pool, hasAllClientsAccess, getAssignmentsByUser,
   createChat, getChatById, getChatsByUser,
   addChatParticipant, removeChatParticipant, getChatParticipants,
   isParticipant, getParticipantRole,
@@ -15,6 +15,11 @@ const { hasAllClientsAccess, getAssignmentsByUser,
   upsertPublicKey, getPublicKey,
   listUsers,
 } = require("../services/db");
+const {
+  syncUserChatAccessByClientPermissions,
+  syncChatParticipantsByClientAccess,
+  userHasClientAccess,
+} = require("../services/chatAccessSync");
 const { broadcastToChat, sendTo } = require("../services/ws");
 const { ensureDir } = require("../services/storage");
 
@@ -179,6 +184,8 @@ router.post("/crypto/keys", requireAuth(), async (req, res) => {
 // GET /api/chats?clientId=xxx  — list chats the caller participates in (scoped to client if given)
 router.get("/chats", requireAuth(), async (req, res) => {
   try {
+    await syncUserChatAccessByClientPermissions(pool, req.user.id);
+
     const { clientId } = req.query;
     let chats = await getChatsByUser(req.user.id);
 
@@ -225,6 +232,7 @@ router.post("/chats", requireAuth(), async (req, res) => {
       await addChatParticipant(chat.id, p.userId, "member", p.encryptedChatKey || "");
     }
 
+    await syncChatParticipantsByClientAccess(pool, chat.id);
     const chatParticipants = await getChatParticipants(chat.id);
 
     // Notify all new participants via WS
@@ -415,8 +423,14 @@ router.post("/chats/:chatId/participants", requireAuth(), async (req, res) => {
       return res.status(403).json({ error: "Только владелец чата может добавлять участников" });
     }
 
-    const { userId, encryptedChatKey = "" } = req.body;
-    if (!userId) return res.status(400).json({ error: "userId обязателен" });
+    const userId = Number(req.body?.userId);
+    const { encryptedChatKey = "" } = req.body || {};
+    if (!Number.isInteger(userId) || userId <= 0) return res.status(400).json({ error: "userId обязателен" });
+
+    const hasAccessToClient = await userHasClientAccess(pool, userId, chat.client_id);
+    if (!hasAccessToClient) {
+      return res.status(403).json({ error: "Пользователь не имеет доступа к клиенту этого чата" });
+    }
 
     await addChatParticipant(chatId, userId, "member", encryptedChatKey);
     const participants = await getChatParticipants(chatId);
@@ -442,6 +456,11 @@ router.delete("/chats/:chatId/participants/:userId", requireAuth(), async (req, 
   try {
     const chatId = Number(req.params.chatId);
     const targetUserId = Number(req.params.userId);
+    if (!Number.isInteger(targetUserId) || targetUserId <= 0) {
+      return res.status(400).json({ error: "Некорректный userId" });
+    }
+    const chat = await getChatById(chatId);
+    if (!chat) return res.status(404).json({ error: "Чат не найден" });
 
     if (isClientRole(req.user?.role) && req.user.id !== targetUserId) {
       return res.status(403).json({ error: "Клиент не может управлять участниками чата" });
@@ -450,6 +469,11 @@ router.delete("/chats/:chatId/participants/:userId", requireAuth(), async (req, 
     const role = await getParticipantRole(chatId, req.user.id);
     if (role !== "owner" && req.user.role !== "admin" && req.user.id !== targetUserId) {
       return res.status(403).json({ error: "Недостаточно прав" });
+    }
+
+    const targetHasClientAccess = await userHasClientAccess(pool, targetUserId, chat.client_id);
+    if (targetHasClientAccess) {
+      return res.status(400).json({ error: "Нельзя удалить участника вручную, пока у него есть доступ к этому клиенту" });
     }
 
     await removeChatParticipant(chatId, targetUserId);

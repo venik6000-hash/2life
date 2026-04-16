@@ -5,6 +5,7 @@ import {
   setupIdentityKeys, recoverIdentityKeys,
   generateChatKey, exportPublicKeyJwk, exportPrivateKeyJwk, importPublicKeyJwk,
   wrapChatKeyForParticipant, unwrapChatKey,
+  rewrapPrivateKey,
   encryptMessage, decryptMessage,
   encryptFile, decryptFile,
 } from "../utils/crypto";
@@ -1079,6 +1080,16 @@ export function MessengerProvider({ children }) {
     wsRef.current?.send({ type: isTyping ? "typing" : "stop_typing", chatId });
   }, []);
 
+  const buildMessengerKeysForPassword = useCallback(async (newPassword) => {
+    if (!identityKeyRef.current?.privateKey || !newPassword) return null;
+    const rewrapped = await rewrapPrivateKey(identityKeyRef.current.privateKey, newPassword);
+    return {
+      encryptedPrivateKeyJwk: rewrapped.encryptedPrivateKeyJwk,
+      keyDerivationSalt: rewrapped.keyDerivationSalt,
+      keyDerivationIv: rewrapped.keyDerivationIv,
+    };
+  }, []);
+
   return (
     <MessengerContext.Provider value={{
       // state
@@ -1086,6 +1097,7 @@ export function MessengerProvider({ children }) {
       chats, chatsLoaded, activeChatId, setActiveChatId, messages,
       // crypto
       unlockCrypto,
+      buildMessengerKeysForPassword,
       // chat operations
       loadChats, loadMessages, sendMsg, sendFile, sendFiles, forwardMsg, editMsg, deleteMsg, downloadFile, downloadFiles, getFileUrl, markRead,
       createNewChat, addParticipant, removeParticipant, sendTyping,

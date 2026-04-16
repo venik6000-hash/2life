@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback, useMemo, Fragment } from "react";
 import { useAuth } from "../context/AuthContext";
 import { useTheme } from "../context/ThemeContext";
-import { recoverIdentityKeys, rewrapPrivateKey } from "../utils/crypto";
+import { useMessenger } from "../context/MessengerContext";
+import { setPendingPassword } from "../utils/cryptoSession";
 import { ANALYTICS_MARKER_DEFAULTS, ANALYTICS_MARKER_FALLBACK_DEFAULTS, normalizeAnalyticsKey } from "../data/analyticsData";
 import { parseDeficitPresetPayload, serializeDeficitPresetPayload } from "../utils/analyticsUtils";
 import { sortClientsByName } from "../utils/clientSort";
@@ -50,8 +51,9 @@ const buildDeficitMarkerOptions = (items = []) => {
 };
 
 export default function AdminSection() {
-  const { authFetch, user } = useAuth();
+  const { authFetch, user, applySession } = useAuth();
   const { $ } = useTheme();
+  const { cryptoReady, buildMessengerKeysForPassword } = useMessenger();
   const [tab, setTab] = useState("users");
 
   // --- Stats ---
@@ -329,13 +331,6 @@ export default function AdminSection() {
 
   const handleChangeUserPassword = async (u) => {
     if (u.id === user?.id) {
-      const currentPassword = prompt("Текущий пароль:");
-      if (currentPassword == null) return;
-      if (!String(currentPassword).trim()) {
-        alert("Введите текущий пароль");
-        return;
-      }
-
       const nextPasswordRaw = prompt("Новый пароль (минимум 8 символов):");
       if (nextPasswordRaw == null) return;
       const nextPassword = String(nextPasswordRaw).trim();
@@ -345,36 +340,17 @@ export default function AdminSection() {
       }
 
       let payload = {
-        currentPassword,
         newPassword: nextPassword,
       };
-      const keysRes = await authFetch("/api/crypto/keys");
-      const keysData = await readResponseSafe(keysRes);
-      if (!keysRes.ok) {
-        alert(keysData?.error || "Не удалось получить ключи мессенджера");
-        return;
-      }
-
-      const bundle = keysData?.keys;
-      const hasBundle = !!(
-        bundle &&
-        bundle.encrypted_private_key_jwk &&
-        bundle.key_derivation_salt &&
-        bundle.key_derivation_iv
-      );
-      if (hasBundle) {
+      if (cryptoReady) {
         try {
-          const { keyPair } = await recoverIdentityKeys(currentPassword, bundle);
-          const rewrapped = await rewrapPrivateKey(keyPair.privateKey, nextPassword);
-          payload = {
-            ...payload,
-            messengerKeys: {
-              encryptedPrivateKeyJwk: rewrapped.encryptedPrivateKeyJwk,
-              keyDerivationSalt: rewrapped.keyDerivationSalt,
-              keyDerivationIv: rewrapped.keyDerivationIv,
-            }
-          };
-        } catch (_) {}
+          const messengerKeys = await buildMessengerKeysForPassword(nextPassword);
+          if (messengerKeys) {
+            payload = { ...payload, messengerKeys };
+          }
+        } catch (_) {
+          // fallback: server-side recovery rewrap
+        }
       }
 
       const r = await authFetch("/api/auth/change-password", {
@@ -386,6 +362,12 @@ export default function AdminSection() {
       if (!r.ok) {
         alert(d?.error || "Не удалось сменить пароль");
         return;
+      }
+      if (d?.token && d?.user) {
+        applySession(d.token, d.user, d.permissions || null);
+      }
+      if (!cryptoReady) {
+        setPendingPassword(nextPassword);
       }
       alert("Пароль обновлён. Теперь вход и мессенджер используют один пароль.");
       return;

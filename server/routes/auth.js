@@ -5,6 +5,7 @@ const router     = express.Router();
 const { ipKeyGenerator } = rateLimit;
 
 const { getUser, listUsers, createUser, pool } = require("../services/db");
+const { syncUserChatAccessByClientPermissions } = require("../services/chatAccessSync");
 const { requireAuth, signToken }   = require("../middleware/auth");
 const { blacklistToken }           = require("../services/tokenBlacklist");
 const { getPermissionsForRole }    = require("../services/permissions");
@@ -156,8 +157,8 @@ router.post("/auth/change-password", requireAuth(), async (req, res) => {
   const client = await pool.connect();
   try {
     const { currentPassword, newPassword, messengerKeys, forceResetMessenger } = req.body || {};
-    if (!currentPassword || !newPassword) {
-      return res.status(400).json({ error: "Укажите текущий и новый пароль" });
+    if (!newPassword) {
+      return res.status(400).json({ error: "Укажите новый пароль" });
     }
     if (String(newPassword).length < 8) {
       return res.status(400).json({ error: "Новый пароль должен быть не короче 8 символов" });
@@ -176,9 +177,17 @@ router.post("/auth/change-password", requireAuth(), async (req, res) => {
     await client.query("BEGIN");
     const userRes = await client.query("SELECT * FROM users WHERE id = $1 FOR UPDATE", [req.user.id]);
     const user = userRes.rows[0] ?? null;
-    if (!user || !(await bcrypt.compare(currentPassword, user.password_hash))) {
+    if (!user) {
       await client.query("ROLLBACK");
-      return res.status(401).json({ error: "Неверный текущий пароль" });
+      return res.status(404).json({ error: "Пользователь не найден" });
+    }
+
+    if (currentPassword != null) {
+      const passwordOk = await bcrypt.compare(String(currentPassword), user.password_hash);
+      if (!passwordOk) {
+        await client.query("ROLLBACK");
+        return res.status(401).json({ error: "Неверный текущий пароль" });
+      }
     }
 
     const keyRes = await client.query(
@@ -217,19 +226,34 @@ router.post("/auth/change-password", requireAuth(), async (req, res) => {
       if (hasRecoveryBundle(keyRow)) {
         await rewrapMessengerFromRecovery(client, keyRow, req.user.id, newPassword);
       } else {
-        try {
-          await rewrapMessengerFromCurrentPassword(client, keyRow, req.user.id, currentPassword, newPassword);
-        } catch (_) {
+        if (currentPassword != null) {
+          try {
+            await rewrapMessengerFromCurrentPassword(client, keyRow, req.user.id, currentPassword, newPassword);
+          } catch (_) {
+            await client.query("ROLLBACK");
+            return res.status(409).json({
+              error: "Не удалось синхронизировать ключи мессенджера. Выполните повторный вход и повторите смену пароля."
+            });
+          }
+        } else {
           await client.query("ROLLBACK");
           return res.status(409).json({
-            error: "Не удалось синхронизировать ключи мессенджера. Выполните повторный вход и повторите смену пароля."
+            error: "Не удалось синхронизировать ключи мессенджера без recovery-ключа. Откройте мессенджер в этом сеансе и повторите смену пароля."
           });
         }
       }
     }
 
     await client.query("COMMIT");
-    res.json({ ok: true, messengerReset: !!forceResetMessenger });
+    const nextUser = {
+      id: user.id,
+      username: user.username,
+      role: user.role,
+      all_clients_access: !!user.all_clients_access,
+    };
+    const nextToken = signToken({ id: nextUser.id, username: nextUser.username, role: nextUser.role });
+    const permissions = await getPermissionsForRole(nextUser.role);
+    res.json({ ok: true, messengerReset: !!forceResetMessenger, token: nextToken, user: nextUser, permissions });
   } catch (e) {
     try { await client.query("ROLLBACK"); } catch (_) {}
     console.error("[auth] change-password error:", e);
@@ -286,6 +310,7 @@ router.patch("/admin/users/:id", requireAuth("admin"), async (req, res) => {
   try {
     const id = Number(req.params.id);
     const { password, role, active, all_clients_access } = req.body || {};
+    let shouldSyncChatAccess = false;
     if (!Number.isInteger(id) || id <= 0) {
       return res.status(400).json({ error: "Некорректный id пользователя" });
     }
@@ -341,12 +366,19 @@ router.patch("/admin/users/:id", requireAuth("admin"), async (req, res) => {
         return res.status(400).json({ error: "Недопустимая роль" });
       }
       await client.query("UPDATE users SET role = $1 WHERE id = $2", [role, id]);
+      shouldSyncChatAccess = true;
     }
     if (active != null) {
       await client.query("UPDATE users SET active = $1 WHERE id = $2", [active ? true : false, id]);
+      shouldSyncChatAccess = true;
     }
     if (all_clients_access != null) {
       await client.query("UPDATE users SET all_clients_access = $1 WHERE id = $2", [all_clients_access ? true : false, id]);
+      shouldSyncChatAccess = true;
+    }
+
+    if (shouldSyncChatAccess) {
+      await syncUserChatAccessByClientPermissions(client, id);
     }
 
     await client.query("COMMIT");

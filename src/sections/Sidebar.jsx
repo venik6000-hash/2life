@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useTheme } from "../context/ThemeContext";
 import { useDashboard } from "../context/DashboardContext";
 import { useAuth } from "../context/AuthContext";
@@ -9,7 +10,8 @@ export default function Sidebar() {
     so, setSo, pk, setPk, cls, cl, cid, si, setSi, sec, setSec, setCid, setPri, setMd, removeStage,
     visibleSections, canCreateClient, canWriteSection, renameClientById
   } = useDashboard();
-  const { user } = useAuth();
+  const { user, logout } = useAuth();
+  const [loggingOut, setLoggingOut] = useState(false);
 
   const bt = v=>({padding:"7px 14px",borderRadius:7,border:"none",cursor:"pointer",fontWeight:600,fontSize:12,fontFamily:"inherit",background:v==="g"?"transparent":$[v]||$.ac,color:v==="g"?$.txS:"#fff",...(v==="g"?{border:`1px solid ${$.brd}`}:{}),transition:"all .15s"});
   const city = cl ? (cl.stages?.[si]?.city ?? cl.city ?? "") : "";
@@ -27,6 +29,16 @@ export default function Sidebar() {
       return;
     }
     renameClientById(client.id, cleaned);
+  };
+
+  const handleLogout = async () => {
+    if (loggingOut) return;
+    setLoggingOut(true);
+    try {
+      await logout();
+    } finally {
+      setLoggingOut(false);
+    }
   };
 
   return (
@@ -68,8 +80,13 @@ export default function Sidebar() {
       <div style={{flex:1,padding:so?"10px 14px":"10px 6px",overflow:"auto"}}>
         {visibleSections.map(s=><div key={s.id} onClick={()=>setSec(s.id)} style={{padding:so?"9px 10px":"9px 4px",borderRadius:7,cursor:"pointer",marginBottom:2,display:"flex",alignItems:"center",gap:8,fontSize:13,background:sec===s.id?$.acD:"transparent",color:sec===s.id?$.ac:$.txS,fontWeight:sec===s.id?600:400,justifyContent:so?"flex-start":"center"}}><span style={{fontSize:15}}>{s.ic}</span>{so&&s.lb}</div>)}
       </div>
-      {user?.role === 'admin' && (
-        <div style={{borderTop:`1px solid ${$.brd}`, padding: so ? "8px 14px" : "8px 6px"}}>
+      <div style={{borderTop:`1px solid ${$.brd}`, padding: so ? "8px 14px" : "8px 6px", display:"flex", flexDirection:"column", gap:4}}>
+        {so && (
+          <div style={{padding:"0 10px 4px", fontSize:11, color:$.txM, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis"}}>
+            {user?.username || "Пользователь"}
+          </div>
+        )}
+        {user?.role === "admin" && (
           <div
             onClick={() => setSec("admin")}
             style={{
@@ -84,8 +101,32 @@ export default function Sidebar() {
             <span style={{fontSize: 15}}>⚙️</span>
             {so && "Admin"}
           </div>
-        </div>
-      )}
+        )}
+        <button
+          onClick={handleLogout}
+          disabled={loggingOut}
+          title="Выйти"
+          style={{
+            padding: so ? "9px 10px" : "9px 4px",
+            borderRadius: 7,
+            border: "none",
+            cursor: loggingOut ? "default" : "pointer",
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            fontSize: 13,
+            background: "transparent",
+            color: $.dn,
+            fontWeight: 600,
+            justifyContent: so ? "flex-start" : "center",
+            opacity: loggingOut ? 0.7 : 1,
+            fontFamily: "inherit",
+          }}
+        >
+          <span style={{fontSize: 15}}>↩</span>
+          {so && (loggingOut ? "Выход..." : "Выйти")}
+        </button>
+      </div>
     </div>
   );
 }

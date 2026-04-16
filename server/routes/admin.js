@@ -6,6 +6,7 @@ const { pool, listRoles, insertRole, updateRoleDisplayName, deleteRole,
         getRolePermissions, upsertRolePermission,
         listRefData, insertRefData, updateRefData, deleteRefData, listDistinctAnalyticsMarkers,
         insertDoctor, listDoctors, listClientIdsByDoctorName, upsertClientAssignment } = require("../services/db");
+const { syncUserChatAccessByClientPermissions } = require("../services/chatAccessSync");
 
 const normalizeAnalyticsKey = (value) => String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
 const toSafeInt = (value) => {
@@ -21,6 +22,7 @@ const syncDoctorUserAssignments = async ({ doctorName, userId, assignedBy }) => 
   for (const clientId of clientIds) {
     await upsertClientAssignment(safeUserId, clientId, toSafeInt(assignedBy));
   }
+  await syncUserChatAccessByClientPermissions(pool, safeUserId);
 };
 
 // --- Roles ---

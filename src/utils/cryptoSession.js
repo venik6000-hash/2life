@@ -7,6 +7,7 @@
 let _pendingPassword = null;
 
 export const setPendingPassword = (pw) => { _pendingPassword = pw; };
+export const clearPendingPassword = () => { _pendingPassword = null; };
 
 export const consumePendingPassword = () => {
   const p = _pendingPassword;

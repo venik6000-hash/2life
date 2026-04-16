@@ -6,7 +6,8 @@ const { buildActionLogs, appendActivityLog } = require("../services/logger");
 const { createBackupSnapshot } = require("../services/backup");
 const { requireAuth, requirePermission, requireSectionWrite, requireAnySectionRead, requireAnySectionWrite } = require("../middleware/auth");
 const { getPermissionsForRole } = require("../services/permissions");
-const { upsertClientAssignment, deleteClientAssignment, getAssignmentsByClient, getAssignmentsByUser, getDoctorByName, hasAllClientsAccess } = require("../services/db");
+const { pool, upsertClientAssignment, deleteClientAssignment, getAssignmentsByClient, getAssignmentsByUser, getDoctorByName, hasAllClientsAccess } = require("../services/db");
+const { syncUserChatAccessByClientPermissions } = require("../services/chatAccessSync");
 const { addConnection, removeConnection, broadcast } = require("../services/sse");
 
 // ─── Clients list ────────────────────────────────────────────────────────────
@@ -235,8 +236,12 @@ router.get("/clients/:clientId/assignments", requireAuth("admin"), async (req, r
 router.post("/clients/:clientId/assignments", requireAuth("admin"), async (req, res) => {
   try {
     const { userId } = req.body || {};
-    if (!userId) return res.status(400).json({ error: "userId обязателен" });
-    await upsertClientAssignment(Number(userId), req.params.clientId, req.user.id);
+    const safeUserId = Number(userId);
+    if (!Number.isInteger(safeUserId) || safeUserId <= 0) {
+      return res.status(400).json({ error: "userId обязателен" });
+    }
+    await upsertClientAssignment(safeUserId, req.params.clientId, req.user.id);
+    await syncUserChatAccessByClientPermissions(pool, safeUserId);
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -246,7 +251,12 @@ router.post("/clients/:clientId/assignments", requireAuth("admin"), async (req, 
 // Снять врача с клиента
 router.delete("/clients/:clientId/assignments/:userId", requireAuth("admin"), async (req, res) => {
   try {
-    await deleteClientAssignment(Number(req.params.userId), req.params.clientId);
+    const targetUserId = Number(req.params.userId);
+    if (!Number.isInteger(targetUserId) || targetUserId <= 0) {
+      return res.status(400).json({ error: "Некорректный userId" });
+    }
+    await deleteClientAssignment(targetUserId, req.params.clientId);
+    await syncUserChatAccessByClientPermissions(pool, targetUserId);
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -279,11 +289,16 @@ const autoAssignDoctors = async (clientId, assignedByUserId) => {
   const client = await getOneClient(clientId);
   if (!client) return;
   const doctorNames = [...new Set((client.stages || []).map(s => s.doctor).filter(Boolean))];
+  const touchedUserIds = new Set();
   for (const name of doctorNames) {
     const doctor = await getDoctorByName(name);
     if (doctor?.user_id) {
       await upsertClientAssignment(doctor.user_id, clientId, assignedByUserId || null);
+      touchedUserIds.add(Number(doctor.user_id));
     }
+  }
+  for (const userId of touchedUserIds) {
+    await syncUserChatAccessByClientPermissions(pool, userId);
   }
 };
 
