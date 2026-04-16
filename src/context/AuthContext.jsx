@@ -50,9 +50,28 @@ export function AuthProvider({ children }) {
   }, [token, clearSessionCache]);
 
   const login = useCallback(async (username, password) => {
-    const res  = await fetch("/api/auth/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username, password }) });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || "Ошибка входа");
+    const res = await fetch("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password })
+    });
+
+    const raw = await res.text();
+    let data = null;
+    try {
+      data = raw ? JSON.parse(raw) : null;
+    } catch {
+      data = null;
+    }
+
+    if (!res.ok) {
+      const fallback = res.status >= 500 ? "Сервер недоступен. Попробуйте позже." : "Ошибка входа";
+      throw new Error(data?.error || fallback);
+    }
+    if (!data?.token || !data?.user) {
+      throw new Error("Сервер API недоступен или прокси /api настроен неверно.");
+    }
+
     applySession(data.token, data.user, data.permissions);
     return data.user;
   }, [applySession]);

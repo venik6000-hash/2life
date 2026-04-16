@@ -215,7 +215,6 @@ const initSchema = async () => {
     );
 
     CREATE INDEX IF NOT EXISTS idx_chats_client ON chats(client_id);
-    CREATE INDEX IF NOT EXISTS idx_chats_internal ON chats(is_internal);
 
     CREATE TABLE IF NOT EXISTS chat_participants (
       id                 SERIAL PRIMARY KEY,
@@ -322,6 +321,7 @@ const initSchema = async () => {
   if (!chatCols.includes("icon")) {
     try { await pool.query("ALTER TABLE chats ADD COLUMN icon TEXT NOT NULL DEFAULT ''"); } catch (_) {}
   }
+  try { await pool.query("CREATE INDEX IF NOT EXISTS idx_chats_internal ON chats(is_internal)"); } catch (_) {}
   try { await pool.query("ALTER TABLE chats ALTER COLUMN client_id DROP NOT NULL"); } catch (_) {}
   try {
     await pool.query(`
