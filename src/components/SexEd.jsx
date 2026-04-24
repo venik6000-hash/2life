@@ -1,16 +1,27 @@
 import { useRef, useEffect } from "react";
 import { useTheme } from "../context/ThemeContext";
 import { useEditor } from "../context/EditorContext";
+import SelectInput from "./SelectInput";
+import Wrapper from "./Wrapper";
 
-export default function SexEd({ value, f, options, save }) {
+export default function SexEd({
+  value,
+  editKey,
+  options,
+  onSave,
+  readOnly = false,
+  f,
+  save,
+}) {
   const { $ } = useTheme();
   const { ef, setEf } = useEditor();
   const selectRef = useRef(null);
-
-  const inp = { padding: "6px 10px", borderRadius: 6, border: `1px solid ${$.brd}`, background: $.bgI, color: $.tx, fontSize: 13, fontFamily: "inherit", outline: "none", width: "100%" };
+  const resolvedEditKey = editKey ?? f;
+  const resolvedSave = onSave ?? save;
+  const resolvedValue = String(value || "");
 
   useEffect(() => {
-    if (ef !== f || !selectRef.current) return;
+    if (ef !== resolvedEditKey || !selectRef.current) return;
     const node = selectRef.current;
     requestAnimationFrame(() => {
       try { node.focus({ preventScroll: true }); } catch (_) { node.focus(); }
@@ -20,28 +31,40 @@ export default function SexEd({ value, f, options, save }) {
       try { node.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window })); } catch (_) {}
       try { node.click(); } catch (_) {}
     });
-  }, [ef, f]);
+  }, [ef, resolvedEditKey]);
 
-  if (ef === f) return (
-    <select
-      ref={selectRef}
-      value={String(value || "")}
-      onChange={e => { save(e.target.value); setEf(null); }}
-      onBlur={() => setEf(null)}
-      style={{ ...inp, width: "auto", minWidth: 140, padding: "4px 8px", fontSize: 12, textAlign: "left" }}
-    >
-      {!options.includes(String(value || "")) && <option value={String(value || "")}>{String(value || "") || "—"}</option>}
-      {options.map(opt => <option key={opt || "empty"} value={opt}>{opt || "—"}</option>)}
-    </select>
-  );
+  if (readOnly) {
+    return (
+      <span style={{ color: resolvedValue ? $.tx : $.txM, fontStyle: resolvedValue ? "normal" : "italic" }}>
+        {resolvedValue || "—"}
+      </span>
+    );
+  }
+
+  if (ef === resolvedEditKey) {
+    return (
+      <Wrapper as="span" minWidth={140}>
+        <SelectInput
+          inputRef={selectRef}
+          size="sm"
+          value={resolvedValue}
+          onChange={e => { resolvedSave(e.target.value); setEf(null); }}
+          onBlur={() => setEf(null)}
+        >
+          {!options.includes(resolvedValue) && <option value={resolvedValue}>{resolvedValue || "—"}</option>}
+          {options.map(opt => <option key={opt || "empty"} value={opt}>{opt || "—"}</option>)}
+        </SelectInput>
+      </Wrapper>
+    );
+  }
 
   return (
     <span
       style={{ cursor: "pointer", borderBottom: `1px dashed ${$.brd}`, display: "inline-block", color: value ? $.tx : $.txM, fontStyle: value ? "normal" : "italic" }}
-      onMouseDown={e => { e.preventDefault(); setEf(f); }}
+      onMouseDown={e => { e.preventDefault(); setEf(resolvedEditKey); }}
       title="Редактировать"
     >
-      {value || "—"}
+      {resolvedValue || "—"}
     </span>
   );
 }

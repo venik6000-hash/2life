@@ -69,3 +69,40 @@ export const normalizeLabOrderTemplates = (items = []) => {
 
   return mapped.length ? mapped : buildDefaultLabOrderTemplates();
 };
+
+export const calcLabOrderClientAge = (dob) => {
+  if (!dob) return null;
+  const value = String(dob).trim();
+  let day, month, year;
+  const ru = value.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
+  const iso = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (ru) { day = +ru[1]; month = +ru[2] - 1; year = +ru[3]; }
+  else if (iso) { day = +iso[3]; month = +iso[2] - 1; year = +iso[1]; }
+  else return null;
+
+  const now = new Date();
+  let age = now.getFullYear() - year;
+  if (now < new Date(now.getFullYear(), month, day)) age--;
+  return age;
+};
+
+export const getSelectedLabOrderItems = (groups = [], selection = {}) => {
+  const items = [];
+  for (const group of groups) {
+    const selected = selection[group.name] || [];
+    if (!selected.length) continue;
+    if (group.simple) items.push(group.name);
+    else items.push(...selected);
+  }
+  return items;
+};
+
+export const buildLabOrderPrintDocument = ({ clientName, clientDob, date, items }) => {
+  const age = calcLabOrderClientAge(clientDob);
+  const ageStr = age != null ? `${age} лет` : "—";
+  const half = Math.ceil(items.length / 2);
+  const makeCol = (arr, start) => `<ol>${arr.map((marker, index) => `<li><span class="n">${start + index + 1}.</span><span class="t">${marker}</span></li>`).join("")}</ol>`;
+  const listHtml = `<div class="cols"><div class="col">${makeCol(items.slice(0, half), 0)}</div><div class="col">${makeCol(items.slice(half), half)}</div></div>`;
+  const css = `*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}body{font-family:'Segoe UI',-apple-system,Arial,sans-serif;background:#fff;color:#1a1f2e;font-size:13px;line-height:1.6}@page{margin:0;size:A4 portrait}.page{padding:14mm 18mm}.hdr{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:18px;padding-bottom:12px;border-bottom:1px solid #e8eaf0}.title{font-size:19px;font-weight:700;color:#1a1f2e;letter-spacing:-.3px;margin-bottom:5px}.mr{font-size:12px;color:#6b7a99;margin-top:2px}.cl-name{font-size:13px;font-weight:700;color:#1a1f2e;margin-top:4px}.meta{text-align:right;font-size:12px;color:#6b7a99;line-height:1.9}.badge{display:inline-block;font-size:10px;font-weight:600;letter-spacing:.8px;text-transform:uppercase;color:#6b7a99;border:1px solid #e8eaf0;padding:3px 10px;border-radius:4px;margin-bottom:8px}.cols{display:grid;grid-template-columns:1fr 1fr;gap:24px;align-items:flex-start}.col{}ol{list-style:none;padding:0;margin:0}ol li{display:flex;gap:8px;padding:4px 0;border-bottom:1px solid #f0f2f6;align-items:baseline;page-break-inside:avoid;break-inside:avoid}.n{font-size:10px;font-weight:600;color:#6b7a99;min-width:18px;flex-shrink:0}.t{font-size:12px;color:#1a1f2e;line-height:1.35}.ftr{margin-top:18px;padding-top:10px;border-top:1px solid #e8eaf0;display:flex;justify-content:space-between;font-size:10px;color:#6b7a99;letter-spacing:.3px}`;
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Направление — ${clientName}</title><style>${css}</style></head><body><div class="page"><div class="hdr"><div><div class="title">Направление на анализы</div><div class="cl-name">${clientName}</div><div class="mr">Возраст: ${ageStr}</div></div><div class="meta"><div class="badge">Лаборатория</div><div>${date}</div></div></div>${listHtml}<div class="ftr"><span>Направление на анализы</span><span>${clientName} · ${date}</span></div></div></body></html>`;
+};

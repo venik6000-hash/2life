@@ -16,6 +16,16 @@ const {
 const j  = (v, fallback) => { try { return JSON.parse(v); } catch (_) { return fallback; } };
 const jArr = (v) => j(v, []);
 const jObj = (v) => j(v, {});
+const normalizeInjectionSchedule = (value) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { startDate: "", phases: [] };
+  }
+  return {
+    ...value,
+    startDate: typeof value.startDate === "string" ? value.startDate : "",
+    phases: Array.isArray(value.phases) ? value.phases : []
+  };
+};
 const toStr  = (v) => (v == null ? "" : String(v));
 const toReal = (v) => { const n = Number(v); return isFinite(n) ? n : 0; };
 const toInt  = (v) => { const n = parseInt(v, 10); return isFinite(n) ? n : 0; };
@@ -105,7 +115,7 @@ const readStagesForClient = async (clientId, analyticsCategories) => {
       labOrderGroupOrder:   jArr(row.lab_order_group_order_json),
       nutrition:            jObj(row.nutrition_json),
       injections:           jArr(row.injections_json),
-      injectionSchedule:    jObj(row.injection_schedule_json),
+      injectionSchedule:    normalizeInjectionSchedule(jObj(row.injection_schedule_json)),
       questionnaire:        jObj(row.questionnaire_json),
       protocolRevisions:    protocolRevisions,
       nutritionRevisions:   nutritionRevisions,

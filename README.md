@@ -15,7 +15,7 @@
 ## RBAC (роли и права)
 
 - Конфиг ролей хранится в PostgreSQL: `roles`, `role_sections`, `role_permissions`.
-- Итоговые права роли собираются сервером в `server /services/permissions.js`.
+- Итоговые права роли собираются сервером в `server/services/permissions.js`.
 - `GET /api/auth/me` возвращает `{ ok, user, permissions }`, где `permissions` имеет вид:
 
 ```json
@@ -55,7 +55,7 @@
 
 Почему их две пары:
 - В корне (`/`) — для frontend.
-- В папке `server ` — для backend.
+- В папке `server` — для backend.
 
 Зачем это нужно:
 - одинаковая установка пакетов у всех разработчиков и на CI;
@@ -95,12 +95,15 @@ docker compose up -d --build
 ## Что поднимает Docker Compose
 
 - `db` — PostgreSQL 16
-- `server` — API на Node.js (порт внутри сети Docker: `3001`)
+- `server` — API на Node.js (порт внутри Docker: `3001`, на хосте: `127.0.0.1:3001`)
 - `frontend` — Nginx, раздача React и проксирование `/api/*` на `server`
 
 Постоянные данные:
 - `postgres_data` — данные PostgreSQL
 - `server_data` — SQL-бэкапы PostgreSQL (`pg_dump`)
+
+Авто-бэкап создаёт полный SQL-дамп базы PostgreSQL `2life`: структуру и данные всех таблиц.
+Файлы, лежащие на диске вне PostgreSQL (например, загруженные вложения из `server/uploads`), в этот SQL-дамп не входят и требуют отдельной стратегии бэкапа/хранения.
 
 ## Локальная разработка без Docker
 
@@ -112,7 +115,7 @@ docker compose up -d --build
 ### 1. Запуск backend
 
 ```bash
-cd "server "
+cd server
 npm install
 export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/2life"
 export JWT_SECRET="change-me"
@@ -130,6 +133,8 @@ npm run dev
 ```
 
 Frontend в dev-режиме откроется на `http://localhost:3000`.
+
+Если backend запущен через Docker Compose, локальный Vite (`npm run dev`) использует его через `http://127.0.0.1:3001`.
 
 ## Деплой на VPS/выделенный сервер
 
@@ -169,7 +174,6 @@ docker compose up -d --build
 docker compose down
 ```
 
-## Важно про путь `server `
+## Важно про путь `server`
 
-Папка backend в проекте называется `server ` (с пробелом в конце).  
-В shell-командах используйте кавычки: `cd "server "`.
+Папка backend в проекте называется `server`.

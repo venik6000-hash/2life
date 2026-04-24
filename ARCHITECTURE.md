@@ -18,10 +18,10 @@ src/main.jsx
        │         └─ DashboardProvider
        │              └─ MessengerProvider
        │                   └─ src/dashboard.jsx   ← оркестратор
-       │                        ├─ Sidebar
-       │                        ├─ Header  (скрыт для разделов admin/messenger)
-       │                        └─ <активная секция>
-       └─ ModalsSection  (всегда)
+       │                        ├─ DashboardShell / DashboardHeader
+       │                        ├─ Sidebar (components)
+       │                        ├─ <активная секция> (sections/*)
+       │                        └─ ModalsSection
 ```
 
 - `src/context/AuthContext.jsx` — JWT-токен, пользователь, права, `authFetch`.
@@ -29,8 +29,8 @@ src/main.jsx
 - `src/context/EditorContext.jsx` — глобальный inline-редактор `Ed`.
 - `src/context/DashboardContext.jsx` — клиенты, этапы, автосохранение, патч-логика.
 - `src/context/MessengerContext.jsx` — E2E-ключи, WS-соединение, чаты/сообщения/файлы.
-- `src/sections/*` — крупные бизнес-экраны (один файл = один раздел).
-- `src/components/*` — мелкие переиспользуемые UI-блоки.
+- `src/sections/*` — оркестраторы бизнес-разделов: данные, эффекты, обработчики, сборка UI из компонентов.
+- `src/components/*` — все визуальные поверхности и компонентные стили, включая одноразовые UI-блоки разделов и общие примитивы.
 - `src/utils/*` — чистые утилиты и вычисления.
 - `src/data/*` — справочники и шаблоны.
 - `server/` — API, PostgreSQL, импорт Excel, бэкапы, реалтайм (SSE + WebSocket).
@@ -174,8 +174,9 @@ src/main.jsx
 
 ## 8. Границы ответственности
 
-- **`dashboard.jsx`**: layout, переключение секций, PDF-печать, общие стили. Без бизнес-логики разделов.
-- **`sections/*`**: UI + поведение конкретного раздела. Без логики других разделов.
+- **`dashboard.jsx`**: выбор активной секции, wiring layout-компонентов, модалок и PDF-печати. Shell/header/sidebar visuals живут в `components/*`.
+- **`sections/*`**: поведение конкретного раздела: state, effects, handlers, mutations, вычисления для UI. Секции собирают компоненты, но не владеют визуальной косметикой.
+- **`components/*`**: визуальная граница приложения. Цвета, padding, radius, typography, borders, shadows и internal spacing принадлежат компонентам; внешний код управляет ими через семантические props. Layout между компонентами задаётся через `Wrapper` и layout-props.
 - **`context/*`**: общий state, синхронизация с API, CRUD-операции. Без детального JSX разделов.
 - **`services/*`**: всё общение с БД и файловой системой. Без HTTP-специфики (это в routes).
 - **`routes/*`**: HTTP-слой: валидация входа, вызов сервисов, формат ответа.
@@ -189,7 +190,8 @@ src/main.jsx
 
 ## 10. Масштабирование
 
-- При росте секции делить на: `Section.jsx` + `useSectionState.js` + локальные `components/`.
+- При росте секции делить на: `src/sections/Section.jsx` для state/effects/actions + плоские `src/components/Section*.jsx` для UI.
+- Не создавать локальные компоненты внутри `sections/` и не прокидывать косметические `style`/`className` override-props. Если нужен новый внешний вид, добавлять семантический prop компонента или отдельный компонент.
 - Новый роут: добавить файл в `routes/`, подключить в `index.js`.
 - Новая роль/право: через `AdminSection` → `/api/admin/roles`.
 
@@ -197,8 +199,9 @@ src/main.jsx
 
 | Хочу изменить…                  | Куда идти                                       |
 |---------------------------------|-------------------------------------------------|
-| Структуру экрана / layout       | `src/dashboard.jsx`                             |
-| Конкретный раздел               | `src/sections/<Section>.jsx`                    |
+| Структуру экрана / layout       | `src/dashboard.jsx`, `src/components/DashboardShell.jsx`, `src/components/DashboardHeader.jsx`, sidebar-компоненты |
+| Поведение конкретного раздела   | `src/sections/<Section>.jsx`                    |
+| UI конкретного раздела          | `src/components/<Section...>.jsx`               |
 | Глобальное состояние            | `src/context/DashboardContext.jsx`              |
 | Тему                            | `src/context/ThemeContext.jsx`, `src/styles/`   |
 | Логин / права пользователей     | `src/context/AuthContext.jsx`, `server/routes/auth.js` |
@@ -208,8 +211,8 @@ src/main.jsx
 | Реалтайм карточек (SSE)         | `server/services/sse.js`                       |
 | Реалтайм мессенджера (WS)       | `server/services/ws.js`, `src/utils/websocket.js` |
 | Крипто-утилиты мессенджера      | `src/utils/crypto.js`, `src/utils/cryptoSession.js` |
-| UI мессенджера                  | `src/sections/Messenger.jsx`, `src/context/MessengerContext.jsx` |
-| Роли и права (UI)               | `src/sections/AdminSection.jsx`                 |
+| UI мессенджера                  | `src/components/Messenger*.jsx`, `src/sections/Messenger.jsx`, `src/context/MessengerContext.jsx` |
+| Роли и права (UI)               | `src/components/AdminSectionPanel.jsx`, `src/sections/AdminSection.jsx` |
 
 ## 12. Section -> API Mapping
 

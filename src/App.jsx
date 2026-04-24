@@ -5,28 +5,29 @@ import { DashboardProvider } from './context/DashboardContext';
 import { MessengerProvider } from './context/MessengerContext';
 import Dashboard from './dashboard';
 import LoginScreen from './components/LoginScreen';
+import LoadingScreen from './components/LoadingScreen';
 
 function AppInner() {
   const { user, checking } = useAuth();
-  if (checking) return null; // пока проверяем токен — не рендерим ничего
+  if (checking) return <LoadingScreen />;
   if (!user) return <LoginScreen />;
   return (
-    <ThemeProvider>
-      <EditorProvider>
-        <DashboardProvider>
-          <MessengerProvider>
-            <Dashboard />
-          </MessengerProvider>
-        </DashboardProvider>
-      </EditorProvider>
-    </ThemeProvider>
+    <EditorProvider>
+      <DashboardProvider>
+        <MessengerProvider>
+          <Dashboard />
+        </MessengerProvider>
+      </DashboardProvider>
+    </EditorProvider>
   );
 }
 
 export default function App() {
   return (
-    <AuthProvider>
-      <AppInner />
-    </AuthProvider>
+    <ThemeProvider>
+      <AuthProvider>
+        <AppInner />
+      </AuthProvider>
+    </ThemeProvider>
   );
 }

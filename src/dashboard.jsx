@@ -1,9 +1,8 @@
 import { useState, useRef, useEffect } from "react";
 import { sanitizePrintHtml } from "./utils/helpers";
-import { useTheme } from "./context/ThemeContext";
 import { useDashboard, SECTIONS } from "./context/DashboardContext";
 import Sidebar from "./sections/Sidebar";
-import Header from "./sections/Header";
+import DashboardHeader from "./components/DashboardHeader";
 import JournalSection from "./sections/Journal";
 import LabOrderSection from "./sections/LabOrder";
 import OverviewSection from "./sections/Overview";
@@ -15,6 +14,9 @@ import QuestionnaireSection from "./sections/Questionnaire";
 import ModalsSection from "./sections/Modals";
 import AdminSection from "./sections/AdminSection";
 import MessengerSection from "./sections/Messenger";
+import LoadingScreen from "./components/LoadingScreen";
+import NoClientsScreen from "./components/NoClientsScreen";
+import DashboardShell from "./components/DashboardShell";
 
 const stageAutoTitle = (stageNumber) => {
   if (stageNumber === 2) return "Энергобуст";
@@ -29,7 +31,6 @@ const todayLabel = () => {
 };
 
 export default function Dashboard() {
-  const { $: themeColors, dk: isDarkTheme } = useTheme();
   const {
     setCls: setClients,
     cid: clientId,
@@ -84,16 +85,8 @@ export default function Dashboard() {
     });
   },[activeSectionId, clientId, stageIndex, analyticsJumpTarget]);
 
-  const cardStyle = x=>({background:themeColors.bgC,border:`1px solid ${themeColors.brd}`,borderRadius:10,padding:18,...x});
-  const inputStyle = {padding:"6px 10px",borderRadius:6,border:`1px solid ${themeColors.brd}`,background:themeColors.bgI,color:themeColors.tx,fontSize:13,fontFamily:"inherit",outline:"none",width:"100%"};
-  const buttonStyle = v=>({padding:"7px 14px",borderRadius:7,border:"none",cursor:"pointer",fontWeight:600,fontSize:12,fontFamily:"inherit",background:v==="g"?"transparent":themeColors[v]||themeColors.ac,color:v==="g"?themeColors.txS:"#fff",...(v==="g"?{border:`1px solid ${themeColors.brd}`}:{}),transition:"all .15s"});
-  const smallButtonStyle = {padding:"4px 8px",borderRadius:5,border:"none",cursor:"pointer",fontSize:11,fontWeight:600,fontFamily:"inherit"};
-
   const modalsProps = {
     setMd: setActiveModalId,
-    $: themeColors,
-    inp: inputStyle,
-    bt: buttonStyle,
     cl: currentClient,
     st: currentStage,
     doctors,
@@ -108,14 +101,15 @@ export default function Dashboard() {
     setPri: setProtocolRevisionIndex,
   };
 
-  if(!loaded) return <div style={{background:themeColors.bg,color:themeColors.tx,height:"100vh",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'Segoe UI',sans-serif"}}><div style={{textAlign:"center"}}><div style={{fontSize:32,marginBottom:12}}>⏳</div><div style={{fontSize:15,fontWeight:600,color:themeColors.ac}}>2life</div><div style={{fontSize:12,color:themeColors.txM,marginTop:4}}>Загрузка данных...</div></div></div>;
-  if(!currentClient||!currentStage) return <div style={{background:themeColors.bg,color:themeColors.tx,height:"100vh",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'Segoe UI',sans-serif"}}>
-    <div style={{textAlign:"center"}}>
-      <div style={{fontSize:15,color:themeColors.txS}}>Нет клиентов</div>
-      {canCreateClient && <button onClick={()=>setActiveModalId("newCl")} style={{marginTop:12,padding:"8px 16px",borderRadius:7,border:"none",cursor:"pointer",fontWeight:600,fontSize:13,background:themeColors.ac,color:"#fff"}}>+ Создать клиента</button>}
-    </div>
-    <ModalsSection md={activeModalId==="newCl" ? "newCl" : null} {...modalsProps} />
-  </div>;
+  if(!loaded) return <LoadingScreen />;
+  if(!currentClient||!currentStage) return (
+    <NoClientsScreen
+      canCreateClient={canCreateClient}
+      onCreateClient={() => setActiveModalId("newCl")}
+    >
+      <ModalsSection md={activeModalId==="newCl" ? "newCl" : null} {...modalsProps} />
+    </NoClientsScreen>
+  );
 
   const printSectionToPdf = () => {
     const w = window.open('', '_blank');
@@ -132,16 +126,12 @@ export default function Dashboard() {
     <OverviewSection
       st={currentStage}
       pri={protocolRevisionIndex}
-      doctors={doctors}
       autoBmiValue={autoBmiValue}
       stageProfile={stageProfile}
-      card={cardStyle}
       setMd={setActiveModalId}
-      $={themeColors}
       cl={currentClient}
       uC={updateClient}
       uS={updateStage}
-      bt={buttonStyle}
       setSec={setActiveSectionId}
       setAnalyticsJump={setAnalyticsJumpTarget}
       defPickOpen={isDeficitPickerOpen}
@@ -156,12 +146,8 @@ export default function Dashboard() {
       st={currentStage}
       nri={nutritionRevisionIndex}
       setNri={setNutritionRevisionIndex}
-      card={cardStyle}
-      $={themeColors}
-      bt={buttonStyle}
       uS={updateStage}
       todayLabel={todayLabel}
-      bs={smallButtonStyle}
       readOnly={!canWriteSection("nutrition")}
     />
   );
@@ -171,11 +157,6 @@ export default function Dashboard() {
       st={currentStage}
       pri={protocolRevisionIndex}
       setPri={setProtocolRevisionIndex}
-      card={cardStyle}
-      $={themeColors}
-      dk={isDarkTheme}
-      bt={buttonStyle}
-      bs={smallButtonStyle}
       uS={updateStage}
       protMode={protocolMode}
       setProtMode={setProtocolMode}
@@ -193,9 +174,6 @@ export default function Dashboard() {
       st={currentStage}
       uS={updateStage}
       cl={currentClient}
-      $={themeColors}
-      bt={buttonStyle}
-      card={cardStyle}
     />
   );
  // ANALYTICS
@@ -203,9 +181,6 @@ export default function Dashboard() {
     <AnalyticsSection
       st={currentStage}
       collapseStorageKey={`${currentClient.id}::${currentStage.id}`}
-      card={cardStyle}
-      $={themeColors}
-      bt={buttonStyle}
       uS={updateStage}
       analyticsJump={analyticsJumpTarget}
       setAnalyticsJump={setAnalyticsJumpTarget}
@@ -219,9 +194,6 @@ export default function Dashboard() {
   const renderQuestionnaireSection = () => (
     <QuestionnaireSection
       st={currentStage}
-      card={cardStyle}
-      $={themeColors}
-      bt={buttonStyle}
       uS={updateStage}
       importStageExcel={importStageExcel}
       canImportData={canImportData}
@@ -231,20 +203,13 @@ export default function Dashboard() {
   const renderJournalSection = () => (
     <JournalSection
       st={currentStage}
-      card={cardStyle}
-      $={themeColors}
-      inp={inputStyle}
       uS={updateStage}
-      bt={buttonStyle}
     />
   );
 
   const renderLabOrderSection = () => (
     <LabOrderSection
       st={currentStage}
-      card={cardStyle}
-      $={themeColors}
-      bt={buttonStyle}
       uS={updateStage}
       cl={currentClient}
       todayLabel={todayLabel}
@@ -268,29 +233,22 @@ export default function Dashboard() {
   };
   const isSectionReadOnly = activeSectionId !== "admin" && !canWriteSection(activeSectionId);
 
-  return(
-    <div style={{background:themeColors.bg,color:themeColors.tx,height:"100vh",fontFamily:"'Segoe UI',-apple-system,sans-serif",display:"flex",transition:"all .2s",overflow:"hidden"}}>
-      <Sidebar />
-      <div style={{flex:1,display:"flex",flexDirection:"column",minHeight:0,minWidth:0}}>
-        {activeSectionId !== "admin" && <Header pdf={printSectionToPdf} />}
-        <div ref={mainScrollRef} onScroll={e=>{if(activeSectionId==="analytics") localStorage.setItem("dash_analytics_scroll_y", String(e.currentTarget.scrollTop))}} style={{flex:1,overflow:(activeSectionId==="messenger"?"hidden":"auto"),padding:(activeSectionId==="admin"||activeSectionId==="messenger")?0:20,minWidth:0,display:(activeSectionId==="messenger"?"flex":"block"),flexDirection:"column"}}>
-          {isSectionReadOnly && (
-            <div style={{marginBottom:10,padding:"8px 10px",borderRadius:8,border:`1px solid ${themeColors.brd}`,background:themeColors.bgI,fontSize:12,color:themeColors.txM}}>
-              Режим только просмотра: для этого раздела запрещено редактирование.
-            </div>
-          )}
-          <div
-            ref={printContentRef}
-            style={{
-              ...((activeSectionId==="admin"||activeSectionId==="messenger")?{height:"100%",flex:1,display:"flex",flexDirection:"column"}:{}),
-              ...(isSectionReadOnly && activeSectionId === "questionnaire" ? { pointerEvents: "none" } : {})
-            }}
-          >
-            {(sectionRenderers[activeSectionId]||renderOverviewSection)()}
-          </div>
-        </div>
-      </div>
-      <ModalsSection md={activeModalId} {...modalsProps} />
-    </div>
+  return (
+    <DashboardShell
+      sidebar={<Sidebar />}
+      header={activeSectionId !== "admin" ? <DashboardHeader onPrintPdf={printSectionToPdf} /> : null}
+      modals={<ModalsSection md={activeModalId} {...modalsProps} />}
+      activeSectionId={activeSectionId}
+      readOnly={isSectionReadOnly}
+      mainRef={mainScrollRef}
+      printRef={printContentRef}
+      onMainScroll={(e) => {
+        if (activeSectionId === "analytics") {
+          localStorage.setItem("dash_analytics_scroll_y", String(e.currentTarget.scrollTop));
+        }
+      }}
+    >
+      {(sectionRenderers[activeSectionId] || renderOverviewSection)()}
+    </DashboardShell>
   );
 }

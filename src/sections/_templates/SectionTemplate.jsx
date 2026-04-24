@@ -1,4 +1,8 @@
 import { useSectionState } from "./useSectionState";
+import Button from "../../components/Button";
+import Card from "../../components/Card";
+import Input from "../../components/Input";
+import Wrapper from "../../components/Wrapper";
 
 // Template section:
 // - receives minimum contract from dashboard
@@ -6,9 +10,6 @@ import { useSectionState } from "./useSectionState";
 export default function SectionTemplate({
   stage,
   updateStage,
-  cardStyle,
-  theme,
-  buttonStyle,
   todayLabel,
 }) {
   const {
@@ -20,53 +21,36 @@ export default function SectionTemplate({
   } = useSectionState({ stage, updateStage, todayLabel });
 
   return (
-    <div style={cardStyle()}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-        <div style={{ fontSize: 13, fontWeight: 700 }}>Новая секция</div>
-        <button
-          onClick={() => setIsEditMode((v) => !v)}
-          style={{ ...buttonStyle("g"), fontSize: 11, marginLeft: "auto" }}
-        >
-          {isEditMode ? "Готово" : "Редактировать"}
-        </button>
-      </div>
+    <Card>
+      <Wrapper dir="row" align="center" gap="sm" marginBottom="md">
+        <strong>Новая секция</strong>
+        <Wrapper marginLeft="auto">
+          <Button variant="ghost" size="sm" onClick={() => setIsEditMode((v) => !v)}>
+            {isEditMode ? "Готово" : "Редактировать"}
+          </Button>
+        </Wrapper>
+      </Wrapper>
 
-      <div style={{ display: "grid", gap: 8 }}>
+      <Wrapper gap="sm">
         {sectionItems.map((item, index) => (
-          <div
-            key={index}
-            style={{
-              border: `1px solid ${theme.brd}`,
-              background: theme.bgI,
-              borderRadius: 8,
-              padding: "8px 10px",
-            }}
-          >
+          <Card key={index} size="sm">
             {isEditMode ? (
-              <input
+              <Input
                 value={item.title || ""}
                 onChange={(e) => updateItemTitle(index, e.target.value)}
-                style={{
-                  width: "100%",
-                  border: `1px solid ${theme.brd}`,
-                  borderRadius: 6,
-                  background: theme.bgC,
-                  color: theme.tx,
-                  padding: "6px 8px",
-                  fontFamily: "inherit",
-                  fontSize: 12,
-                }}
               />
             ) : (
-              <div style={{ fontSize: 13 }}>{item.title || "—"}</div>
+              <span>{item.title || "—"}</span>
             )}
-          </div>
+          </Card>
         ))}
-      </div>
+      </Wrapper>
 
-      <button onClick={addItem} style={{ ...buttonStyle("g"), marginTop: 10, fontSize: 11 }}>
-        + Добавить
-      </button>
-    </div>
+      <Wrapper marginTop="md">
+        <Button variant="ghost" size="sm" onClick={addItem}>
+          + Добавить
+        </Button>
+      </Wrapper>
+    </Card>
   );
 }

@@ -24,6 +24,7 @@ pnpm-debug.log*
 # local tooling
 .claude/
 .omc/
+.scratch/
 
 # database backups / uploads (never commit)
 server/data/backups/
