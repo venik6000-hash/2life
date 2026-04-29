@@ -380,6 +380,9 @@ const initSchema = async () => {
   if (!userCols.includes("all_clients_access")) {
     try { await pool.query("ALTER TABLE users ADD COLUMN all_clients_access BOOLEAN NOT NULL DEFAULT false"); } catch (_) {}
   }
+  if (!userCols.includes("display_name")) {
+    try { await pool.query("ALTER TABLE users ADD COLUMN display_name TEXT NOT NULL DEFAULT ''"); } catch (_) {}
+  }
 
   try { await pool.query("ALTER TABLE dishes ALTER COLUMN calories DROP NOT NULL"); } catch (_) {}
   try { await pool.query("ALTER TABLE dishes ALTER COLUMN calories DROP DEFAULT"); } catch (_) {}
@@ -511,13 +514,6 @@ const initSchema = async () => {
     await pool.query("UPDATE messages SET deleted_for_all = false WHERE deleted_for_all IS NULL");
   } catch (_) {}
 
-  const userCols2Res = await pool.query(
-    `SELECT column_name FROM information_schema.columns WHERE table_name = 'users'`
-  );
-  const userCols2 = userCols2Res.rows.map(r => r.column_name);
-  if (!userCols2.includes("display_name")) {
-    try { await pool.query("ALTER TABLE users ADD COLUMN display_name TEXT NOT NULL DEFAULT ''"); } catch (_) {}
-  }
 };
 
 // ─── Users ──────────────────────────────────────────────────────────────────
