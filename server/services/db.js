@@ -511,11 +511,11 @@ const initSchema = async () => {
     await pool.query("UPDATE messages SET deleted_for_all = false WHERE deleted_for_all IS NULL");
   } catch (_) {}
 
-  const userColsRes = await pool.query(
+  const userCols2Res = await pool.query(
     `SELECT column_name FROM information_schema.columns WHERE table_name = 'users'`
   );
-  const userCols = userColsRes.rows.map(r => r.column_name);
-  if (!userCols.includes("display_name")) {
+  const userCols2 = userCols2Res.rows.map(r => r.column_name);
+  if (!userCols2.includes("display_name")) {
     try { await pool.query("ALTER TABLE users ADD COLUMN display_name TEXT NOT NULL DEFAULT ''"); } catch (_) {}
   }
 };
