@@ -42,7 +42,7 @@ src/main.jsx
 3. Оркестратор (`dashboard.jsx`) выбирает активную секцию по `activeSectionId`.
 4. Секция получает данные этапа и функции обновления (`uS` / `uC`), меняет только свою область.
 5. `DashboardContext` вычисляет дифф (`buildPatchOps` + `deepEqual`) и отправляет только изменённые поля (debounce 800 мс).
-6. SSE (`GET /api/events`) доставляет изменения остальным открытым вкладкам в реальном времени.
+6. SSE (`GET /api/events?ticket=...`) доставляет изменения остальным открытым вкладкам в реальном времени.
 
 ## 4. Разделы дашборда (`SECTIONS` в DashboardContext)
 
@@ -67,41 +67,46 @@ src/main.jsx
 ### Точка входа: `index.js`
 - Запускает Express на порту 3001.
 - При старте: `initSchema()` → `initDefaultAdmin()` → `initDefaultRoles()` → `initDefaultDeficitPresets()`.
-- Подключает роутеры: `auth`, `clients`, `doctors`, `import`, `admin`, `messenger`, `menu`.
+- Подключает роутеры: `auth`, `clients`, `doctors`, `import`, `admin`, `messenger`, `menu`, `analyticsFiles`.
 - Запускает авто-бэкап (`startAutoBackup`).
 - Поднимает WebSocket сервер (`/ws`) через `services/ws.js`.
 
 ### Хранилище: PostgreSQL
 - `services/db.js` — `pg.Pool`, DDL-схема, все SQL-запросы.
-- Таблицы: `users`, `doctors`, `clients`, `stages`, `analytics_categories`, `analytics_markers`, `analytics_values`, `journal_entries`, `protocol_revisions`, `nutrition_revisions`, `activity_log`, `roles`, `role_sections`, `role_permissions`, `reference_data`, `client_assignments`, `dishes`, `client_weekly_menus`, `client_menu_items`.
+- Таблицы: `users`, `doctors`, `clients`, `stages`, `analytics_categories`, `analytics_markers`, `analytics_values`, `analytics_files`, `journal_entries`, `protocol_revisions`, `nutrition_revisions`, `activity_log`, `roles`, `role_sections`, `role_permissions`, `reference_data`, `client_assignments`, `dishes`, `client_weekly_menus`, `client_menu_items`, `user_public_keys`, `chats`, `chat_participants`, `messages`, `message_hidden_for_users`, `message_receipts`, `chat_files`.
 - `DATABASE_URL` (env) или `postgresql://postgres:postgres@localhost:5432/2life` по умолчанию.
 
 ### Роуты (`routes/`)
 
-| Файл         | Префикс          | Назначение                                      |
-|--------------|------------------|-------------------------------------------------|
-| `auth.js`    | `/api/auth`, `/api/admin/users` | Login, `/me`, смена своего пароля, admin-управление пользователями |
-| `clients.js` | `/api/clients`   | CRUD клиентов и этапов, SSE-поток               |
-| `doctors.js` | `/api/doctors`   | Список врачей для UI + bulk-сохранение реестра (admin) |
-| `import.js`  | `/api/import-questionnaire`, `/api/import-analytics` | Загрузка Excel (анкета, анализы) |
-| `admin.js`   | `/api/admin`     | Роли, права, справочники, CRUD врачей, активность, статистика |
-| `messenger.js` | `/api/chats`, `/api/crypto`, `/api/users` | Чаты, участники, сообщения, файлы, ключи E2E |
-| `menu.js`    | `/api/menu`, `/api/clients/:clientId/menu` | База блюд и недельные меню клиентов |
+| Файл                | Префикс                                                                 | Назначение                                                           |
+|---------------------|-------------------------------------------------------------------------|----------------------------------------------------------------------|
+| `auth.js`           | `/api/auth`, `/api/admin/users`                                         | Login, logout, `/me`, смена пароля, тикеты SSE/WS, admin-управление пользователями |
+| `clients.js`        | `/api/clients`                                                          | CRUD клиентов и этапов, SSE-поток                                    |
+| `doctors.js`        | `/api/doctors`                                                          | Список врачей для UI + bulk-сохранение реестра (admin)               |
+| `import.js`         | `/api/import-questionnaire`, `/api/import-analytics`                   | Загрузка Excel (анкета, анализы)                                     |
+| `admin.js`          | `/api/admin`                                                            | Роли, права, справочники, CRUD врачей, активность, статистика        |
+| `messenger.js`      | `/api/chats`, `/api/crypto`, `/api/users`                               | Чаты (клиентские и внутренние), участники, сообщения, файлы, ключи E2E |
+| `menu.js`           | `/api/menu`, `/api/clients/:clientId/menu`                             | База блюд и недельные меню клиентов                                  |
+| `analyticsFiles.js` | `/api/clients/:clientId/analytics-files`                               | Загрузка, метаданные и скачивание файлов анализов (PDF/изображения)  |
 
 ### Сервисы (`services/`)
 
-| Файл             | Назначение                                              |
-|------------------|---------------------------------------------------------|
-| `db.js`          | PostgreSQL Pool + все SQL-функции                       |
-| `clientStore.js` | Бизнес-логика работы с клиентами поверх db              |
-| `storage.js`     | Файловая система: пути, ensureDir, sameJson             |
-| `backup.js`      | Авто-бэкап БД по расписанию                            |
-| `logger.js`      | Запись действий в таблицу `activity_log`                |
-| `permissions.js` | Получение прав роли (`getPermissionsForRole`)           |
-| `setup.js`       | Инициализация дефолтных данных при первом запуске       |
-| `sse.js`         | Server-Sent Events: `addConnection`, `broadcast`        |
-| `ws.js`          | WebSocket-хаб мессенджера: маршрутизация событий по участникам |
-| `wsTickets.js`   | Одноразовые WS-тикеты (30 сек) для browser WebSocket-аутентификации |
+| Файл                 | Назначение                                                                        |
+|----------------------|-----------------------------------------------------------------------------------|
+| `db.js`              | PostgreSQL Pool + все SQL-функции                                                 |
+| `clientStore.js`     | Бизнес-логика работы с клиентами поверх db                                        |
+| `storage.js`         | Файловая система: пути, ensureDir, sameJson                                       |
+| `backup.js`          | Авто-бэкап БД по расписанию                                                       |
+| `logger.js`          | Запись действий в таблицу `activity_log`                                          |
+| `permissions.js`     | Получение прав роли (`getPermissionsForRole`)                                     |
+| `setup.js`           | Инициализация дефолтных данных при первом запуске                                 |
+| `sse.js`             | Server-Sent Events: `addConnection`, `broadcast`                                  |
+| `sseTickets.js`      | Одноразовые SSE-тикеты (30 сек) для browser EventSource-аутентификации           |
+| `ws.js`              | WebSocket-хаб мессенджера: маршрутизация событий по участникам                   |
+| `wsTickets.js`       | Одноразовые WS-тикеты (30 сек) для browser WebSocket-аутентификации              |
+| `tokenBlacklist.js`  | In-memory JWT blacklist для серверного logout; записи авто-очищаются по TTL токена |
+| `chatAccessSync.js`  | Синхронизация состава `chat_participants` по правам доступа к клиентам; перешифровка chat-ключей через Node.js WebCrypto |
+| `messengerRecovery.js` | Серверное шифрование/дешифрование приватного ECDH-ключа через recovery-секрет (AES-256-GCM) |
 
 ### Middleware (`middleware/`)
 - `auth.js`:
@@ -113,9 +118,21 @@ src/main.jsx
 ## 6. Аутентификация и права
 
 - JWT хранится в `localStorage` (`dash_token`), передаётся через `Authorization: Bearer`.
+- JWT содержит `jti` (уникальный ID) — используется для инвалидации при logout через `tokenBlacklist.js`.
 - `AuthContext` предоставляет `authFetch` — обёртка над `fetch` с токеном.
 - Роли: `admin` + кастомные. Права задаются в `role_sections` (read/write по разделу) и `role_permissions`.
 - `AdminSection` доступна только роли `admin`.
+
+### Эндпоинты аутентификации (`/api/auth`)
+
+| Метод | Путь | Назначение |
+|-------|------|-----------|
+| `POST` | `/api/auth/login` | Вход; возвращает JWT + `permissions`. Rate-limit: 5 попыток/мин с одного IP+логина |
+| `POST` | `/api/auth/logout` | Серверная инвалидация токена через `tokenBlacklist`; клиент должен удалить `dash_token` |
+| `GET`  | `/api/auth/me` | Проверка токена; возвращает `{ user, permissions }` |
+| `POST` | `/api/auth/sse-ticket` | Одноразовый тикет (30 сек) для открытия SSE-соединения |
+| `POST` | `/api/auth/ws-ticket` | Одноразовый тикет (30 сек) для открытия WebSocket-соединения |
+| `POST` | `/api/auth/change-password` | Смена своего пароля с атомарной перешифровкой ключей мессенджера |
 
 ### 6.1 Где хранятся role configs
 
@@ -169,10 +186,11 @@ src/main.jsx
 
 ## 7. Реалтайм синхронизация
 
-- Клиентские разделы дашборда: `GET /api/events` (SSE) для синхронизации карточек клиентов.
-- Мессенджер: `GET /api/auth/ws-ticket` → `ws://.../ws?ticket=...` (WebSocket).
+- Клиентские разделы дашборда: `POST /api/auth/sse-ticket` → `GET /api/events?ticket=...` (SSE, одноразовый тикет, TTL 30 сек).
+- Мессенджер: `POST /api/auth/ws-ticket` → `ws://.../ws?ticket=...` (WebSocket, одноразовый тикет, TTL 30 сек).
 - События мессенджера: `new_message`, `message_edited`, `message_deleted_all`, `message_deleted_self`, `receipts_update`, `participant_added`, `participant_removed`, `chat_created`.
 - Сообщение, отправленное одним участником, доставляется всем участникам чата (включая отправителя для multi-device).
+- Тикеты однократного использования хранятся в памяти (`sseTickets.js` / `wsTickets.js`); после потребления удаляются немедленно.
 
 ## 8. Границы ответственности
 
@@ -215,6 +233,9 @@ src/main.jsx
 | Крипто-утилиты мессенджера      | `src/utils/crypto.js`, `src/utils/cryptoSession.js` |
 | UI мессенджера                  | `src/components/Messenger*.jsx`, `src/sections/Messenger.jsx`, `src/context/MessengerContext.jsx` |
 | Роли и права (UI)               | `src/components/AdminSectionPanel.jsx`, `src/sections/AdminSection.jsx` |
+| Файлы анализов (загрузка/просмотр) | `src/components/AnalyticsFilesPanel.jsx`, `src/sections/Analytics.jsx`, `server/routes/analyticsFiles.js` |
+| Синхронизация участников чатов  | `server/services/chatAccessSync.js`                   |
+| Recovery-ключи мессенджера      | `server/services/messengerRecovery.js`                |
 
 ## 12. Section -> API Mapping
 
@@ -228,7 +249,7 @@ src/main.jsx
 | `menu`          | `GET /api/menu/dishes`, `GET /api/clients/:clientId/menu` | `POST/PATCH/DELETE /api/menu/dishes/*`, `POST/PATCH/DELETE /api/clients/:clientId/menu/items/*`, `POST /api/clients/:clientId/menu/copy` |
 | `protocol`      | `GET /api/clients`, `GET /api/clients/:clientId` | `PATCH /api/clients/:clientId` |
 | `injections`    | `GET /api/clients`, `GET /api/clients/:clientId` | `PATCH /api/clients/:clientId` |
-| `analytics`     | `GET /api/clients`, `GET /api/clients/:clientId` | `PUT /api/clients/:clientId/analytics`, `POST /api/import-analytics` |
+| `analytics`     | `GET /api/clients`, `GET /api/clients/:clientId`, `GET /api/clients/:clientId/analytics-files` | `PUT /api/clients/:clientId/analytics`, `POST /api/import-analytics`, `POST/PATCH/DELETE /api/clients/:clientId/analytics-files/*`, `GET /api/clients/:clientId/analytics-files/:id/download` |
 | `lab`           | `GET /api/clients`, `GET /api/clients/:clientId` | `PATCH /api/clients/:clientId` |
 | `journal`       | `GET /api/clients`, `GET /api/clients/:clientId` | `PATCH /api/clients/:clientId` |
 | `messenger`     | `GET /api/chats`, `GET /api/chats/:id/messages`, `GET /api/chats/:id/files/:fileId` | `POST /api/chats`, `POST /api/chats/:id/messages`, `POST /api/chats/:id/files`, `PATCH/DELETE /api/chats/:id/messages/:messageId`, `POST /api/chats/:id/read`, `POST/DELETE /api/chats/:id/participants/*` |
@@ -268,30 +289,65 @@ src/main.jsx
 - Назначение: короткая хронология изменений в формате «1 строка = 1 изменение».
 - Формат записи: `YYYY-MM-DD | область | изменение`.
 
-## 14. Messenger Snapshot (2026-04-14)
+## 14. Messenger Snapshot (2026-04-29)
 
 ### 14.1 Доменная модель
-- Один чат привязан к одной карточке клиента: `chats.client_id`.
-- Участники: `chat_participants` (`owner`/`member`) + `encrypted_chat_key` для каждого участника.
-- Сообщения: `messages` (`ciphertext`, `iv`, `msg_type`, `file_id`, `edited_at`, `deleted_for_all`).
+
+**Чаты (`chats`)**
+- Клиентский чат: `client_id` ссылается на карточку клиента.
+- Внутренний чат: `is_internal = true`, `client_id = NULL` — чат между сотрудниками без привязки к клиенту.
+- `icon` — emoji-иконка чата (только у внутренних чатов).
+
+**Участники (`chat_participants`)**
+- `role_in_chat`: `owner` / `member`.
+- `encrypted_chat_key` — ключ чата, зашифрованный для конкретного участника (ECDH + AES-KW).
+- `is_pinned` — закрепление чата у конкретного участника.
+
+**Сообщения (`messages`)**
+- `ciphertext`, `iv`, `msg_type`, `file_id` — базовые поля.
+- `edited_at` — время последнего редактирования (NULL если не редактировалось).
+- `deleted_for_all` / `deleted_for_all_at` / `deleted_by` — удаление у всех участников.
+
+**Остальные таблицы**
 - Персональное скрытие: `message_hidden_for_users` (удаление "у себя").
 - Подтверждения чтения: `message_receipts` (`last_read_message_id`), UI-статус "✓✓".
 - Файлы: `chat_files` + бинарный `.enc` файл на диске (`server/uploads/chat`).
-- Публичные ключи пользователей: `user_public_keys`.
 
-### 14.2 Криптоконтур (frontend)
-- `src/utils/crypto.js`: ECDH P-256 (identity), AES-KW (обёртка ключа чата), AES-GCM (сообщения/файлы).
+**Пользователи**
+- `users.display_name` — отображаемое имя (при пустом значении используется `username`).
+- `user_public_keys.recovery_encrypted_private_key_jwk` / `recovery_key_iv` — приватный ключ, зашифрованный серверным recovery-секретом (см. 14.2).
+
+### 14.2 Криптоконтур
+
+**Frontend** (`src/utils/crypto.js`):
+- ECDH P-256 (identity), AES-KW (обёртка ключа чата), AES-GCM (сообщения/файлы).
 - Приватный identity key шифруется паролем пользователя (PBKDF2 + AES-GCM) и хранится на сервере только в зашифрованном виде.
-- Сервер не расшифровывает содержимое сообщений/файлов; хранит ciphertext + iv и зашифрованные blob.
+
+**Backend recovery** (`server/services/messengerRecovery.js`):
+- Приватный ключ также шифруется серверным recovery-секретом (`MESSENGER_RECOVERY_SECRET` или `JWT_SECRET`) через AES-256-GCM.
+- Recovery-ключ позволяет серверу перешифровать связку при смене пароля: администратором через `/api/admin/users/:id` или пользователем через `/api/auth/change-password`.
+- Сервер **не расшифровывает** содержимое сообщений и файлов чата; хранит ciphertext + iv.
+
+**Синхронизация доступа** (`server/services/chatAccessSync.js`):
+- При изменении прав пользователя (роль, `all_clients_access`, `client_assignments`) сервер автоматически добавляет / удаляет участника из чатов и перешифровывает chat-ключи через Node.js WebCrypto.
 
 ### 14.3 Ограничения и права (клиентская роль)
+
 - Роль `viewer` отображается как "Клиент"; совместимость с `client` сохранена в `permissions.js`.
 - Для клиентской роли принудительно оставлен доступ только к разделу `messenger` (миграция в `initSchema`).
-- Клиент не может: создавать чаты, добавлять участников, получать список всех аккаунтов (`GET /api/users` вернёт 403).
-- Клиент может: видеть только чаты, где он участник; писать, отправлять файлы/фото, редактировать и удалять свои сообщения.
+- Клиент **не может**: создавать чаты, добавлять участников, получать список всех аккаунтов (`GET /api/users` вернёт 403).
+- Клиент **может**: видеть только чаты, где он участник; писать, отправлять файлы/фото, редактировать и удалять свои сообщения.
 
-### 14.4 UX-функции мессенджера
-- Контекстное меню сообщения: переслать, редактировать (только text), удалить у себя/у всех.
+### 14.4 Внутренние чаты (is_internal)
+
+- Создаются без привязки к клиенту: `{ isInternal: true }` в запросе `POST /api/chats`.
+- Только владелец чата (`role_in_chat = 'owner'`) и admin могут изменять `title` и `icon`.
+- Синхронизация участников по правам клиентов **не применяется** — состав управляется вручную.
+
+### 14.5 UX-функции мессенджера
+
+- Контекстное меню сообщения: переслать, редактировать (только text), удалить у себя / у всех.
+- Закрепление чата: `is_pinned` у участника — закреплённые чаты всплывают в топ списка.
 - Пакетная отправка файлов: grouped bundles; для фото — максимум 10 фото в одном сообщении.
 - Если отправлено >10 фото, формируются несколько сообщений-бандлов (пример: 14 = 10 + 4).
 - Фото-бандлы отображаются как адаптивная сетка превью (без имён фото), файлы — списком с именами.

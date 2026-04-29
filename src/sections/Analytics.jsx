@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { normalizeAnalyticsKey, getAnalyticsMarkerDefaults } from "../data/analyticsData";
 import { getDisplayedAnalyticsDates } from "../utils/analyticsUtils";
 import { useAuth } from "../context/AuthContext";
+import { isClientRole } from "../context/DashboardContext";
 import { useTheme } from "../context/ThemeContext";
 import AnalyticsFilesPanel from "../components/AnalyticsFilesPanel";
 import AnalyticsPanel from "../components/AnalyticsPanel";
@@ -51,7 +52,8 @@ export default function AnalyticsSection({
   canImportData,
   readOnly = false,
 }) {
-  const { authFetch } = useAuth();
+  const { authFetch, user } = useAuth();
+  const isClient = isClientRole(user?.role);
   const [anaEdit, setAnaEdit] = useState(false);
   const [analyticsTab, setAnalyticsTab] = useState("table");
   const [collapsedCategories, setCollapsedCategories] = useState({});
@@ -437,9 +439,9 @@ export default function AnalyticsSection({
 
   return (
     <div>
-      <AnalyticsTabHeader activeTab={analyticsTab} onSelect={setAnalyticsTab} />
+      {!isClient && <AnalyticsTabHeader activeTab={analyticsTab} onSelect={setAnalyticsTab} />}
 
-      {analyticsTab === "files" ? (
+      {!isClient && analyticsTab === "files" ? (
         <AnalyticsFilesPanel
           files={analyticsFiles}
           loading={analyticsFilesLoading}

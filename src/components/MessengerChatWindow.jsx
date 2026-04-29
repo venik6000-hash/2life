@@ -252,7 +252,7 @@ export default function MessengerChatWindow({
             {chat.is_pinned && <span style={{ fontSize: 12, color: $.ac }}>📌</span>}
           </div>
           <div style={{ fontSize: 11, color: $.txM }}>
-            {(chat.participants || []).map((p) => p.username).join(", ")}
+            {(chat.participants || []).map((p) => p.display_name || p.username).join(", ")}
           </div>
         </div>
         <Button variant="pill" tone="accent" size="sm" active={chat.is_pinned} onClick={handleTogglePin} disabled={metaBusy} title={chat.is_pinned ? "Открепить чат" : "Закрепить чат"}>📌</Button>

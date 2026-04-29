@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTheme } from "../context/ThemeContext";
 import { useAuth } from "../context/AuthContext";
+import { isClientRole } from "../context/DashboardContext";
 import Button from "../components/Button";
 import Card from "../components/Card";
 import Input from "../components/Input";
@@ -118,7 +119,8 @@ function Tabs({ activeTab, onChange }) {
 
 export default function MenuSection({ cl, readOnly = false }) {
   const { $ } = useTheme();
-  const { authFetch } = useAuth();
+  const { authFetch, user } = useAuth();
+  const isClient = isClientRole(user?.role);
   const [activeTab, setActiveTab] = useState("client");
   const [weekStart, setWeekStart] = useState(() => getMonday());
   const [selectedSlot, setSelectedSlot] = useState({ dayIndex: 0, mealType: "breakfast" });
@@ -408,7 +410,7 @@ export default function MenuSection({ cl, readOnly = false }) {
           <div style={{ fontSize: 18, fontWeight: 700 }}>Меню</div>
           <div style={{ color: $.txS, marginTop: 3 }}>{cl?.name || "Клиент"} · неделя с понедельника</div>
         </div>
-        <Tabs activeTab={activeTab} onChange={setActiveTab} />
+        {!isClient && <Tabs activeTab={activeTab} onChange={setActiveTab} />}
         <div style={{ display: "flex", alignItems: "flex-end", gap: 8, flexWrap: "wrap" }}>
           <div style={{ width: 170 }}>
             <div style={{ color: $.txS, fontSize: 11, marginBottom: 4 }}>Неделя</div>
@@ -716,7 +718,7 @@ export default function MenuSection({ cl, readOnly = false }) {
           <div style={{ color: $.dn, fontWeight: 600 }}>{error}</div>
         </Card>
       )}
-      {activeTab === "client" ? renderMenuClient() : renderDishBase()}
+      {(isClient || activeTab === "client") ? renderMenuClient() : renderDishBase()}
     </div>
   );
 }

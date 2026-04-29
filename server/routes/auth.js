@@ -309,7 +309,7 @@ router.patch("/admin/users/:id", requireAuth("admin"), async (req, res) => {
   const client = await pool.connect();
   try {
     const id = Number(req.params.id);
-    const { password, role, active, all_clients_access } = req.body || {};
+    const { password, role, active, all_clients_access, display_name } = req.body || {};
     let shouldSyncChatAccess = false;
     if (!Number.isInteger(id) || id <= 0) {
       return res.status(400).json({ error: "Некорректный id пользователя" });
@@ -375,6 +375,9 @@ router.patch("/admin/users/:id", requireAuth("admin"), async (req, res) => {
     if (all_clients_access != null) {
       await client.query("UPDATE users SET all_clients_access = $1 WHERE id = $2", [all_clients_access ? true : false, id]);
       shouldSyncChatAccess = true;
+    }
+    if (display_name != null) {
+      await client.query("UPDATE users SET display_name = $1 WHERE id = $2", [String(display_name).trim(), id]);
     }
 
     if (shouldSyncChatAccess) {

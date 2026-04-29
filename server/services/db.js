@@ -510,6 +510,14 @@ const initSchema = async () => {
   try {
     await pool.query("UPDATE messages SET deleted_for_all = false WHERE deleted_for_all IS NULL");
   } catch (_) {}
+
+  const userColsRes = await pool.query(
+    `SELECT column_name FROM information_schema.columns WHERE table_name = 'users'`
+  );
+  const userCols = userColsRes.rows.map(r => r.column_name);
+  if (!userCols.includes("display_name")) {
+    try { await pool.query("ALTER TABLE users ADD COLUMN display_name TEXT NOT NULL DEFAULT ''"); } catch (_) {}
+  }
 };
 
 // ─── Users ──────────────────────────────────────────────────────────────────
@@ -521,7 +529,7 @@ const getUser = async (username) => {
 
 const listUsers = async () => {
   const r = await pool.query(
-    "SELECT id, username, role, created_at, active, all_clients_access FROM users ORDER BY id"
+    "SELECT id, username, display_name, role, created_at, active, all_clients_access FROM users ORDER BY id"
   );
   return r.rows;
 };
@@ -997,7 +1005,7 @@ const removeChatParticipant = async (chatId, userId) => {
 
 const getChatParticipants = async (chatId) => {
   const r = await pool.query(
-    `SELECT cp.*, u.username, u.role
+    `SELECT cp.*, u.username, u.display_name, u.role
      FROM chat_participants cp
      JOIN users u ON u.id = cp.user_id
      WHERE cp.chat_id = $1`,
@@ -1009,7 +1017,7 @@ const getChatParticipants = async (chatId) => {
 const getChatParticipantsForChats = async (chatIds) => {
   if (!Array.isArray(chatIds) || chatIds.length === 0) return new Map();
   const r = await pool.query(
-    `SELECT cp.*, u.username, u.role
+    `SELECT cp.*, u.username, u.display_name, u.role
      FROM chat_participants cp
      JOIN users u ON u.id = cp.user_id
      WHERE cp.chat_id = ANY($1::int[])
@@ -1077,7 +1085,7 @@ const insertMessage = async (chatId, senderId, ciphertext, iv, msgType, fileId) 
 
 const getMessageById = async (chatId, messageId) => {
   const r = await pool.query(
-    `SELECT m.*, u.username AS sender_username
+    `SELECT m.*, u.username AS sender_username, u.display_name AS sender_display_name
      FROM messages m
      JOIN users u ON u.id = m.sender_id
      WHERE m.chat_id = $1 AND m.id = $2

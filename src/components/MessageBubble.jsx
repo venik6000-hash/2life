@@ -20,7 +20,7 @@ export default function MessageBubble({
       style={{ display: "flex", flexDirection: "column", alignItems: isMine ? "flex-end" : "flex-start", marginBottom: 6 }}
     >
       {!isMine && (
-        <span style={{ fontSize: 10, color: $.txM, marginLeft: 8, marginBottom: 2 }}>{msg.sender_username}</span>
+        <span style={{ fontSize: 10, color: $.txM, marginLeft: 8, marginBottom: 2 }}>{msg.sender_display_name || msg.sender_username}</span>
       )}
       <div style={{
         maxWidth: "72%", padding: "8px 12px",

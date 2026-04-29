@@ -61,25 +61,32 @@ git pull && docker compose up -d --build
 
 ---
 
-## Локальная разработка без Docker
+## Локальная разработка
 
 Требования: Node.js 20+, PostgreSQL 16+.
 
-Можно поднять только БД через Docker и работать с сервером/фронтендом нативно:
+### Быстрый способ (рекомендуется)
+
+```bash
+./dev.sh
+```
+
+Скрипт поднимает dev-БД через Docker (порт 5434), останавливает production-контейнеры если они запущены, и запускает Vite + nodemon параллельно через `concurrently`.
+
+- Frontend: **http://localhost:3000**
+- API: **http://localhost:3001**
+
+### Вручную (три терминала)
 
 ```bash
 # 1. Только база данных
 docker compose -f docker-compose.dev.yml up -d
 
-# 2. Backend (отдельный терминал)
-cd server
-npm install
-cp ../.env .env   # или задайте переменные вручную
-npm run dev
+# 2. Backend
+cd server && npm install && npm run dev
 
-# 3. Frontend (отдельный терминал)
-npm install
-npm run dev       # http://localhost:3000
+# 3. Frontend
+npm install && npm run dev   # http://localhost:3000
 ```
 
 ---
@@ -125,14 +132,21 @@ docker compose down -v
 ## Структура проекта
 
 ```
-├── src/                # React-фронтенд
-├── server/             # Node.js API
-│   ├── routes/         # Express-маршруты
-│   ├── services/       # БД, хранилище, бэкап
-│   └── uploads/        # Загружаемые файлы (чат, анализы)
+├── src/
+│   ├── sections/       # Оркестраторы бизнес-разделов (state, effects, handlers)
+│   ├── components/     # Визуальные компоненты
+│   ├── context/        # React-контексты: Auth, Dashboard, Messenger, Theme, Editor
+│   ├── utils/          # Чистые утилиты (crypto, websocket, helpers…)
+│   └── data/           # Справочники и шаблоны (анализы, дефициты, протоколы)
+├── server/
+│   ├── routes/         # Express-роутеры (auth, clients, messenger, menu, analyticsFiles…)
+│   ├── services/       # БД, SSE/WS, backup, crypto-синхронизация, tokenBlacklist…
+│   ├── middleware/     # JWT-аутентификация и проверка прав
+│   └── parsers/        # Парсеры Excel (анкета, анализы)
 ├── docker-compose.yml      # Production
-├── docker-compose.dev.yml  # Только БД для разработки
-├── start.sh            # Быстрый старт
+├── docker-compose.dev.yml  # Только БД для разработки (порт 5434)
+├── start.sh            # Быстрый production-старт
+├── dev.sh              # Локальная разработка: dev-БД + Vite + nodemon
 └── .env.example        # Шаблон переменных окружения
 ```
 

@@ -64,6 +64,10 @@ export default function MessengerParticipantsPanel({
     return () => { cancelled = true; };
   }, [authFetch, canManageParticipants, user.role]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const isViewingAsClient = isClientRole(user.role);
+  const visibleParticipants = isViewingAsClient
+    ? (chat.participants || []).filter((p) => p.role !== "admin")
+    : (chat.participants || []);
   const participantIds = new Set((chat.participants || []).map((participant) => participant.user_id));
   const available = allUsers.filter((item) => (
     item.id !== user.id &&
@@ -97,20 +101,23 @@ export default function MessengerParticipantsPanel({
         <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: $.txS, fontSize: 16 }}>✕</button>
       </div>
       <div style={{ flex: 1, overflowY: "auto", padding: 10 }}>
-        {(chat.participants || []).map((participant) => (
-          <div key={participant.user_id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 4px", borderRadius: 6, marginBottom: 2 }}>
-            <div style={{ width: 28, height: 28, borderRadius: "50%", background: $.ac, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, flexShrink: 0 }}>
-              {(participant.username || "?")[0].toUpperCase()}
+        {visibleParticipants.map((participant) => {
+          const displayName = participant.display_name || participant.username || "?";
+          return (
+            <div key={participant.user_id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 4px", borderRadius: 6, marginBottom: 2 }}>
+              <div style={{ width: 28, height: 28, borderRadius: "50%", background: $.ac, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, flexShrink: 0 }}>
+                {displayName[0].toUpperCase()}
+              </div>
+              <div style={{ flex: 1, overflow: "hidden" }}>
+                <div style={{ fontSize: 12, fontWeight: 600, whiteSpace: "nowrap", textOverflow: "ellipsis", overflow: "hidden" }}>{displayName}</div>
+                <div style={{ fontSize: 10, color: $.txM }}>{formatRoleLabel(participant.role)} · {participant.role_in_chat === "owner" ? "владелец" : "участник"}</div>
+              </div>
+              {canManageParticipants && participant.user_id !== user.id && (
+                <button onClick={() => handleRemove(participant.user_id)} title="Удалить" style={{ background: "none", border: "none", cursor: "pointer", color: $.dn, fontSize: 13 }}>✕</button>
+              )}
             </div>
-            <div style={{ flex: 1, overflow: "hidden" }}>
-              <div style={{ fontSize: 12, fontWeight: 600, whiteSpace: "nowrap", textOverflow: "ellipsis", overflow: "hidden" }}>{participant.username}</div>
-              <div style={{ fontSize: 10, color: $.txM }}>{formatRoleLabel(participant.role)} · {participant.role_in_chat === "owner" ? "владелец" : "участник"}</div>
-            </div>
-            {canManageParticipants && participant.user_id !== user.id && (
-              <button onClick={() => handleRemove(participant.user_id)} title="Удалить" style={{ background: "none", border: "none", cursor: "pointer", color: $.dn, fontSize: 13 }}>✕</button>
-            )}
-          </div>
-        ))}
+          );
+        })}
 
         {addError && (
           <div style={{ margin: "8px 0", padding: "7px 10px", borderRadius: 6, background: "rgba(239,83,80,.1)", border: `1px solid ${$.dn}44`, fontSize: 11, color: $.dn, lineHeight: 1.4 }}>

@@ -833,7 +833,7 @@ export default function AdminSection() {
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                 <thead>
                   <tr style={{ borderBottom: `2px solid ${$.brd}` }}>
-                    {["ID", "Логин", "Роль", "Создан", "Статус", "Клиенты", "Действия"].map(h => (
+                    {["ID", "Логин", "Имя в чате", "Роль", "Создан", "Статус", "Клиенты", "Действия"].map(h => (
                       <th key={h} style={{ textAlign: "left", padding: "6px 10px", color: $.txM, fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: .4 }}>{h}</th>
                     ))}
                   </tr>
@@ -853,6 +853,20 @@ export default function AdminSection() {
                         <tr style={{ borderBottom: isExpanded ? "none" : `1px solid ${$.brd}`, opacity: u.active ? 1 : 0.5 }}>
                           <td style={{ padding: "8px 10px", color: $.txM }}>{u.id}</td>
                           <td style={{ padding: "8px 10px", fontWeight: 600 }}>{u.username}</td>
+                          <td style={{ padding: "8px 10px" }}>
+                            <Input
+                              size="xs"
+                              placeholder="не задано"
+                              defaultValue={u.display_name || ""}
+                              onBlur={e => {
+                                const val = e.target.value.trim();
+                                if (val !== (u.display_name || "")) {
+                                  authFetch(`/api/admin/users/${u.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ display_name: val }) }).then(fetchUsers);
+                                }
+                              }}
+                              style={{ minWidth: 100 }}
+                            />
+                          </td>
                           <td style={{ padding: "8px 10px" }}>
                             <SelectInput
                               value={u.role}
@@ -919,7 +933,7 @@ export default function AdminSection() {
                         </tr>
                         {isExpanded && !hasGlobalClientAccess && (
                           <tr style={{ borderBottom: `1px solid ${$.brd}` }}>
-                            <td colSpan={7} style={{ padding: "8px 14px 14px 14px", background: $.bgB }}>
+                            <td colSpan={8} style={{ padding: "8px 14px 14px 14px", background: $.bgB }}>
                               <div style={{ fontSize: 12, color: $.txM, marginBottom: 8, fontWeight: 600 }}>
                                 Доступные клиенты для {u.username}
                               </div>
@@ -971,7 +985,7 @@ export default function AdminSection() {
                     );
                   })}
                   {users.length === 0 && (
-                    <tr><td colSpan={7} style={{ padding: 20, textAlign: "center", color: $.txM }}>Нет пользователей</td></tr>
+                    <tr><td colSpan={8} style={{ padding: 20, textAlign: "center", color: $.txM }}>Нет пользователей</td></tr>
                   )}
                 </tbody>
               </table>
