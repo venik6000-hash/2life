@@ -4,13 +4,13 @@ import { useAuth } from "./AuthContext";
 
 export const SECTIONS = [
   {id:"overview",ic:"◉",lb:"Обзор"},{id:"questionnaire",ic:"📋",lb:"Анкета"},
-  {id:"nutrition",ic:"🥗",lb:"Питание"},{id:"protocol",ic:"💊",lb:"Протокол"},
+  {id:"nutrition",ic:"🥗",lb:"Питание"},{id:"menu",ic:"☰",lb:"Меню"},{id:"protocol",ic:"💊",lb:"Протокол"},
   {id:"injections",ic:"💉",lb:"Инъекции"},
   {id:"analytics",ic:"📊",lb:"Анализы"},{id:"lab",ic:"🔬",lb:"Направление"},{id:"journal",ic:"📓",lb:"Журнал"},
   {id:"messenger",ic:"💬",lb:"Мессенджер"},
 ];
 
-const isClientRole = (role) => {
+export const isClientRole = (role) => {
   const normalized = String(role || "").trim().toLowerCase();
   return normalized === "viewer" || normalized === "client";
 };

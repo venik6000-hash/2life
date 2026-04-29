@@ -190,6 +190,60 @@ const initSchema = async () => {
     CREATE INDEX IF NOT EXISTS idx_ca_user ON client_assignments(user_id);
     CREATE INDEX IF NOT EXISTS idx_ca_client ON client_assignments(client_id);
 
+    -- ── Client menu ────────────────────────────────────────────────────────
+
+    CREATE TABLE IF NOT EXISTS dishes (
+      id          SERIAL PRIMARY KEY,
+      name        TEXT NOT NULL,
+      meal_type   TEXT NOT NULL DEFAULT 'universal',
+      ingredients TEXT NOT NULL DEFAULT '',
+      recipe      TEXT NOT NULL DEFAULT '',
+      calories    REAL,
+      protein     REAL,
+      fat         REAL,
+      carbs       REAL,
+      additions   TEXT NOT NULL DEFAULT '',
+      active      BOOLEAN NOT NULL DEFAULT true,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_dishes_active ON dishes(active);
+    CREATE INDEX IF NOT EXISTS idx_dishes_meal_type ON dishes(meal_type);
+
+    CREATE TABLE IF NOT EXISTS client_weekly_menus (
+      id         SERIAL PRIMARY KEY,
+      client_id  TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+      week_start TEXT NOT NULL DEFAULT '',
+      created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(client_id, week_start)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_cwm_client_week ON client_weekly_menus(client_id, week_start);
+
+    CREATE TABLE IF NOT EXISTS client_menu_items (
+      id                   SERIAL PRIMARY KEY,
+      menu_id              INTEGER NOT NULL REFERENCES client_weekly_menus(id) ON DELETE CASCADE,
+      dish_id              INTEGER NOT NULL REFERENCES dishes(id),
+      day_index            INTEGER NOT NULL DEFAULT 0,
+      meal_type            TEXT NOT NULL DEFAULT 'breakfast',
+      custom_additions     TEXT NOT NULL DEFAULT '',
+      grams                TEXT NOT NULL DEFAULT '',
+      calories_override    REAL,
+      protein_override     REAL,
+      fat_override         REAL,
+      carbs_override       REAL,
+      comment              TEXT NOT NULL DEFAULT '',
+      sort_order           INTEGER NOT NULL DEFAULT 0,
+      created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_cmi_menu_slot ON client_menu_items(menu_id, day_index, meal_type, sort_order);
+    CREATE INDEX IF NOT EXISTS idx_cmi_dish ON client_menu_items(dish_id);
+
     -- ── Messenger ───────────────────────────────────────────────────────────
 
     CREATE TABLE IF NOT EXISTS user_public_keys (
@@ -277,6 +331,23 @@ const initSchema = async () => {
     );
 
     CREATE INDEX IF NOT EXISTS idx_cf_chat ON chat_files(chat_id);
+
+    -- ── Analytics files ─────────────────────────────────────────────────────
+    CREATE TABLE IF NOT EXISTS analytics_files (
+      id            SERIAL PRIMARY KEY,
+      client_id     TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+      display_name  TEXT NOT NULL DEFAULT '',
+      analysis_date TEXT NOT NULL DEFAULT '',
+      comment       TEXT NOT NULL DEFAULT '',
+      original_name TEXT NOT NULL DEFAULT '',
+      mime_type     TEXT NOT NULL DEFAULT 'application/octet-stream',
+      size_bytes    INTEGER NOT NULL DEFAULT 0,
+      storage_path  TEXT NOT NULL DEFAULT '',
+      uploaded_by   INTEGER REFERENCES users(id),
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_anf_client ON analytics_files(client_id);
   `);
 
   // Forward-compatible column migrations
@@ -309,6 +380,9 @@ const initSchema = async () => {
   if (!userCols.includes("all_clients_access")) {
     try { await pool.query("ALTER TABLE users ADD COLUMN all_clients_access BOOLEAN NOT NULL DEFAULT false"); } catch (_) {}
   }
+
+  try { await pool.query("ALTER TABLE dishes ALTER COLUMN calories DROP NOT NULL"); } catch (_) {}
+  try { await pool.query("ALTER TABLE dishes ALTER COLUMN calories DROP DEFAULT"); } catch (_) {}
 
   const chatColsRes = await pool.query(
     `SELECT column_name FROM information_schema.columns WHERE table_name = 'chats'`
@@ -363,6 +437,21 @@ const initSchema = async () => {
         FROM role_sections rs
         WHERE rs.role_id = r.id
           AND rs.section_id = 'messenger'
+      )
+    `);
+  } catch (_) {}
+
+  try {
+    // Existing staff roles should see the new menu section after upgrade.
+    await pool.query(`
+      INSERT INTO role_sections (role_id, section_id, can_read, can_write)
+      SELECT r.id, 'menu', true, CASE WHEN r.name = 'viewer' THEN false ELSE true END
+      FROM roles r
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM role_sections rs
+        WHERE rs.role_id = r.id
+          AND rs.section_id = 'menu'
       )
     `);
   } catch (_) {}
@@ -1091,6 +1180,43 @@ const getReceiptsByChat = async (chatId) => {
   return r.rows;
 };
 
+// ─── Analytics files ─────────────────────────────────────────────────────────
+
+const insertAnalyticsFile = async (clientId, displayName, analysisDate, comment, originalName, mimeType, sizeBytes, storagePath, uploadedBy) => {
+  const r = await pool.query(
+    `INSERT INTO analytics_files (client_id, display_name, analysis_date, comment, original_name, mime_type, size_bytes, storage_path, uploaded_by)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+    [clientId, displayName, analysisDate, comment, originalName, mimeType, sizeBytes, storagePath, uploadedBy || null]
+  );
+  return r.rows[0];
+};
+
+const getAnalyticsFilesByClient = async (clientId) => {
+  const r = await pool.query(
+    "SELECT * FROM analytics_files WHERE client_id = $1 ORDER BY created_at DESC",
+    [clientId]
+  );
+  return r.rows;
+};
+
+const getAnalyticsFileById = async (id) => {
+  const r = await pool.query("SELECT * FROM analytics_files WHERE id = $1", [id]);
+  return r.rows[0] ?? null;
+};
+
+const updateAnalyticsFile = async (id, displayName, analysisDate, comment) => {
+  const r = await pool.query(
+    "UPDATE analytics_files SET display_name = $2, analysis_date = $3, comment = $4 WHERE id = $1 RETURNING *",
+    [id, displayName, analysisDate, comment]
+  );
+  return r.rows[0] ?? null;
+};
+
+const deleteAnalyticsFile = async (id) => {
+  const r = await pool.query("DELETE FROM analytics_files WHERE id = $1 RETURNING *", [id]);
+  return r.rows[0] ?? null;
+};
+
 // ─── Messenger: files ────────────────────────────────────────────────────────
 
 const insertChatFile = async (id, chatId, uploaderId, originalName, mimeType, sizeBytes, storagePath) => {
@@ -1150,4 +1276,6 @@ module.exports = {
   upsertReceipt, getReceiptsByChat, getReceiptsForChats,
   // messenger: files
   insertChatFile, getChatFile,
+  // analytics files
+  insertAnalyticsFile, getAnalyticsFilesByClient, getAnalyticsFileById, updateAnalyticsFile, deleteAnalyticsFile,
 };

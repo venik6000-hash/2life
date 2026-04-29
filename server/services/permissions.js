@@ -4,7 +4,7 @@ const { getRoleByName, getRoleSections, getRolePermissions } = require('./db');
 // Admin always gets full access regardless of DB config
 const getPermissionsForRole = async (roleName) => {
   if (roleName === 'admin') {
-    const sections = ['overview','questionnaire','nutrition','protocol','injections','analytics','lab','journal','messenger'];
+    const sections = ['overview','questionnaire','nutrition','menu','protocol','injections','analytics','lab','journal','messenger'];
     const sectionsObj = {};
     for (const s of sections) sectionsObj[s] = { read: true, write: true };
     return { sections: sectionsObj, canDeleteClient: true, canCreateClient: true, canImportData: true, isAdmin: true };

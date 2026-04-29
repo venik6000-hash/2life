@@ -1,160 +1,88 @@
-# 2life Dashboard v3
+# 2life Dashboard
 
 Веб-приложение для ведения карт клиентов 2life.
 
-Текущая версия работает на:
-- Frontend: React + Vite
-- Backend: Node.js + Express
-- Database: PostgreSQL
-- Контейнеризация: Docker Compose (`frontend` + `server` + `db`)
+**Стек:** React + Vite · Node.js + Express · PostgreSQL · Docker Compose · Nginx
 
-Подробная архитектура: `ARCHITECTURE.md`.
+---
 
-Короткий журнал изменений (1 строка на изменение): `CHANGELOG_ONE_LINE.md`.
+## Быстрый старт
 
-## RBAC (роли и права)
-
-- Конфиг ролей хранится в PostgreSQL: `roles`, `role_sections`, `role_permissions`.
-- Итоговые права роли собираются сервером в `server/services/permissions.js`.
-- `GET /api/auth/me` возвращает `{ ok, user, permissions }`, где `permissions` имеет вид:
-
-```json
-{
-  "sections": {
-    "overview": { "read": true, "write": true }
-  },
-  "canDeleteClient": false,
-  "canCreateClient": true,
-  "canImportData": false,
-  "isAdmin": false
-}
-```
-
-- Для `admin` сервер всегда возвращает полный доступ ко всем разделам и действиям.
-- Если у роли нет `read` по разделу — раздел не отображается в боковом меню.
-- Если у роли есть `read`, но нет `write` — раздел виден в режиме только просмотра (read-only), без возможности редактирования.
-- Для `PATCH /api/clients/:id` включён строгий atomic-режим: если есть запрещённые поля, отклоняется весь запрос (`PATCH_FORBIDDEN_PATHS`).
-- Для `PUT /api/clients/:id` сервер проверяет затронутые секции и отклоняет запрос при отсутствии `write` (`PUT_FORBIDDEN_SECTIONS`).
-- В `PUT /api/admin/roles/:id/sections` исправлено частичное сохранение прав: при изменении одного флага (`read` или `write`) второй не сбрасывается.
-- Админ-панель видит только пользователь с ролью `admin`; пользователи с `all_clients_access` получают доступ ко всем клиентам, но не к админке.
-
-## Доступ к клиентам и привязка врача
-
-- Привязка врача к аккаунту хранится в БД: `doctors.user_id`.
-- Назначения клиентов пользователям хранятся в `client_assignments`.
-- При сохранении клиента сервер автоматически назначает доступ связанным врачам (по имени врача в этапах).
-- Дополнительно есть флаг `users.all_clients_access` — полный доступ ко всем клиентам без роли `admin`.
-- Доступ к чатам мессенджера теперь синхронизируется с доступом к клиентам: изменение `all_clients_access` и назначений в `client_assignments` автоматически обновляет `chat_participants`.
-- Админка показывает актуальный список клиентов, назначенных выбранному пользователю.
-
-## Что такое `package.json` и `package-lock.json`
-
-В проекте это не «данные приложения», а технические файлы npm:
-- `package.json` — список зависимостей и npm-скриптов (`dev`, `build`, `start` и т.д.).
-- `package-lock.json` — точные версии зависимостей, чтобы у всех ставилось одинаково.
-
-Почему их две пары:
-- В корне (`/`) — для frontend.
-- В папке `server` — для backend.
-
-Зачем это нужно:
-- одинаковая установка пакетов у всех разработчиков и на CI;
-- предсказуемые сборки и деплой;
-- понимание стека проекта
-
-## Быстрый старт (рекомендуется): Docker
-
-### 1. Подготовить `.env`
-
-Скопируйте пример и задайте значения:
+### Первый запуск
 
 ```bash
-cp .env.example .env
+./start.sh
 ```
 
-Минимально обязательно поменять:
-- `POSTGRES_PASSWORD`
-- `JWT_SECRET`
-- `ADMIN_PASSWORD`
+Скрипт сам запустит Docker (macOS), проверит `.env` и поднимет все сервисы.
+Если `.env` ещё не создан — скрипт создаст его из примера и покажет, что заполнить.
 
-### 2. Запустить все сервисы
+**После настройки `.env` запустите снова:**
 
 ```bash
-docker compose up -d --build
+./start.sh
 ```
 
-После запуска приложение доступно на:
-- `http://localhost:${PORT}` (по умолчанию `http://localhost:80`)
+Откроется на **http://localhost** (или на порту из `PORT=` в `.env`).
+Войдите под логином из `ADMIN_USERNAME` / `ADMIN_PASSWORD`.
 
-### 3. Войти под админом
+---
 
-Дефолтный логин/пароль берутся из `.env`:
-- `ADMIN_USERNAME`
-- `ADMIN_PASSWORD`
+### Что делает `./start.sh`
+
+1. Запускает Docker, если он не запущен (macOS: открывает Docker Desktop)
+2. Проверяет наличие `.env`, при необходимости создаёт из примера
+3. Выполняет `docker compose up -d --build`
+4. Печатает адрес, логин и полезные команды
+
+---
+
+### Обновление (после `git pull`)
+
+```bash
+git pull && docker compose up -d --build
+```
+
+База данных обновляется автоматически при старте сервера — все изменения схемы аддитивны (`CREATE TABLE IF NOT EXISTS`), данные не затрагиваются.
+
+---
 
 ## Что поднимает Docker Compose
 
-- `db` — PostgreSQL 16
-- `server` — API на Node.js (порт внутри Docker: `3001`, на хосте: `127.0.0.1:3001`)
-- `frontend` — Nginx, раздача React и проксирование `/api/*` на `server`
+| Сервис     | Роль                              | Порт на хосте       |
+|------------|-----------------------------------|---------------------|
+| `db`       | PostgreSQL 16                     | —                   |
+| `server`   | Node.js API                       | `127.0.0.1:3001`    |
+| `frontend` | Nginx (React + проксирование API) | `${PORT:-80}`       |
 
-Постоянные данные:
-- `postgres_data` — данные PostgreSQL
-- `server_data` — SQL-бэкапы PostgreSQL (`pg_dump`)
+**Volumes:**
+- `postgres_data` — данные PostgreSQL (не удаляются при перезапуске)
+- `server_data` — SQL-бэкапы, загруженные файлы
 
-Авто-бэкап создаёт полный SQL-дамп базы PostgreSQL `2life`: структуру и данные всех таблиц.
-Файлы, лежащие на диске вне PostgreSQL (например, загруженные вложения из `server/uploads`), в этот SQL-дамп не входят и требуют отдельной стратегии бэкапа/хранения.
+---
 
 ## Локальная разработка без Docker
 
-### Требования
+Требования: Node.js 20+, PostgreSQL 16+.
 
-- Node.js 20+
-- PostgreSQL 16+
-
-### 1. Запуск backend
+Можно поднять только БД через Docker и работать с сервером/фронтендом нативно:
 
 ```bash
+# 1. Только база данных
+docker compose -f docker-compose.dev.yml up -d
+
+# 2. Backend (отдельный терминал)
 cd server
 npm install
-export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/2life"
-export JWT_SECRET="change-me"
-export ADMIN_USERNAME="admin"
-export ADMIN_PASSWORD="admin123"
-npm start
-```
-
-### 2. Запуск frontend (во втором терминале)
-
-```bash
-cd /path/to/2life-dashboard
-npm install
+cp ../.env .env   # или задайте переменные вручную
 npm run dev
+
+# 3. Frontend (отдельный терминал)
+npm install
+npm run dev       # http://localhost:3000
 ```
 
-Frontend в dev-режиме откроется на `http://localhost:3000`.
-
-Если backend запущен через Docker Compose, локальный Vite (`npm run dev`) использует его через `http://127.0.0.1:3001`.
-
-## Деплой на VPS/выделенный сервер
-
-Базовый сценарий:
-1. Установить Docker + Docker Compose Plugin на сервер.
-2. Скопировать проект.
-3. Создать `.env` с безопасными секретами.
-4. Выполнить `docker compose up -d --build`.
-5. Привязать домен к IP сервера.
-6. Настроить HTTPS (например, через reverse proxy + Let's Encrypt).
-
-Для серверов в РФ процесс тот же, если на сервере доступны Docker-образы и DNS.
-
-## Production checklist
-
-- Задать сильные значения `POSTGRES_PASSWORD`, `JWT_SECRET`, `ADMIN_PASSWORD`.
-- Использовать HTTPS (TLS) перед выдачей доступа сотрудникам.
-- Ограничить внешние порты (обычно только `80/443`).
-- Настроить регулярные внешние бэкапы (не только локальный Docker volume).
-- Периодически обновлять образы и зависимости.
+---
 
 ## Полезные команды
 
@@ -162,18 +90,50 @@ Frontend в dev-режиме откроется на `http://localhost:3000`.
 # Статус контейнеров
 docker compose ps
 
-# Логи
+# Логи в реальном времени
 docker compose logs -f server
 docker compose logs -f frontend
-docker compose logs -f db
 
-# Перезапуск после изменений
+# Перезапуск после изменений кода
 docker compose up -d --build
 
-# Остановка
+# Остановить всё (данные сохраняются)
 docker compose down
+
+# Удалить данные БД (необратимо!)
+docker compose down -v
 ```
 
-## Важно про путь `server`
+---
 
-Папка backend в проекте называется `server`.
+## Деплой на VPS
+
+1. Установить Docker + Docker Compose Plugin
+2. Склонировать репозиторий
+3. Создать `.env` с безопасными секретами (см. `.env.example`)
+4. `docker compose up -d --build`
+5. Настроить reverse proxy + HTTPS (nginx / Caddy + Let's Encrypt)
+
+**Production checklist:**
+- Сильные пароли в `POSTGRES_PASSWORD`, `JWT_SECRET`, `ADMIN_PASSWORD`
+- HTTPS перед выдачей доступа сотрудникам
+- Внешние бэкапы (не только Docker volume)
+- Закрыть все порты, кроме 80/443
+
+---
+
+## Структура проекта
+
+```
+├── src/                # React-фронтенд
+├── server/             # Node.js API
+│   ├── routes/         # Express-маршруты
+│   ├── services/       # БД, хранилище, бэкап
+│   └── uploads/        # Загружаемые файлы (чат, анализы)
+├── docker-compose.yml      # Production
+├── docker-compose.dev.yml  # Только БД для разработки
+├── start.sh            # Быстрый старт
+└── .env.example        # Шаблон переменных окружения
+```
+
+Подробная архитектура: [`ARCHITECTURE.md`](ARCHITECTURE.md)

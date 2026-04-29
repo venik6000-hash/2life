@@ -55,7 +55,7 @@ router.post("/admin/roles", requireAuth("admin"), async (req, res) => {
     const safeName = String(name).trim().toLowerCase().replace(/[^a-z0-9_]/g, '_');
     const res2 = await insertRole(safeName, String(displayName).trim(), false);
     const roleId = res2.id;
-    const ALL_SECTIONS = ['overview','questionnaire','nutrition','protocol','injections','analytics','lab','journal','messenger'];
+    const ALL_SECTIONS = ['overview','questionnaire','nutrition','menu','protocol','injections','analytics','lab','journal','messenger'];
     const ALL_PERMISSIONS = ['delete_client','create_client','import_data'];
     for (const sec of ALL_SECTIONS) await upsertRoleSection(roleId, sec, true, false);
     for (const perm of ALL_PERMISSIONS) await upsertRolePermission(roleId, perm, false);

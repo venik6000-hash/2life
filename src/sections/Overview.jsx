@@ -25,6 +25,7 @@ export default function OverviewSection({
   setDefPickOpen,
   deficitPresets,
   readOnly = false,
+  hideDiagnoses = false,
 }) {
   const pc = st.protocolRevisions?.[pri]?.groups?.reduce((a, g) => a + g.items.length, 0) || 0;
   const autoDef = getAutoDeficitsFromAnalytics(st.analyticsCategories || [], st.autoDeficitSelection || [], deficitPresets || []);
@@ -116,17 +117,19 @@ export default function OverviewSection({
         />
       </Wrapper>
 
-      <Wrapper marginBottom={14}>
-        <EditableTextListCard
-          title="🩺 Диагнозы"
-          items={st.diagnoses}
-          readOnly={readOnly}
-          addLabel="+ Диагноз"
-          onAdd={() => uS(s => { (s.diagnoses || (s.diagnoses = [])).push("Новый диагноз"); })}
-          onSaveItem={(index, value) => uS(s => { s.diagnoses[index] = value; })}
-          onDeleteItem={(index) => uS(s => { s.diagnoses.splice(index, 1); })}
-        />
-      </Wrapper>
+      {!hideDiagnoses && (
+        <Wrapper marginBottom={14}>
+          <EditableTextListCard
+            title="🩺 Диагнозы"
+            items={st.diagnoses}
+            readOnly={readOnly}
+            addLabel="+ Диагноз"
+            onAdd={() => uS(s => { (s.diagnoses || (s.diagnoses = [])).push("Новый диагноз"); })}
+            onSaveItem={(index, value) => uS(s => { s.diagnoses[index] = value; })}
+            onDeleteItem={(index) => uS(s => { s.diagnoses.splice(index, 1); })}
+          />
+        </Wrapper>
+      )}
 
       <Wrapper marginBottom={14}>
         <AutoDeficitCard

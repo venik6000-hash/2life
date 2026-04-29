@@ -13,6 +13,8 @@ const doctorsRouter   = require("./routes/doctors");
 const importRouter    = require("./routes/import");
 const adminRouter     = require("./routes/admin");
 const messengerRouter = require("./routes/messenger");
+const menuRouter           = require("./routes/menu");
+const analyticsFilesRouter = require("./routes/analyticsFiles");
 
 const app  = express();
 const PORT = 3001;
@@ -29,6 +31,8 @@ app.use("/api", doctorsRouter);
 app.use("/api", importRouter);
 app.use("/api", adminRouter);
 app.use("/api", messengerRouter);
+app.use("/api", menuRouter);
+app.use("/api", analyticsFilesRouter);
 
 async function start() {
   await initSchema();

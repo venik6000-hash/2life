@@ -22,8 +22,8 @@ import {
   serializeLabOrderItemPayload
 } from "../utils/labOrderUtils";
 
-const ALL_SECTIONS = ['overview','questionnaire','nutrition','protocol','injections','analytics','lab','journal'];
-const SECTION_LABELS = { overview:'Обзор', questionnaire:'Анкета', nutrition:'Питание', protocol:'Протокол', injections:'Инъекции', analytics:'Анализы', lab:'Направление', journal:'Журнал' };
+const ALL_SECTIONS = ['overview','questionnaire','nutrition','menu','protocol','injections','analytics','lab','journal'];
+const SECTION_LABELS = { overview:'Обзор', questionnaire:'Анкета', nutrition:'Питание', menu:'Меню', protocol:'Протокол', injections:'Инъекции', analytics:'Анализы', lab:'Направление', journal:'Журнал' };
 const ALL_PERMISSIONS = ['delete_client','create_client','import_data'];
 const PERM_LABELS = { delete_client:'Удалять клиентов', create_client:'Создавать клиентов', import_data:'Импортировать данные' };
 const DEFICIT_TRIGGER_LABELS = { auto: "Авто (референс → оптимум)", ref: "Ниже референса", optimal: "Ниже оптимума" };

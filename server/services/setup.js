@@ -19,7 +19,7 @@ const initDefaultAdmin = async () => {
   console.log(`[setup] Создан первый admin: логин="${username}". Смените пароль после входа через /api/auth/change-password`);
 };
 
-const ALL_SECTIONS = ['overview','questionnaire','nutrition','protocol','injections','analytics','lab','journal','messenger'];
+const ALL_SECTIONS = ['overview','questionnaire','nutrition','menu','protocol','injections','analytics','lab','journal','messenger'];
 const ALL_PERMISSIONS = ['delete_client','create_client','import_data'];
 const DEFAULT_DEFICIT_PRESETS = [
   { id: "iron",      label: "Железодефицит",        markerKey: "нутриенты::ферритин",                            triggerMode: "auto", priority: 100 },

@@ -1,12 +1,14 @@
 import { useState, useRef, useEffect } from "react";
 import { sanitizePrintHtml } from "./utils/helpers";
-import { useDashboard, SECTIONS } from "./context/DashboardContext";
+import { useDashboard, SECTIONS, isClientRole } from "./context/DashboardContext";
+import { useAuth } from "./context/AuthContext";
 import Sidebar from "./sections/Sidebar";
 import DashboardHeader from "./components/DashboardHeader";
 import JournalSection from "./sections/Journal";
 import LabOrderSection from "./sections/LabOrder";
 import OverviewSection from "./sections/Overview";
 import NutritionSection from "./sections/Nutrition";
+import MenuSection from "./sections/Menu";
 import InjectionsSection from "./sections/Injections";
 import ProtocolSection from "./sections/Protocol";
 import AnalyticsSection from "./sections/Analytics";
@@ -61,6 +63,8 @@ export default function Dashboard() {
     canCreateClient,
     canImportData,
   } = useDashboard();
+  const { user } = useAuth();
+  const isClient = isClientRole(user?.role);
   const [isDeficitPickerOpen, setIsDeficitPickerOpen] = useState(false);
   const [analyticsJumpTarget, setAnalyticsJumpTarget] = useState(null);
   const [protocolMode, setProtocolMode] = useState("builder");
@@ -138,6 +142,7 @@ export default function Dashboard() {
       setDefPickOpen={setIsDeficitPickerOpen}
       deficitPresets={deficitPresets}
       readOnly={!canWriteSection("overview")}
+      hideDiagnoses={isClient}
     />
   );
   // NUTRITION
@@ -149,6 +154,12 @@ export default function Dashboard() {
       uS={updateStage}
       todayLabel={todayLabel}
       readOnly={!canWriteSection("nutrition")}
+    />
+  );
+  const renderMenuSection = () => (
+    <MenuSection
+      cl={currentClient}
+      readOnly={!canWriteSection("menu")}
     />
   );
   // PROTOCOL
@@ -180,6 +191,7 @@ export default function Dashboard() {
   const renderAnalyticsSection = () => (
     <AnalyticsSection
       st={currentStage}
+      clientId={currentClient?.id}
       collapseStorageKey={`${currentClient.id}::${currentStage.id}`}
       uS={updateStage}
       analyticsJump={analyticsJumpTarget}
@@ -223,6 +235,7 @@ export default function Dashboard() {
     overview: renderOverviewSection,
     questionnaire: renderQuestionnaireSection,
     nutrition: renderNutritionSection,
+    menu: renderMenuSection,
     protocol: renderProtocolSection,
     injections: renderInjectionsSection,
     analytics: renderAnalyticsSection,

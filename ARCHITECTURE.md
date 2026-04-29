@@ -51,6 +51,7 @@ src/main.jsx
 | `overview`      | ◉      | Обзор       | `Overview.jsx`         |
 | `questionnaire` | 📋     | Анкета      | `Questionnaire.jsx`    |
 | `nutrition`     | 🥗     | Питание     | `Nutrition.jsx`        |
+| `menu`          | ☰      | Меню        | `Menu.jsx`             |
 | `protocol`      | 💊     | Протокол    | `Protocol.jsx`         |
 | `injections`    | 💉     | Инъекции    | `Injections.jsx`       |
 | `analytics`     | 📊     | Анализы     | `Analytics.jsx`        |
@@ -66,13 +67,13 @@ src/main.jsx
 ### Точка входа: `index.js`
 - Запускает Express на порту 3001.
 - При старте: `initSchema()` → `initDefaultAdmin()` → `initDefaultRoles()` → `initDefaultDeficitPresets()`.
-- Подключает роутеры: `auth`, `clients`, `doctors`, `import`, `admin`, `messenger`.
+- Подключает роутеры: `auth`, `clients`, `doctors`, `import`, `admin`, `messenger`, `menu`.
 - Запускает авто-бэкап (`startAutoBackup`).
 - Поднимает WebSocket сервер (`/ws`) через `services/ws.js`.
 
 ### Хранилище: PostgreSQL
 - `services/db.js` — `pg.Pool`, DDL-схема, все SQL-запросы.
-- Таблицы: `users`, `doctors`, `clients`, `stages`, `analytics_categories`, `analytics_markers`, `analytics_values`, `journal_entries`, `protocol_revisions`, `nutrition_revisions`, `activity_log`, `roles`, `role_sections`, `role_permissions`, `reference_data`, `client_assignments`.
+- Таблицы: `users`, `doctors`, `clients`, `stages`, `analytics_categories`, `analytics_markers`, `analytics_values`, `journal_entries`, `protocol_revisions`, `nutrition_revisions`, `activity_log`, `roles`, `role_sections`, `role_permissions`, `reference_data`, `client_assignments`, `dishes`, `client_weekly_menus`, `client_menu_items`.
 - `DATABASE_URL` (env) или `postgresql://postgres:postgres@localhost:5432/2life` по умолчанию.
 
 ### Роуты (`routes/`)
@@ -85,6 +86,7 @@ src/main.jsx
 | `import.js`  | `/api/import-questionnaire`, `/api/import-analytics` | Загрузка Excel (анкета, анализы) |
 | `admin.js`   | `/api/admin`     | Роли, права, справочники, CRUD врачей, активность, статистика |
 | `messenger.js` | `/api/chats`, `/api/crypto`, `/api/users` | Чаты, участники, сообщения, файлы, ключи E2E |
+| `menu.js`    | `/api/menu`, `/api/clients/:clientId/menu` | База блюд и недельные меню клиентов |
 
 ### Сервисы (`services/`)
 
@@ -223,6 +225,7 @@ src/main.jsx
 | `overview`      | `GET /api/clients`, `GET /api/clients/:clientId` | `PATCH /api/clients/:clientId`, `PUT /api/clients/:clientId` |
 | `questionnaire` | `GET /api/clients`, `GET /api/clients/:clientId` | `PATCH /api/clients/:clientId`, `POST /api/import-questionnaire` |
 | `nutrition`     | `GET /api/clients`, `GET /api/clients/:clientId` | `PATCH /api/clients/:clientId` |
+| `menu`          | `GET /api/menu/dishes`, `GET /api/clients/:clientId/menu` | `POST/PATCH/DELETE /api/menu/dishes/*`, `POST/PATCH/DELETE /api/clients/:clientId/menu/items/*`, `POST /api/clients/:clientId/menu/copy` |
 | `protocol`      | `GET /api/clients`, `GET /api/clients/:clientId` | `PATCH /api/clients/:clientId` |
 | `injections`    | `GET /api/clients`, `GET /api/clients/:clientId` | `PATCH /api/clients/:clientId` |
 | `analytics`     | `GET /api/clients`, `GET /api/clients/:clientId` | `PUT /api/clients/:clientId/analytics`, `POST /api/import-analytics` |
@@ -247,6 +250,8 @@ src/main.jsx
 - `journal`: `stages[*].journal`
 
 Примечание: `analytics` отделён в специализированный endpoint `PUT /api/clients/:clientId/analytics`, поэтому не должен проходить через общий PATCH-гейт итерации 4.
+
+Примечание: `menu` не хранится внутри JSON клиента и не проходит через общий `PATCH /api/clients/:clientId`. База блюд хранится в `dishes`, недельные меню — в `client_weekly_menus`, позиции меню — в `client_menu_items` со ссылкой на `dish_id` и индивидуальными правками конкретного клиента.
 
 ### 12.3 Политика блокировок PATCH/PUT (реализовано)
 

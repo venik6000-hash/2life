@@ -1,10 +1,47 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { normalizeAnalyticsKey, getAnalyticsMarkerDefaults } from "../data/analyticsData";
 import { getDisplayedAnalyticsDates } from "../utils/analyticsUtils";
+import { useAuth } from "../context/AuthContext";
+import { useTheme } from "../context/ThemeContext";
+import AnalyticsFilesPanel from "../components/AnalyticsFilesPanel";
 import AnalyticsPanel from "../components/AnalyticsPanel";
+import Card from "../components/Card";
+import Wrapper from "../components/Wrapper";
+
+function AnalyticsTabHeader({ activeTab, onSelect }) {
+  const { $ } = useTheme();
+
+  const pill = (active) => ({
+    padding: "5px 10px",
+    borderRadius: 999,
+    border: `1px solid ${active ? $.ac : $.brd}`,
+    background: active ? `${$.ac}22` : $.bgI,
+    color: active ? $.ac : $.txS,
+    cursor: "pointer",
+    fontSize: 11,
+    fontWeight: 700,
+    fontFamily: "inherit",
+  });
+
+  return (
+    <Wrapper marginBottom={12}>
+      <Card size="md">
+        <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+          <button style={pill(activeTab === "table")} onClick={() => onSelect("table")}>
+            📊 Таблица
+          </button>
+          <button style={pill(activeTab === "files")} onClick={() => onSelect("files")}>
+            📁 Файлы анализов
+          </button>
+        </div>
+      </Card>
+    </Wrapper>
+  );
+}
 
 export default function AnalyticsSection({
   st,
+  clientId,
   collapseStorageKey,
   uS,
   analyticsJump,
@@ -14,10 +51,14 @@ export default function AnalyticsSection({
   canImportData,
   readOnly = false,
 }) {
+  const { authFetch } = useAuth();
   const [anaEdit, setAnaEdit] = useState(false);
+  const [analyticsTab, setAnalyticsTab] = useState("table");
   const [collapsedCategories, setCollapsedCategories] = useState({});
   const [dragAnalyticsIndex, setDragAnalyticsIndex] = useState(null);
   const [dragAnalyticsOver, setDragAnalyticsOver] = useState(null);
+  const [analyticsFiles, setAnalyticsFiles] = useState([]);
+  const [analyticsFilesLoading, setAnalyticsFilesLoading] = useState(false);
   const analyticsTableScrollRef = useRef(null);
   const analyticsDateInputRef = useRef(null);
   const canMutate = !readOnly;
@@ -262,6 +303,87 @@ export default function AnalyticsSection({
     }
   };
 
+  // ─── Files tab ──────────────────────────────────────────────────────────────
+
+  const loadAnalyticsFiles = useCallback(async () => {
+    if (!clientId) return;
+    setAnalyticsFilesLoading(true);
+    try {
+      const res = await authFetch(`/api/clients/${encodeURIComponent(clientId)}/analytics-files`);
+      if (!res.ok) return;
+      const data = await res.json();
+      if (Array.isArray(data)) setAnalyticsFiles(data);
+    } catch (_) {
+    } finally {
+      setAnalyticsFilesLoading(false);
+    }
+  }, [authFetch, clientId]);
+
+  const uploadAnalyticsFile = async (file) => {
+    if (!clientId) return;
+    const formData = new FormData();
+    formData.append("file", file);
+    try {
+      const res = await authFetch(`/api/clients/${encodeURIComponent(clientId)}/analytics-files`, {
+        method: "POST",
+        body: formData,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        alert(err.error || "Ошибка загрузки файла");
+        return;
+      }
+      const record = await res.json();
+      setAnalyticsFiles(prev => [record, ...prev]);
+    } catch (e) {
+      alert(`Ошибка: ${e.message}`);
+    }
+  };
+
+  const updateAnalyticsFileField = async (id, field, value) => {
+    if (!clientId) return;
+    try {
+      const res = await authFetch(`/api/clients/${encodeURIComponent(clientId)}/analytics-files/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ [field]: value }),
+      });
+      if (!res.ok) return;
+      const updated = await res.json();
+      setAnalyticsFiles(prev => prev.map(f => f.id === id ? updated : f));
+    } catch (_) {}
+  };
+
+  const removeAnalyticsFile = async (id) => {
+    if (!clientId) return;
+    if (!window.confirm("Удалить файл?")) return;
+    try {
+      const res = await authFetch(`/api/clients/${encodeURIComponent(clientId)}/analytics-files/${id}`, {
+        method: "DELETE",
+      });
+      if (res.ok) setAnalyticsFiles(prev => prev.filter(f => f.id !== id));
+    } catch (_) {}
+  };
+
+  const downloadAnalyticsFile = async (id, filename) => {
+    if (!clientId) return;
+    try {
+      const res = await authFetch(`/api/clients/${encodeURIComponent(clientId)}/analytics-files/${id}/download`);
+      if (!res.ok) return;
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename || "file";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (_) {}
+  };
+
+  // ─── Effects ─────────────────────────────────────────────────────────────────
+
   useEffect(()=>{
     const x = Number(localStorage.getItem("dash_analytics_scroll_x") || 0);
     requestAnimationFrame(()=>{
@@ -309,47 +431,67 @@ export default function AnalyticsSection({
     } catch (_) {}
   }, [collapsedCategories, collapsedStorageId]);
 
+  useEffect(() => {
+    if (analyticsTab === "files") loadAnalyticsFiles();
+  }, [analyticsTab, clientId, loadAnalyticsFiles]);
+
   return (
-    <AnalyticsPanel
-      categories={cats}
-      dates={allD}
-      editMode={anaEdit}
-      canMutate={canMutate}
-      readOnly={readOnly}
-      canImportData={canImportData}
-      analyticsJump={analyticsJump}
-      tableScrollRef={analyticsTableScrollRef}
-      dateInputRef={analyticsDateInputRef}
-      collapsedCategories={collapsedCategories}
-      dragIndex={dragAnalyticsIndex}
-      dragOver={dragAnalyticsOver}
-      getCollapseKey={getCollapseKey}
-      onToggleEdit={() => setAnaEdit(!anaEdit)}
-      onDateInputChange={(isoValue) => {
-        const formatted = isoToAnalyticsDate(isoValue);
-        if (formatted) addAnalyticsDate(formatted);
-      }}
-      onScrollTable={(event) => localStorage.setItem("dash_analytics_scroll_x", String(event.currentTarget.scrollLeft))}
-      onToggleCategoryCollapsed={toggleCategoryCollapsed}
-      onDragStart={handleAnalyticsDragStart}
-      onDragEnd={handleAnalyticsDragEnd}
-      onDragOver={handleAnalyticsDragOver}
-      onDrop={handleAnalyticsDrop}
-      onRenameCategory={renameCategory}
-      onRemoveCategory={removeCategory}
-      onRenameDate={renameAnalyticsDate}
-      onDeleteDate={deleteAnalyticsDate}
-      onOpenDatePicker={openAnalyticsDatePicker}
-      onRenameMarker={renameMarker}
-      onSaveMarkerField={saveMarkerField}
-      onSaveMarkerValue={saveMarkerValue}
-      onToggleValueFlag={toggleValueFlag}
-      onCreateValue={createValue}
-      onRemoveMarker={removeMarker}
-      onAddMarker={addMarker}
-      onAddCategory={addCategory}
-      onAddTemplateGroup={addAnalyticsTemplateGroup}
-      onImportFile={importAnalyticsFile}
-    />
+    <div>
+      <AnalyticsTabHeader activeTab={analyticsTab} onSelect={setAnalyticsTab} />
+
+      {analyticsTab === "files" ? (
+        <AnalyticsFilesPanel
+          files={analyticsFiles}
+          loading={analyticsFilesLoading}
+          readOnly={readOnly}
+          onUpload={uploadAnalyticsFile}
+          onUpdateField={updateAnalyticsFileField}
+          onDelete={removeAnalyticsFile}
+          onDownload={downloadAnalyticsFile}
+        />
+      ) : (
+        <AnalyticsPanel
+          categories={cats}
+          dates={allD}
+          editMode={anaEdit}
+          canMutate={canMutate}
+          readOnly={readOnly}
+          canImportData={canImportData}
+          analyticsJump={analyticsJump}
+          tableScrollRef={analyticsTableScrollRef}
+          dateInputRef={analyticsDateInputRef}
+          collapsedCategories={collapsedCategories}
+          dragIndex={dragAnalyticsIndex}
+          dragOver={dragAnalyticsOver}
+          getCollapseKey={getCollapseKey}
+          onToggleEdit={() => setAnaEdit(!anaEdit)}
+          onDateInputChange={(isoValue) => {
+            const formatted = isoToAnalyticsDate(isoValue);
+            if (formatted) addAnalyticsDate(formatted);
+          }}
+          onScrollTable={(event) => localStorage.setItem("dash_analytics_scroll_x", String(event.currentTarget.scrollLeft))}
+          onToggleCategoryCollapsed={toggleCategoryCollapsed}
+          onDragStart={handleAnalyticsDragStart}
+          onDragEnd={handleAnalyticsDragEnd}
+          onDragOver={handleAnalyticsDragOver}
+          onDrop={handleAnalyticsDrop}
+          onRenameCategory={renameCategory}
+          onRemoveCategory={removeCategory}
+          onRenameDate={renameAnalyticsDate}
+          onDeleteDate={deleteAnalyticsDate}
+          onOpenDatePicker={openAnalyticsDatePicker}
+          onRenameMarker={renameMarker}
+          onSaveMarkerField={saveMarkerField}
+          onSaveMarkerValue={saveMarkerValue}
+          onToggleValueFlag={toggleValueFlag}
+          onCreateValue={createValue}
+          onRemoveMarker={removeMarker}
+          onAddMarker={addMarker}
+          onAddCategory={addCategory}
+          onAddTemplateGroup={addAnalyticsTemplateGroup}
+          onImportFile={importAnalyticsFile}
+        />
+      )}
+    </div>
   );
 }
