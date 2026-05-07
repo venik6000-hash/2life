@@ -34,10 +34,14 @@ if [ ! -f .env ]; then
     echo "  Обязательно поменять:"
     echo "    POSTGRES_PASSWORD=<пароль БД>"
     echo "    JWT_SECRET=<минимум 64 случайных символа>"
+    echo "    MESSENGER_ENCRYPTION_SECRET=<минимум 32 случайных символа>"
     echo "    ADMIN_PASSWORD=<пароль администратора>"
     echo
     echo "  Сгенерировать JWT_SECRET:"
     echo "    node -e \"console.log(require('crypto').randomBytes(64).toString('hex'))\""
+    echo
+    echo "  Сгенерировать MESSENGER_ENCRYPTION_SECRET:"
+    echo "    node -e \"console.log(require('crypto').randomBytes(32).toString('hex'))\""
     echo
     exit 0
   else

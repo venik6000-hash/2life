@@ -8,6 +8,7 @@ const { requireAuth, requirePermission, requireSectionWrite, requireAnySectionRe
 const { getPermissionsForRole } = require("../services/permissions");
 const { pool, upsertClientAssignment, deleteClientAssignment, getAssignmentsByClient, getAssignmentsByUser, getDoctorByName, hasAllClientsAccess } = require("../services/db");
 const { syncUserChatAccessByClientPermissions } = require("../services/chatAccessSync");
+const { notifyUserChatAccessChanges } = require("../services/messengerAccessNotifications");
 const { addConnection, removeConnection, broadcast } = require("../services/sse");
 
 // ─── Clients list ────────────────────────────────────────────────────────────
@@ -241,7 +242,8 @@ router.post("/clients/:clientId/assignments", requireAuth("admin"), async (req, 
       return res.status(400).json({ error: "userId обязателен" });
     }
     await upsertClientAssignment(safeUserId, req.params.clientId, req.user.id);
-    await syncUserChatAccessByClientPermissions(pool, safeUserId);
+    const syncResult = await syncUserChatAccessByClientPermissions(pool, safeUserId);
+    await notifyUserChatAccessChanges(pool, safeUserId, syncResult);
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -256,7 +258,8 @@ router.delete("/clients/:clientId/assignments/:userId", requireAuth("admin"), as
       return res.status(400).json({ error: "Некорректный userId" });
     }
     await deleteClientAssignment(targetUserId, req.params.clientId);
-    await syncUserChatAccessByClientPermissions(pool, targetUserId);
+    const syncResult = await syncUserChatAccessByClientPermissions(pool, targetUserId);
+    await notifyUserChatAccessChanges(pool, targetUserId, syncResult);
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -298,7 +301,8 @@ const autoAssignDoctors = async (clientId, assignedByUserId) => {
     }
   }
   for (const userId of touchedUserIds) {
-    await syncUserChatAccessByClientPermissions(pool, userId);
+    const syncResult = await syncUserChatAccessByClientPermissions(pool, userId);
+    await notifyUserChatAccessChanges(pool, userId, syncResult);
   }
 };
 

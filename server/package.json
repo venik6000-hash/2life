@@ -3,6 +3,12 @@
   "version": "1.0.0",
   "scripts": {
     "dev": "nodemon",
+    "verify:messenger-reset": "node scripts/verifyMessengerResetGuard.js",
+    "verify:messenger-crypto": "node scripts/verifyMessengerCrypto.js",
+    "verify:messenger-access": "node scripts/verifyMessengerAccessNotifications.js",
+    "verify:messenger-push": "node scripts/verifyMessengerPushConfig.js",
+    "smoke:messenger-store": "node scripts/smokeMessengerStore.js",
+    "smoke:messenger-contract": "node scripts/smokeMessengerContract.js",
     "start": "node index.js"
   },
   "dependencies": {
@@ -15,6 +21,7 @@
     "multer": "^2.1.1",
     "pg": "^8.11.0",
     "uuid": "^13.0.0",
+    "web-push": "^3.6.7",
     "ws": "^8.20.0",
     "xlsx": "^0.18.5"
   },

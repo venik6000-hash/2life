@@ -265,19 +265,18 @@ const initSchema = async () => {
       title       TEXT NOT NULL DEFAULT '',
       icon        TEXT NOT NULL DEFAULT '',
       created_by  INTEGER NOT NULL REFERENCES users(id),
-      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
     CREATE INDEX IF NOT EXISTS idx_chats_client ON chats(client_id);
-
     CREATE TABLE IF NOT EXISTS chat_participants (
-      id                 SERIAL PRIMARY KEY,
-      chat_id            INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
-      user_id            INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      role_in_chat       TEXT NOT NULL DEFAULT 'member',
-      is_pinned          BOOLEAN NOT NULL DEFAULT false,
-      encrypted_chat_key TEXT NOT NULL DEFAULT '',
-      joined_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      id           SERIAL PRIMARY KEY,
+      chat_id      INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+      user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      role_in_chat TEXT NOT NULL DEFAULT 'member',
+      is_pinned    BOOLEAN NOT NULL DEFAULT false,
+      joined_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       UNIQUE(chat_id, user_id)
     );
 
@@ -285,18 +284,22 @@ const initSchema = async () => {
     CREATE INDEX IF NOT EXISTS idx_cp_chat ON chat_participants(chat_id);
 
     CREATE TABLE IF NOT EXISTS messages (
-      id         SERIAL PRIMARY KEY,
-      chat_id    INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
-      sender_id  INTEGER NOT NULL REFERENCES users(id),
-      ciphertext TEXT NOT NULL,
-      iv         TEXT NOT NULL,
-      msg_type   TEXT NOT NULL DEFAULT 'text',
-      file_id    TEXT,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      id                 SERIAL PRIMARY KEY,
+      chat_id            INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+      sender_id          INTEGER NOT NULL REFERENCES users(id),
+      encrypted_text     TEXT NOT NULL DEFAULT '',
+      encrypted_meta     TEXT NOT NULL DEFAULT '',
+      msg_type           TEXT NOT NULL DEFAULT 'text',
+      file_id            TEXT,
+      client_message_id  TEXT NOT NULL DEFAULT '',
+      deleted_for_all    BOOLEAN NOT NULL DEFAULT false,
+      deleted_for_all_at TIMESTAMPTZ,
+      deleted_by         INTEGER REFERENCES users(id),
+      edited_at          TIMESTAMPTZ,
+      created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
     CREATE INDEX IF NOT EXISTS idx_msg_chat_created ON messages(chat_id, created_at);
-
     CREATE TABLE IF NOT EXISTS message_hidden_for_users (
       id         SERIAL PRIMARY KEY,
       message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
@@ -331,6 +334,33 @@ const initSchema = async () => {
     );
 
     CREATE INDEX IF NOT EXISTS idx_cf_chat ON chat_files(chat_id);
+
+    CREATE TABLE IF NOT EXISTS messenger_devices (
+      id           SERIAL PRIMARY KEY,
+      user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      device_id    TEXT NOT NULL,
+      endpoint     TEXT NOT NULL DEFAULT '',
+      p256dh       TEXT NOT NULL DEFAULT '',
+      auth         TEXT NOT NULL DEFAULT '',
+      user_agent   TEXT NOT NULL DEFAULT '',
+      last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(user_id, device_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_md_user ON messenger_devices(user_id);
+
+    CREATE TABLE IF NOT EXISTS messenger_sync_events (
+      id         BIGSERIAL PRIMARY KEY,
+      chat_id    INTEGER REFERENCES chats(id) ON DELETE CASCADE,
+      user_id    INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      event_type TEXT NOT NULL,
+      payload    JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_sync_user_id ON messenger_sync_events(user_id, id);
+    CREATE INDEX IF NOT EXISTS idx_sync_chat_id ON messenger_sync_events(chat_id, id);
 
     -- ── Analytics files ─────────────────────────────────────────────────────
     CREATE TABLE IF NOT EXISTS analytics_files (
@@ -387,6 +417,16 @@ const initSchema = async () => {
   try { await pool.query("ALTER TABLE dishes ALTER COLUMN calories DROP NOT NULL"); } catch (_) {}
   try { await pool.query("ALTER TABLE dishes ALTER COLUMN calories DROP DEFAULT"); } catch (_) {}
 
+  try { await pool.query("ALTER TABLE messages ADD COLUMN encrypted_text TEXT NOT NULL DEFAULT ''"); } catch (_) {}
+  try { await pool.query("ALTER TABLE messages ADD COLUMN encrypted_meta TEXT NOT NULL DEFAULT ''"); } catch (_) {}
+  try { await pool.query("ALTER TABLE messages ADD COLUMN client_message_id TEXT NOT NULL DEFAULT ''"); } catch (_) {}
+  try { await pool.query("UPDATE messages SET encrypted_text = ciphertext WHERE encrypted_text = '' AND NULLIF(ciphertext, '') IS NOT NULL"); } catch (_) {}
+  try { await pool.query("UPDATE messages SET encrypted_meta = iv WHERE encrypted_meta = '' AND NULLIF(iv, '') IS NOT NULL"); } catch (_) {}
+  try { await pool.query("ALTER TABLE messages ALTER COLUMN ciphertext DROP NOT NULL"); } catch (_) {}
+  try { await pool.query("ALTER TABLE messages ALTER COLUMN iv DROP NOT NULL"); } catch (_) {}
+  try { await pool.query("ALTER TABLE chats ADD COLUMN updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()"); } catch (_) {}
+  try { await pool.query("ALTER TABLE chat_participants ADD COLUMN encrypted_chat_key TEXT NOT NULL DEFAULT ''"); } catch (_) {}
+
   const chatColsRes = await pool.query(
     `SELECT column_name FROM information_schema.columns WHERE table_name = 'chats'`
   );
@@ -399,6 +439,14 @@ const initSchema = async () => {
     try { await pool.query("ALTER TABLE chats ADD COLUMN icon TEXT NOT NULL DEFAULT ''"); } catch (_) {}
   }
   try { await pool.query("CREATE INDEX IF NOT EXISTS idx_chats_internal ON chats(is_internal)"); } catch (_) {}
+  try { await pool.query("CREATE INDEX IF NOT EXISTS idx_msg_client_message ON messages(chat_id, client_message_id)"); } catch (_) {}
+  try {
+    await pool.query(
+      `CREATE UNIQUE INDEX IF NOT EXISTS uniq_msg_client_message_sender
+       ON messages(chat_id, sender_id, client_message_id)
+       WHERE client_message_id <> ''`
+    );
+  } catch (_) {}
   try { await pool.query("ALTER TABLE chats ALTER COLUMN client_id DROP NOT NULL"); } catch (_) {}
   try {
     await pool.query(`
@@ -982,15 +1030,22 @@ const setChatPinned = async (chatId, userId, isPinned) => {
 
 // ─── Messenger: participants ──────────────────────────────────────────────────
 
-const addChatParticipant = async (chatId, userId, roleInChat, encryptedChatKey, isPinned = false) => {
+const addChatParticipant = async (chatId, userId, roleInChat, encryptedChatKey = "", isPinned = false) => {
   const r = await pool.query(
     `INSERT INTO chat_participants (chat_id, user_id, role_in_chat, encrypted_chat_key, is_pinned)
      VALUES ($1, $2, $3, $4, $5)
      ON CONFLICT (chat_id, user_id) DO UPDATE SET
        role_in_chat = EXCLUDED.role_in_chat,
-       encrypted_chat_key = EXCLUDED.encrypted_chat_key
+       encrypted_chat_key = CASE
+         WHEN EXCLUDED.encrypted_chat_key <> '' THEN EXCLUDED.encrypted_chat_key
+         ELSE chat_participants.encrypted_chat_key
+       END,
+       is_pinned = CASE
+         WHEN EXCLUDED.is_pinned = true THEN true
+         ELSE chat_participants.is_pinned
+       END
      RETURNING *`,
-    [chatId, userId, roleInChat, encryptedChatKey, !!isPinned]
+    [chatId, userId, roleInChat, encryptedChatKey || "", !!isPinned]
   );
   return r.rows[0];
 };
@@ -1070,18 +1125,57 @@ const getParticipantRole = async (chatId, userId) => {
 
 // ─── Messenger: messages ─────────────────────────────────────────────────────
 
-const insertMessage = async (chatId, senderId, ciphertext, iv, msgType, fileId) => {
+const insertMessage = async (chatId, senderId, encryptedText, encryptedMeta, msgType, fileId, clientMessageId = "") => {
+  const safeClientMessageId = String(clientMessageId || "");
+  if (safeClientMessageId) {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        "SELECT pg_advisory_xact_lock(hashtext($1)::bigint)",
+        [`message:${chatId}:${senderId}:${safeClientMessageId}`]
+      );
+      const existing = await client.query(
+        `SELECT *, encrypted_text AS ciphertext, encrypted_meta AS iv
+         FROM messages
+         WHERE chat_id = $1 AND sender_id = $2 AND client_message_id = $3
+         ORDER BY id DESC
+         LIMIT 1`,
+        [chatId, senderId, safeClientMessageId]
+      );
+      if (existing.rows[0]) {
+        await client.query("COMMIT");
+        return { ...existing.rows[0], __existing: true };
+      }
+      const inserted = await client.query(
+        `INSERT INTO messages (chat_id, sender_id, encrypted_text, encrypted_meta, msg_type, file_id, client_message_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         RETURNING *, encrypted_text AS ciphertext, encrypted_meta AS iv`,
+        [chatId, senderId, encryptedText, encryptedMeta, msgType, fileId || null, safeClientMessageId]
+      );
+      await client.query("COMMIT");
+      return { ...inserted.rows[0], __existing: false };
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   const r = await pool.query(
-    `INSERT INTO messages (chat_id, sender_id, ciphertext, iv, msg_type, file_id)
-     VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-    [chatId, senderId, ciphertext, iv, msgType, fileId || null]
+    `INSERT INTO messages (chat_id, sender_id, encrypted_text, encrypted_meta, msg_type, file_id, client_message_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     RETURNING *, encrypted_text AS ciphertext, encrypted_meta AS iv`,
+    [chatId, senderId, encryptedText, encryptedMeta, msgType, fileId || null, safeClientMessageId]
   );
-  return r.rows[0];
+  return { ...r.rows[0], __existing: false };
 };
 
 const getMessageById = async (chatId, messageId) => {
   const r = await pool.query(
-    `SELECT m.*, u.username AS sender_username, u.display_name AS sender_display_name
+    `SELECT m.*, m.encrypted_text AS ciphertext, m.encrypted_meta AS iv,
+            u.username AS sender_username, u.display_name AS sender_display_name
      FROM messages m
      JOIN users u ON u.id = m.sender_id
      WHERE m.chat_id = $1 AND m.id = $2
@@ -1091,13 +1185,13 @@ const getMessageById = async (chatId, messageId) => {
   return r.rows[0] ?? null;
 };
 
-const updateMessageContent = async (chatId, messageId, ciphertext, iv) => {
+const updateMessageContent = async (chatId, messageId, encryptedText, encryptedMeta = "") => {
   const r = await pool.query(
     `UPDATE messages
-     SET ciphertext = $3, iv = $4, edited_at = NOW()
+     SET encrypted_text = $3, encrypted_meta = $4, edited_at = NOW()
      WHERE chat_id = $1 AND id = $2 AND deleted_for_all = false
-     RETURNING *`,
-    [chatId, messageId, ciphertext, iv]
+     RETURNING *, encrypted_text AS ciphertext, encrypted_meta AS iv`,
+    [chatId, messageId, encryptedText, encryptedMeta]
   );
   return r.rows[0] ?? null;
 };
@@ -1129,7 +1223,8 @@ const getMessages = async (chatId, userId, beforeId, limit) => {
   let query, params;
   if (beforeId) {
     query = `
-      SELECT m.*, u.username AS sender_username
+      SELECT m.*, m.encrypted_text AS ciphertext, m.encrypted_meta AS iv,
+             u.username AS sender_username, u.display_name AS sender_display_name
       FROM messages m
       JOIN users u ON u.id = m.sender_id
       WHERE m.chat_id = $1
@@ -1145,7 +1240,8 @@ const getMessages = async (chatId, userId, beforeId, limit) => {
     params = [chatId, userId, beforeId, lim];
   } else {
     query = `
-      SELECT m.*, u.username AS sender_username
+      SELECT m.*, m.encrypted_text AS ciphertext, m.encrypted_meta AS iv,
+             u.username AS sender_username, u.display_name AS sender_display_name
       FROM messages m
       JOIN users u ON u.id = m.sender_id
       WHERE m.chat_id = $1

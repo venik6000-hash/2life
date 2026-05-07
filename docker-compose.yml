@@ -30,6 +30,10 @@ services:
     environment:
       DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}@db:5432/2life
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set in .env}
+      MESSENGER_ENCRYPTION_SECRET: ${MESSENGER_ENCRYPTION_SECRET:?MESSENGER_ENCRYPTION_SECRET must be set in .env}
+      VAPID_SUBJECT: ${VAPID_SUBJECT:-}
+      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:?ADMIN_PASSWORD must be set in .env}
       NODE_ENV: production
@@ -41,6 +45,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.frontend
+      args:
+        VITE_VAPID_PUBLIC_KEY: ${VITE_VAPID_PUBLIC_KEY:-}
     restart: unless-stopped
     depends_on:
       - server

@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState } from "react";
 import { useTheme } from "../context/ThemeContext";
 import { fmtTime, isImageLike, parseBundleFiles } from "../utils/messengerUiUtils";
+import { getUnreadCount } from "../utils/messengerUnread";
 
 export default function MessengerChatList({
   chats,
@@ -32,16 +33,6 @@ export default function MessengerChatList({
     });
     if (created?.id) setActiveChatId(created.id);
     setCreating(false);
-  };
-
-  const getUnreadCount = (chat) => {
-    const myReceipt = (chat.receipts || []).find((receipt) => receipt.user_id === user.id);
-    const chatMessages = messages[chat.id] || [];
-    const unread = chatMessages.filter((message) =>
-      message.sender_id !== user.id &&
-      (!myReceipt || message.id > myReceipt.last_read_message_id)
-    );
-    return unread.length;
   };
 
   const getLastMessagePreview = (lastMessage) => {
@@ -118,7 +109,7 @@ export default function MessengerChatList({
           </div>
         )}
         {sortedChats.map((chat) => {
-          const unread = getUnreadCount(chat);
+          const unread = getUnreadCount(chat, messages, user);
           const chatMessages = messages[chat.id] || [];
           const lastMessage = chatMessages[chatMessages.length - 1];
           const icon = chat.icon || (chat.is_internal ? "💬" : "👤");

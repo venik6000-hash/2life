@@ -2,9 +2,13 @@ const { WebSocketServer } = require("ws");
 const jwt = require("jsonwebtoken");
 const { isBlacklisted } = require("./tokenBlacklist");
 const {
+  pool,
   insertMessage, getMessageById, updateMessageContent, deleteMessageForAll, hideMessageForUser,
-  getChatParticipants, isParticipant, upsertReceipt, getReceiptsByChat,
+  getChatById, getChatParticipants, isParticipant, upsertReceipt, getReceiptsByChat,
 } = require("./db");
+const { encryptText, encryptJson } = require("./messengerCrypto");
+const { createSyncEvent } = require("./messengerStore");
+const { sendPrivateMessagePush } = require("./messengerPush");
 
 const JWT_SECRET = process.env.JWT_SECRET;
 
@@ -40,6 +44,33 @@ const broadcastToChat = async (chatId, payload, exceptUserId) => {
   }
 };
 
+const safeId = (value) => {
+  const id = Number(value);
+  return Number.isInteger(id) && id > 0 ? id : null;
+};
+
+const normalizeText = (value) => String(value ?? "");
+
+const normalizeMeta = (value) => (
+  value && typeof value === "object" && !Array.isArray(value) ? value : {}
+);
+
+const messagePayload = (row, user, { text = "", meta = {} } = {}) => ({
+  id: row.id,
+  chat_id: row.chat_id,
+  sender_id: row.sender_id,
+  sender_username: user.username,
+  sender_display_name: user.display_name || "",
+  text,
+  meta,
+  msg_type: row.msg_type,
+  file_id: row.file_id,
+  client_message_id: row.client_message_id,
+  deleted_for_all: !!row.deleted_for_all,
+  created_at: row.created_at,
+  edited_at: row.edited_at || null,
+});
+
 // Authenticate an upgrade request: Bearer token or ?ticket= (one-time WS ticket)
 const authenticateUpgrade = (req) => {
   // Try Authorization header first (not common in browser WS, but useful for testing)
@@ -69,6 +100,7 @@ const authenticateUpgrade = (req) => {
 const handleMessage = async (ws, user, raw) => {
   let msg;
   try { msg = JSON.parse(raw); } catch { return; }
+  if (!msg || typeof msg !== "object" || Array.isArray(msg)) return;
 
   const { type } = msg;
 
@@ -82,38 +114,61 @@ const handleMessage = async (ws, user, raw) => {
 
   // ── send_message ──────────────────────────────────────────────────────────
   if (type === "send_message") {
-    const { chatId, ciphertext, iv, msgType = "text", fileId } = msg;
-    if (!chatId || !ciphertext || !iv) return;
+    const chatId = safeId(msg.chatId);
+    const text = normalizeText(msg.text);
+    const meta = normalizeMeta(msg.meta);
+    const msgType = String(msg.msgType || "text");
+    const fileId = msg.fileId || null;
+    const clientMessageId = String(msg.clientMessageId || "");
+    const deviceId = String(msg.deviceId || "");
+    if (!chatId) return;
+    if (!text.trim() && msgType === "text") return;
 
     const allowed = await isParticipant(chatId, user.id);
     if (!allowed) return;
 
-    const saved = await insertMessage(chatId, user.id, ciphertext, iv, msgType, fileId);
-
+    const saved = await insertMessage(
+      chatId,
+      user.id,
+      encryptText(text),
+      encryptJson(meta),
+      msgType,
+      fileId,
+      String(clientMessageId || "")
+    );
     const payload = {
       type: "new_message",
-      message: {
-        id: saved.id,
-        chat_id: saved.chat_id,
-        sender_id: saved.sender_id,
-        sender_username: user.username,
-        ciphertext: saved.ciphertext,
-        iv: saved.iv,
-        msg_type: saved.msg_type,
-        file_id: saved.file_id,
-        created_at: saved.created_at,
-        edited_at: saved.edited_at || null,
-      },
+      message: messagePayload(saved, user, { text, meta }),
     };
 
     // Deliver to all participants including sender (for multi-device)
-    await broadcastToChat(chatId, payload, null);
+    if (!saved.__existing) {
+      await createSyncEvent(pool, {
+        chatId,
+        eventType: "new_message",
+        payload: { messageId: saved.id },
+      });
+      await broadcastToChat(chatId, payload, null);
+      const [participants, chat] = await Promise.all([getChatParticipants(chatId), getChatById(chatId)]);
+      const targetUserIds = participants.map((p) => p.user_id).filter((id) => id !== user.id);
+      sendPrivateMessagePush({
+        userIds: targetUserIds,
+        chatTitle: chat?.title || "Чат",
+        url: `/app/messenger?chat=${chatId}`,
+        exceptDeviceId: deviceId,
+      }).catch(() => {});
+    } else if (ws.readyState === 1 /* OPEN */) {
+      ws.send(JSON.stringify(payload));
+    }
   }
 
   // ── edit_message ──────────────────────────────────────────────────────────
   if (type === "edit_message") {
-    const { chatId, messageId, ciphertext, iv } = msg;
-    if (!chatId || !messageId || !ciphertext || !iv) return;
+    const chatId = safeId(msg.chatId);
+    const messageId = safeId(msg.messageId);
+    const text = normalizeText(msg.text);
+    const meta = normalizeMeta(msg.meta);
+    if (!chatId || !messageId || !text.trim()) return;
 
     const allowed = await isParticipant(chatId, user.id);
     if (!allowed) return;
@@ -123,31 +178,31 @@ const handleMessage = async (ws, user, raw) => {
     if (original.msg_type !== "text") return;
     if (original.sender_id !== user.id && user.role !== "admin") return;
 
-    const updated = await updateMessageContent(chatId, messageId, ciphertext, iv);
+    const updated = await updateMessageContent(chatId, messageId, encryptText(text), encryptJson(meta));
     if (!updated) return;
+    await createSyncEvent(pool, {
+      chatId,
+      eventType: "message_edited",
+      payload: { messageId },
+    });
 
     const payload = {
       type: "message_edited",
       chatId,
-      message: {
-        id: updated.id,
-        chat_id: updated.chat_id,
-        sender_id: updated.sender_id,
-        sender_username: original.sender_username,
-        ciphertext: updated.ciphertext,
-        iv: updated.iv,
-        msg_type: updated.msg_type,
-        file_id: updated.file_id,
-        created_at: updated.created_at,
-        edited_at: updated.edited_at,
-      },
+      message: messagePayload(updated, {
+        ...user,
+        username: original.sender_username,
+        display_name: original.sender_display_name || "",
+      }, { text, meta }),
     };
     await broadcastToChat(chatId, payload, null);
   }
 
   // ── delete_message ────────────────────────────────────────────────────────
   if (type === "delete_message") {
-    const { chatId, messageId, scope = "all" } = msg;
+    const chatId = safeId(msg.chatId);
+    const messageId = safeId(msg.messageId);
+    const scope = String(msg.scope || "all");
     if (!chatId || !messageId) return;
 
     const allowed = await isParticipant(chatId, user.id);
@@ -166,6 +221,11 @@ const handleMessage = async (ws, user, raw) => {
       if (existing.sender_id !== user.id && user.role !== "admin") return;
       const deleted = await deleteMessageForAll(chatId, messageId, user.id);
       if (!deleted) return;
+      await createSyncEvent(pool, {
+        chatId,
+        eventType: "message_deleted_all",
+        payload: { messageId, userId: user.id },
+      });
       const payload = { type: "message_deleted_all", chatId, messageId, userId: user.id };
       await broadcastToChat(chatId, payload, null);
     }
@@ -173,7 +233,8 @@ const handleMessage = async (ws, user, raw) => {
 
   // ── mark_read ─────────────────────────────────────────────────────────────
   if (type === "mark_read") {
-    const { chatId, messageId } = msg;
+    const chatId = safeId(msg.chatId);
+    const messageId = safeId(msg.messageId);
     if (!chatId || !messageId) return;
 
     const allowed = await isParticipant(chatId, user.id);
@@ -188,7 +249,7 @@ const handleMessage = async (ws, user, raw) => {
 
   // ── typing ────────────────────────────────────────────────────────────────
   if (type === "typing" || type === "stop_typing") {
-    const { chatId } = msg;
+    const chatId = safeId(msg.chatId);
     if (!chatId) return;
     const allowed = await isParticipant(chatId, user.id);
     if (!allowed) return;
@@ -223,7 +284,9 @@ const initWebSocket = (httpServer) => {
     const user = ws.user;
     addConn(user.id, ws);
 
-    ws.on("message", (raw) => handleMessage(ws, user, raw.toString()));
+    ws.on("message", (raw) => {
+      handleMessage(ws, user, raw.toString()).catch(() => {});
+    });
 
     ws.on("close", () => removeConn(user.id, ws));
     ws.on("error", () => removeConn(user.id, ws));

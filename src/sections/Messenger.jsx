@@ -6,7 +6,6 @@ import ConnectionBanner from "../components/ConnectionBanner";
 import MessengerChatList from "../components/MessengerChatList";
 import MessengerChatWindow from "../components/MessengerChatWindow";
 import MessengerParticipantsPanel from "../components/MessengerParticipantsPanel";
-import MessengerUnlockScreen from "../components/MessengerUnlockScreen";
 import MessengerShell, { MessengerEmptyState } from "../components/MessengerShell";
 import Wrapper from "../components/Wrapper";
 import { isClientRole } from "../utils/messengerUiUtils";
@@ -15,9 +14,8 @@ export default function MessengerSection() {
   const { user } = useAuth();
   const { cid, cls, isAdmin } = useDashboard();
   const {
-    cryptoReady, cryptoError, wsConnected,
+    ready, wsConnected,
     chats, chatsLoaded, activeChatId, setActiveChatId, messages,
-    unlockCrypto,
     loadChats, loadMessages, sendMsg, sendFiles, forwardMsg, editMsg, deleteMsg,
     downloadFile, downloadFiles, getFileUrl, markRead,
     createNewChat, updateChatSettings, addParticipant, removeParticipant,
@@ -30,13 +28,13 @@ export default function MessengerSection() {
   const hasGlobalClientAccess = isAdmin || !!user?.all_clients_access;
 
   useEffect(() => {
-    if (!cryptoReady) return;
+    if (!ready) return;
     if (hasGlobalClientAccess) { loadChats(); return; }
     loadChats(cid || undefined);
-  }, [cryptoReady, hasGlobalClientAccess, cid]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [ready, hasGlobalClientAccess, cid]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (!cryptoReady || !isAdmin || !chatsLoaded || !Array.isArray(cls) || cls.length === 0) return;
+    if (!ready || !isAdmin || !chatsLoaded || !Array.isArray(cls) || cls.length === 0) return;
     if (autoCreateRef.current) return;
     const existingByClient = new Set(chats.map((c) => c.client_id));
     const missingClients = cls.filter((client) => !existingByClient.has(client.id));
@@ -49,16 +47,12 @@ export default function MessengerSection() {
       }
       await loadChats();
     })().finally(() => { autoCreateRef.current = false; });
-  }, [cryptoReady, isAdmin, chatsLoaded, cls, chats, createNewChat, loadChats]);
+  }, [ready, isAdmin, chatsLoaded, cls, chats, createNewChat, loadChats]);
 
   useEffect(() => {
-    if (!activeChatId || !cryptoReady) return;
+    if (!activeChatId || !ready) return;
     if (!messages[activeChatId]) loadMessages(activeChatId);
-  }, [activeChatId, cryptoReady]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  if (!cryptoReady) {
-    return <MessengerUnlockScreen unlockCrypto={unlockCrypto} cryptoError={cryptoError} />;
-  }
+  }, [activeChatId, ready]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <MessengerShell

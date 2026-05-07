@@ -6,6 +6,7 @@ const { ipKeyGenerator } = rateLimit;
 
 const { getUser, listUsers, createUser, pool } = require("../services/db");
 const { syncUserChatAccessByClientPermissions } = require("../services/chatAccessSync");
+const { notifyUserChatAccessChanges } = require("../services/messengerAccessNotifications");
 const { requireAuth, signToken }   = require("../middleware/auth");
 const { blacklistToken }           = require("../services/tokenBlacklist");
 const { getPermissionsForRole }    = require("../services/permissions");
@@ -39,7 +40,6 @@ const resetMessengerCredentials = async (db, userId) => {
      WHERE user_id = $1`,
     [userId]
   );
-  await db.query("UPDATE chat_participants SET encrypted_chat_key = '' WHERE user_id = $1", [userId]);
 };
 
 const rewrapMessengerFromRecovery = async (db, keyRow, userId, nextPassword) => {
@@ -307,10 +307,12 @@ router.post("/admin/users", requireAuth("admin"), async (req, res) => {
 // PATCH /api/admin/users/:id — смена пароля / роли / активности / доступа ко всем клиентам
 router.patch("/admin/users/:id", requireAuth("admin"), async (req, res) => {
   const client = await pool.connect();
+  let committed = false;
   try {
     const id = Number(req.params.id);
     const { password, role, active, all_clients_access, display_name } = req.body || {};
     let shouldSyncChatAccess = false;
+    let syncResult = null;
     if (!Number.isInteger(id) || id <= 0) {
       return res.status(400).json({ error: "Некорректный id пользователя" });
     }
@@ -381,13 +383,17 @@ router.patch("/admin/users/:id", requireAuth("admin"), async (req, res) => {
     }
 
     if (shouldSyncChatAccess) {
-      await syncUserChatAccessByClientPermissions(client, id);
+      syncResult = await syncUserChatAccessByClientPermissions(client, id);
     }
 
     await client.query("COMMIT");
+    committed = true;
+    await notifyUserChatAccessChanges(pool, id, syncResult);
     res.json({ ok: true });
   } catch (e) {
-    try { await client.query("ROLLBACK"); } catch (_) {}
+    if (!committed) {
+      try { await client.query("ROLLBACK"); } catch (_) {}
+    }
     console.error("[auth] patch user error:", e);
     res.status(500).json({ error: "Внутренняя ошибка сервера" });
   } finally {

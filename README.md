@@ -76,6 +76,13 @@ git pull && docker compose up -d --build
 - Frontend: **http://localhost:3000**
 - API: **http://localhost:3001**
 
+## Mobile Messenger PWA
+
+- Desktop employees continue using the main dashboard and Messenger section.
+- Mobile users use `/app/messenger`.
+- The PWA requires HTTPS for production installability and iOS push validation.
+- Messenger reset is limited to messenger tables and `server/uploads/chat`; all client, analytics, protocol, menu, user, role, and assignment data must be preserved.
+
 ### Вручную (три терминала)
 
 ```bash
@@ -140,7 +147,7 @@ docker compose down -v
 │   └── data/           # Справочники и шаблоны (анализы, дефициты, протоколы)
 ├── server/
 │   ├── routes/         # Express-роутеры (auth, clients, messenger, menu, analyticsFiles…)
-│   ├── services/       # БД, SSE/WS, backup, crypto-синхронизация, tokenBlacklist…
+│   ├── services/       # БД, SSE/WS, backup, messenger, tokenBlacklist…
 │   ├── middleware/     # JWT-аутентификация и проверка прав
 │   └── parsers/        # Парсеры Excel (анкета, анализы)
 ├── docker-compose.yml      # Production

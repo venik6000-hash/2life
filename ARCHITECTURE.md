@@ -28,7 +28,8 @@ src/main.jsx
 - `src/context/ThemeContext.jsx` — тёмная/светлая тема, объект цветов `$`.
 - `src/context/EditorContext.jsx` — глобальный inline-редактор `Ed`.
 - `src/context/DashboardContext.jsx` — клиенты, этапы, автосохранение, патч-логика.
-- `src/context/MessengerContext.jsx` — E2E-ключи, WS-соединение, чаты/сообщения/файлы.
+- `src/context/MessengerContext.jsx` — shared server-encrypted messenger state, WebSocket, REST sync, offline queue, local cache.
+- `/app/messenger` — mobile PWA surface for clients and employees.
 - `src/sections/*` — оркестраторы бизнес-разделов: данные, эффекты, обработчики, сборка UI из компонентов.
 - `src/components/*` — все визуальные поверхности и компонентные стили, включая одноразовые UI-блоки разделов и общие примитивы.
 - `src/utils/*` — чистые утилиты и вычисления.
@@ -85,7 +86,7 @@ src/main.jsx
 | `doctors.js`        | `/api/doctors`                                                          | Список врачей для UI + bulk-сохранение реестра (admin)               |
 | `import.js`         | `/api/import-questionnaire`, `/api/import-analytics`                   | Загрузка Excel (анкета, анализы)                                     |
 | `admin.js`          | `/api/admin`                                                            | Роли, права, справочники, CRUD врачей, активность, статистика        |
-| `messenger.js`      | `/api/chats`, `/api/crypto`, `/api/users`                               | Чаты (клиентские и внутренние), участники, сообщения, файлы, ключи E2E |
+| `messenger.js`      | `/api/chats`, `/api/messenger`, `/api/users`                            | Чаты (клиентские и внутренние), участники, сообщения, файлы, sync, устройства и push-подписки |
 | `menu.js`           | `/api/menu`, `/api/clients/:clientId/menu`                             | База блюд и недельные меню клиентов                                  |
 | `analyticsFiles.js` | `/api/clients/:clientId/analytics-files`                               | Загрузка, метаданные и скачивание файлов анализов (PDF/изображения)  |
 
@@ -105,8 +106,10 @@ src/main.jsx
 | `ws.js`              | WebSocket-хаб мессенджера: маршрутизация событий по участникам                   |
 | `wsTickets.js`       | Одноразовые WS-тикеты (30 сек) для browser WebSocket-аутентификации              |
 | `tokenBlacklist.js`  | In-memory JWT blacklist для серверного logout; записи авто-очищаются по TTL токена |
-| `chatAccessSync.js`  | Синхронизация состава `chat_participants` по правам доступа к клиентам; перешифровка chat-ключей через Node.js WebCrypto |
-| `messengerRecovery.js` | Серверное шифрование/дешифрование приватного ECDH-ключа через recovery-секрет (AES-256-GCM) |
+| `chatAccessSync.js`  | Синхронизация состава `chat_participants` по правам доступа к клиентам |
+| `messengerCrypto.js` | Серверное AES-256-GCM шифрование/дешифрование сообщений и файлов мессенджера |
+| `messengerPush.js`   | Web Push отправка приватных уведомлений без текста сообщения |
+| `messengerReset.js`  | Guarded reset только таблиц мессенджера и `server/uploads/chat` |
 
 ### Middleware (`middleware/`)
 - `auth.js`:
@@ -132,7 +135,7 @@ src/main.jsx
 | `GET`  | `/api/auth/me` | Проверка токена; возвращает `{ user, permissions }` |
 | `POST` | `/api/auth/sse-ticket` | Одноразовый тикет (30 сек) для открытия SSE-соединения |
 | `POST` | `/api/auth/ws-ticket` | Одноразовый тикет (30 сек) для открытия WebSocket-соединения |
-| `POST` | `/api/auth/change-password` | Смена своего пароля с атомарной перешифровкой ключей мессенджера |
+| `POST` | `/api/auth/change-password` | Смена своего пароля; активный мессенджер не требует E2E-перешифровки при смене пароля |
 
 ### 6.1 Где хранятся role configs
 
@@ -230,12 +233,12 @@ src/main.jsx
 | Схему БД                        | `server/services/db.js` (функция `initSchema`) |
 | Реалтайм карточек (SSE)         | `server/services/sse.js`                       |
 | Реалтайм мессенджера (WS)       | `server/services/ws.js`, `src/utils/websocket.js` |
-| Крипто-утилиты мессенджера      | `src/utils/crypto.js`, `src/utils/cryptoSession.js` |
-| UI мессенджера                  | `src/components/Messenger*.jsx`, `src/sections/Messenger.jsx`, `src/context/MessengerContext.jsx` |
+| Криптоконтур мессенджера        | `server/services/messengerCrypto.js`, `src/utils/messengerApi.js` |
+| UI мессенджера                  | `src/sections/Messenger.jsx`, `src/mobile/*`, `src/context/MessengerContext.jsx` |
 | Роли и права (UI)               | `src/components/AdminSectionPanel.jsx`, `src/sections/AdminSection.jsx` |
 | Файлы анализов (загрузка/просмотр) | `src/components/AnalyticsFilesPanel.jsx`, `src/sections/Analytics.jsx`, `server/routes/analyticsFiles.js` |
 | Синхронизация участников чатов  | `server/services/chatAccessSync.js`                   |
-| Recovery-ключи мессенджера      | `server/services/messengerRecovery.js`                |
+| Push-уведомления мессенджера    | `server/services/messengerPush.js`, `public/sw.js`    |
 
 ## 12. Section -> API Mapping
 
@@ -252,7 +255,7 @@ src/main.jsx
 | `analytics`     | `GET /api/clients`, `GET /api/clients/:clientId`, `GET /api/clients/:clientId/analytics-files` | `PUT /api/clients/:clientId/analytics`, `POST /api/import-analytics`, `POST/PATCH/DELETE /api/clients/:clientId/analytics-files/*`, `GET /api/clients/:clientId/analytics-files/:id/download` |
 | `lab`           | `GET /api/clients`, `GET /api/clients/:clientId` | `PATCH /api/clients/:clientId` |
 | `journal`       | `GET /api/clients`, `GET /api/clients/:clientId` | `PATCH /api/clients/:clientId` |
-| `messenger`     | `GET /api/chats`, `GET /api/chats/:id/messages`, `GET /api/chats/:id/files/:fileId` | `POST /api/chats`, `POST /api/chats/:id/messages`, `POST /api/chats/:id/files`, `PATCH/DELETE /api/chats/:id/messages/:messageId`, `POST /api/chats/:id/read`, `POST/DELETE /api/chats/:id/participants/*` |
+| `messenger`     | `GET /api/chats`, `GET /api/chats/:id/messages`, `GET /api/chats/:id/files/:fileId`, `GET /api/messenger/sync` | `POST /api/chats`, `POST /api/chats/:id/messages`, `POST /api/chats/:id/files`, `PATCH/DELETE /api/chats/:id/messages/:messageId`, `POST /api/chats/:id/read`, `POST/DELETE /api/chats/:id/participants/*`, `POST/DELETE /api/messenger/devices/*` |
 
 ### 12.2 Field mapping для `PATCH /api/clients/:clientId`
 
@@ -289,7 +292,7 @@ src/main.jsx
 - Назначение: короткая хронология изменений в формате «1 строка = 1 изменение».
 - Формат записи: `YYYY-MM-DD | область | изменение`.
 
-## 14. Messenger Snapshot (2026-04-29)
+## 14. Messenger Snapshot (2026-05-07)
 
 ### 14.1 Доменная модель
 
@@ -300,11 +303,11 @@ src/main.jsx
 
 **Участники (`chat_participants`)**
 - `role_in_chat`: `owner` / `member`.
-- `encrypted_chat_key` — ключ чата, зашифрованный для конкретного участника (ECDH + AES-KW).
+- `encrypted_chat_key` — совместимый legacy-мост; активный flow больше не требует клиентских E2E chat-ключей.
 - `is_pinned` — закрепление чата у конкретного участника.
 
 **Сообщения (`messages`)**
-- `ciphertext`, `iv`, `msg_type`, `file_id` — базовые поля.
+- `encrypted_text`, `encrypted_meta`, `msg_type`, `file_id` — активные поля серверного шифрования; `ciphertext`/`iv` оставлены только как legacy compatibility alias в SQL-ответах.
 - `edited_at` — время последнего редактирования (NULL если не редактировалось).
 - `deleted_for_all` / `deleted_for_all_at` / `deleted_by` — удаление у всех участников.
 
@@ -315,21 +318,23 @@ src/main.jsx
 
 **Пользователи**
 - `users.display_name` — отображаемое имя (при пустом значении используется `username`).
-- `user_public_keys.recovery_encrypted_private_key_jwk` / `recovery_key_iv` — приватный ключ, зашифрованный серверным recovery-секретом (см. 14.2).
+- `user_public_keys` сохранена для совместимости со старым E2E-flow, но не участвует в активной отправке/чтении сообщений.
 
 ### 14.2 Криптоконтур
 
-**Frontend** (`src/utils/crypto.js`):
-- ECDH P-256 (identity), AES-KW (обёртка ключа чата), AES-GCM (сообщения/файлы).
-- Приватный identity key шифруется паролем пользователя (PBKDF2 + AES-GCM) и хранится на сервере только в зашифрованном виде.
+Messenger uses server-side AES-256-GCM encryption. Old E2E key bundles are no longer part of the active messenger flow.
 
-**Backend recovery** (`server/services/messengerRecovery.js`):
-- Приватный ключ также шифруется серверным recovery-секретом (`MESSENGER_RECOVERY_SECRET` или `JWT_SECRET`) через AES-256-GCM.
-- Recovery-ключ позволяет серверу перешифровать связку при смене пароля: администратором через `/api/admin/users/:id` или пользователем через `/api/auth/change-password`.
-- Сервер **не расшифровывает** содержимое сообщений и файлов чата; хранит ciphertext + iv.
+- Клиент отправляет/получает plain payload через REST/WS, а сервер шифрует `messages.encrypted_text`, `messages.encrypted_meta` и файлы перед записью.
+- `MESSENGER_ENCRYPTION_SECRET` — обязательный production-секрет минимум 32 символа.
+- Password change больше не требует перешифровки E2E-bundle.
+- Push payload не содержит текст сообщения; уведомление открывает `/app/messenger`.
 
 **Синхронизация доступа** (`server/services/chatAccessSync.js`):
-- При изменении прав пользователя (роль, `all_clients_access`, `client_assignments`) сервер автоматически добавляет / удаляет участника из чатов и перешифровывает chat-ключи через Node.js WebCrypto.
+- При изменении прав пользователя (роль, `all_clients_access`, `client_assignments`) сервер автоматически добавляет / удаляет участника из чатов.
+
+**Локальный cache/offline**:
+- `src/utils/messengerCache.js` хранит последние 30 дней сообщений, открытые файлы и pending queue в IndexedDB с user-scoped ключами.
+- `src/context/MessengerContext.jsx` восстанавливает pending-сообщения после перезагрузки и повторяет отправку после reconnect/online.
 
 ### 14.3 Ограничения и права (клиентская роль)
 

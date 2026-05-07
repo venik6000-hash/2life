@@ -4,7 +4,8 @@ const path     = require("path");
 const fs       = require("fs");
 const { v4: uuidv4 } = require("uuid");
 const { requireAuth } = require("../middleware/auth");
-const { encryptPrivateKeyForRecovery, publicJwkFromRecovery } = require("../services/messengerRecovery");
+const { encryptText, decryptText, encryptJson, decryptJson, encryptBuffer, decryptBuffer } = require("../services/messengerCrypto");
+const { createSyncEvent, listSyncEventsForUser, upsertMessengerDevice, removeMessengerDevice } = require("../services/messengerStore");
 const { pool, hasAllClientsAccess, getAssignmentsByUser,
   createChat, getChatById, getChatsByUser, updateChatMeta, setChatPinned,
   addChatParticipant, removeChatParticipant, getChatParticipants, getChatParticipantsForChats,
@@ -12,7 +13,6 @@ const { pool, hasAllClientsAccess, getAssignmentsByUser,
   insertMessage, getMessageById, updateMessageContent, deleteMessageForAll, hideMessageForUser, getMessages,
   upsertReceipt, getReceiptsByChat, getReceiptsForChats,
   insertChatFile, getChatFile,
-  upsertPublicKey, getPublicKey,
   listUsers,
 } = require("../services/db");
 const {
@@ -20,6 +20,7 @@ const {
   syncChatParticipantsByClientAccess,
   userHasClientAccess,
 } = require("../services/chatAccessSync");
+const { sendPrivateMessagePush } = require("../services/messengerPush");
 const { broadcastToChat, sendTo } = require("../services/ws");
 const { ensureDir } = require("../services/storage");
 
@@ -58,36 +59,51 @@ const syncUserChatAccessCached = async (userId) => {
 };
 
 const hasText = (value) => String(value || "").trim() !== "";
-const hasCompleteOwnKeyBundle = (row) => (
-  !!row &&
-  hasText(row.public_key_jwk) &&
-  hasText(row.encrypted_private_key_jwk) &&
-  hasText(row.key_derivation_salt) &&
-  hasText(row.key_derivation_iv)
-);
-const hasOwnEncryptedBundle = (row) => (
-  !!row &&
-  hasText(row.encrypted_private_key_jwk) &&
-  hasText(row.key_derivation_salt) &&
-  hasText(row.key_derivation_iv)
-);
-const hasRecoveryBundle = (row) => (
-  !!row &&
-  hasText(row.recovery_encrypted_private_key_jwk) &&
-  hasText(row.recovery_key_iv)
-);
 const sanitizeChatTitle = (value) => String(value || "").trim().slice(0, 80) || "Чат";
 const sanitizeChatIcon = (value) => String(value || "").trim().slice(0, 8);
+const isNonEmptyString = (value, maxLength = 2048) => (
+  typeof value === "string" && value.trim() !== "" && value.length <= maxLength
+);
+const optionalString = (body, key, maxLength) => {
+  if (!Object.prototype.hasOwnProperty.call(body, key)) return "";
+  if (body[key] == null) return null;
+  if (typeof body[key] !== "string" || body[key].length > maxLength) return null;
+  return body[key].trim();
+};
+
+const serializeMessage = (row) => {
+  let text = "";
+  let meta = {};
+  if (!row.deleted_for_all) {
+    try { text = row.encrypted_text ? decryptText(row.encrypted_text) : ""; } catch (_) { text = ""; }
+    try { meta = row.encrypted_meta ? decryptJson(row.encrypted_meta) : {}; } catch (_) { meta = {}; }
+  }
+  return {
+    id: row.id,
+    chat_id: row.chat_id,
+    sender_id: row.sender_id,
+    sender_username: row.sender_username,
+    sender_display_name: row.sender_display_name,
+    text,
+    meta,
+    msg_type: row.msg_type,
+    file_id: row.file_id,
+    client_message_id: row.client_message_id,
+    deleted_for_all: !!row.deleted_for_all,
+    created_at: row.created_at,
+    edited_at: row.edited_at || null,
+  };
+};
+
+const recordSyncEvent = (chatId, eventType, payload = {}, userId = null) => (
+  createSyncEvent(pool, { chatId, userId, eventType, payload }).catch(() => null)
+);
 
 // ── File upload setup ─────────────────────────────────────────────────────────
 const CHAT_UPLOADS_DIR = path.join(__dirname, "../uploads/chat");
 ensureDir(CHAT_UPLOADS_DIR);
 
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, CHAT_UPLOADS_DIR),
-  filename: (_req, _file, cb) => cb(null, `${uuidv4()}.enc`),
-});
-const upload = multer({ storage, limits: { fileSize: 50 * 1024 * 1024 } });
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -123,108 +139,6 @@ const requireParticipant = async (req, res, chatId) => {
   if (!ok) { res.status(403).json({ error: "Нет доступа к чату" }); return false; }
   return true;
 };
-
-// ── Crypto: public keys ───────────────────────────────────────────────────────
-
-// GET /api/crypto/keys  — own full key bundle (public + encrypted private)
-router.get("/crypto/keys", requireAuth(), async (req, res) => {
-  try {
-    const row = await getPublicKey(req.user.id);
-    if (!row || !hasOwnEncryptedBundle(row)) return res.json({ keys: null, recoveryReady: false });
-
-    if (!hasText(row.public_key_jwk) && hasRecoveryBundle(row)) {
-      try {
-        const recoveredPublicJwk = publicJwkFromRecovery(
-          row.recovery_encrypted_private_key_jwk,
-          row.recovery_key_iv
-        );
-        await upsertPublicKey(
-          req.user.id,
-          recoveredPublicJwk,
-          row.encrypted_private_key_jwk,
-          row.key_derivation_salt,
-          row.key_derivation_iv
-        );
-        row.public_key_jwk = recoveredPublicJwk;
-      } catch (_) {}
-    }
-
-    res.json({
-      keys: {
-        public_key_jwk: row.public_key_jwk,
-        encrypted_private_key_jwk: row.encrypted_private_key_jwk,
-        key_derivation_salt: row.key_derivation_salt,
-        key_derivation_iv: row.key_derivation_iv,
-      },
-      recoveryReady: hasRecoveryBundle(row),
-    });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// GET /api/crypto/keys/:userId  — another user's PUBLIC key only (no private data)
-router.get("/crypto/keys/:userId", requireAuth(), async (req, res) => {
-  try {
-    const targetUserId = Number(req.params.userId);
-    const row = await getPublicKey(targetUserId);
-    if (!row) return res.status(404).json({ error: "Ключ не найден" });
-
-    let publicKeyJwk = row.public_key_jwk;
-    if (!hasText(publicKeyJwk) && hasRecoveryBundle(row)) {
-      try {
-        publicKeyJwk = publicJwkFromRecovery(
-          row.recovery_encrypted_private_key_jwk,
-          row.recovery_key_iv
-        );
-        await upsertPublicKey(
-          targetUserId,
-          publicKeyJwk,
-          row.encrypted_private_key_jwk || "",
-          row.key_derivation_salt || "",
-          row.key_derivation_iv || ""
-        );
-      } catch (_) {
-        publicKeyJwk = "";
-      }
-    }
-
-    if (!hasText(publicKeyJwk)) return res.status(404).json({ error: "Ключ не найден" });
-    res.json({ publicKeyJwk });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// POST /api/crypto/keys  — store / update own key pair
-router.post("/crypto/keys", requireAuth(), async (req, res) => {
-  try {
-    const { publicKeyJwk, encryptedPrivateKeyJwk, keyDerivationSalt, keyDerivationIv, privateKeyJwk } = req.body;
-    if (!publicKeyJwk) return res.status(400).json({ error: "publicKeyJwk обязателен" });
-
-    let recoveryEncryptedPrivateKeyJwk = "";
-    let recoveryKeyIv = "";
-    if (privateKeyJwk) {
-      const privateKeyJwkStr = typeof privateKeyJwk === "string" ? privateKeyJwk : JSON.stringify(privateKeyJwk);
-      const recovery = encryptPrivateKeyForRecovery(privateKeyJwkStr);
-      recoveryEncryptedPrivateKeyJwk = recovery.recoveryEncryptedPrivateKeyJwk;
-      recoveryKeyIv = recovery.recoveryKeyIv;
-    }
-
-    await upsertPublicKey(
-      req.user.id,
-      typeof publicKeyJwk === "string" ? publicKeyJwk : JSON.stringify(publicKeyJwk),
-      encryptedPrivateKeyJwk || "",
-      keyDerivationSalt || "",
-      keyDerivationIv || "",
-      recoveryEncryptedPrivateKeyJwk,
-      recoveryKeyIv
-    );
-    res.json({ ok: true });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
 
 // ── Chats ─────────────────────────────────────────────────────────────────────
 
@@ -336,6 +250,7 @@ router.post("/chats", requireAuth(), async (req, res) => {
     if (!wantsInternal) {
       await syncChatParticipantsByClientAccess(pool, chat.id);
     }
+    await recordSyncEvent(chat.id, "chat_created", { chatId: chat.id });
 
     const chatParticipants = await getChatParticipants(chat.id);
     const receipts = await getReceiptsByChat(chat.id);
@@ -429,12 +344,14 @@ router.patch("/chats/:chatId", requireAuth(), async (req, res) => {
           client_id: nextChat.client_id,
         },
       };
+      await recordSyncEvent(chatId, "chat_updated", { chatId });
       await broadcastToChat(chatId, payload, null);
       sendTo(req.user.id, payload);
     }
 
     if (hasPinned) {
       await setChatPinned(chatId, req.user.id, !!body.isPinned);
+      await recordSyncEvent(chatId, "chat_updated", { chatId, userId: req.user.id });
       sendTo(req.user.id, {
         type: "chat_updated",
         chatId,
@@ -463,7 +380,7 @@ router.get("/chats/:chatId/messages", requireAuth(), async (req, res) => {
     const limit    = Math.min(Number(req.query.limit) || 50, 100);
 
     const msgs = await getMessages(chatId, req.user.id, beforeId, limit);
-    res.json({ messages: msgs });
+    res.json({ messages: msgs.map(serializeMessage) });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -475,18 +392,42 @@ router.post("/chats/:chatId/messages", requireAuth(), async (req, res) => {
     const chatId = Number(req.params.chatId);
     if (!(await requireParticipant(req, res, chatId))) return;
 
-    const { ciphertext, iv, msgType = "text", fileId } = req.body;
-    if (!ciphertext || !iv) return res.status(400).json({ error: "ciphertext и iv обязательны" });
+    const { text = "", meta = {}, msgType = "text", fileId = null, clientMessageId = "", deviceId = "" } = req.body || {};
+    if (!String(text).trim() && msgType === "text") return res.status(400).json({ error: "Сообщение пустое" });
 
-    const saved = await insertMessage(chatId, req.user.id, ciphertext, iv, msgType, fileId);
+    const saved = await insertMessage(
+      chatId,
+      req.user.id,
+      encryptText(text),
+      encryptJson(meta),
+      msgType,
+      fileId || null,
+      String(clientMessageId || "")
+    );
+    const message = serializeMessage({
+      ...saved,
+      sender_username: req.user.username,
+      sender_display_name: req.user.display_name || "",
+    });
 
     const payload = {
       type: "new_message",
-      message: { ...saved, sender_username: req.user.username },
+      message,
     };
-    await broadcastToChat(chatId, payload, null);
+    if (!saved.__existing) {
+      await createSyncEvent(pool, { chatId, eventType: "new_message", payload: { messageId: saved.id } });
+      await broadcastToChat(chatId, payload, null);
+      const [participants, chat] = await Promise.all([getChatParticipants(chatId), getChatById(chatId)]);
+      const targetUserIds = participants.map((p) => p.user_id).filter((id) => id !== req.user.id);
+      sendPrivateMessagePush({
+        userIds: targetUserIds,
+        chatTitle: chat?.title || "Чат",
+        url: `/app/messenger?chat=${chatId}`,
+        exceptDeviceId: String(deviceId || ""),
+      }).catch(() => {});
+    }
 
-    res.json({ message: saved });
+    res.json({ ok: true, message });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -499,8 +440,8 @@ router.patch("/chats/:chatId/messages/:messageId", requireAuth(), async (req, re
     const messageId = Number(req.params.messageId);
     if (!(await requireParticipant(req, res, chatId))) return;
 
-    const { ciphertext, iv } = req.body || {};
-    if (!ciphertext || !iv) return res.status(400).json({ error: "ciphertext и iv обязательны" });
+    const { text = "", meta = {} } = req.body || {};
+    if (!String(text).trim()) return res.status(400).json({ error: "Сообщение пустое" });
 
     const existing = await getMessageById(chatId, messageId);
     if (!existing) return res.status(404).json({ error: "Сообщение не найдено" });
@@ -510,29 +451,24 @@ router.patch("/chats/:chatId/messages/:messageId", requireAuth(), async (req, re
       return res.status(403).json({ error: "Можно редактировать только свои сообщения" });
     }
 
-    const updated = await updateMessageContent(chatId, messageId, ciphertext, iv);
+    const updated = await updateMessageContent(chatId, messageId, encryptText(text), encryptJson(meta));
     if (!updated) return res.status(404).json({ error: "Сообщение не найдено" });
+    await createSyncEvent(pool, { chatId, eventType: "message_edited", payload: { messageId } });
+    const message = serializeMessage({
+      ...updated,
+      sender_username: existing.sender_username,
+      sender_display_name: existing.sender_display_name || "",
+    });
 
     const payload = {
       type: "message_edited",
       chatId,
-      message: {
-        id: updated.id,
-        chat_id: updated.chat_id,
-        sender_id: updated.sender_id,
-        sender_username: existing.sender_username,
-        ciphertext: updated.ciphertext,
-        iv: updated.iv,
-        msg_type: updated.msg_type,
-        file_id: updated.file_id,
-        created_at: updated.created_at,
-        edited_at: updated.edited_at,
-      },
+      message,
     };
     await broadcastToChat(chatId, payload, null);
     sendTo(req.user.id, payload);
 
-    res.json({ message: payload.message });
+    res.json({ message });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -561,6 +497,7 @@ router.delete("/chats/:chatId/messages/:messageId", requireAuth(), async (req, r
       }
       const deleted = await deleteMessageForAll(chatId, messageId, req.user.id);
       if (!deleted) return res.status(404).json({ error: "Сообщение не найдено" });
+      await createSyncEvent(pool, { chatId, eventType: "message_deleted_all", payload: { messageId, userId: req.user.id } });
 
       const payload = { type: "message_deleted_all", chatId, messageId, userId: req.user.id };
       await broadcastToChat(chatId, payload, null);
@@ -587,6 +524,58 @@ router.post("/chats/:chatId/read", requireAuth(), async (req, res) => {
     await broadcastToChat(chatId, payload, null);
     sendTo(req.user.id, payload);
 
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.get("/messenger/sync", requireAuth(), async (req, res) => {
+  try {
+    const after = Number(req.query.after || 0);
+    if (!Number.isFinite(after) || after < 0) return res.status(400).json({ error: "Некорректный cursor" });
+    const events = await listSyncEventsForUser(req.user.id, after);
+    res.json({ ok: true, events, cursor: events.at(-1)?.id || after });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.post("/messenger/devices", requireAuth(), async (req, res) => {
+  try {
+    const body = req.body || {};
+    const { deviceId } = body;
+    const endpoint = optionalString(body, "endpoint", 4096);
+    const p256dh = optionalString(body, "p256dh", 512);
+    const auth = optionalString(body, "auth", 512);
+    if (!isNonEmptyString(deviceId, 160)) return res.status(400).json({ error: "deviceId обязателен" });
+    if (endpoint == null || p256dh == null || auth == null) return res.status(400).json({ error: "Некорректная push-подписка" });
+    if ((endpoint || p256dh || auth) && (!isNonEmptyString(endpoint, 4096) || !isNonEmptyString(p256dh, 512) || !isNonEmptyString(auth, 512))) {
+      return res.status(400).json({ error: "Некорректная push-подписка" });
+    }
+    const device = await upsertMessengerDevice(req.user.id, {
+      deviceId: deviceId.trim(),
+      endpoint: endpoint.trim(),
+      p256dh: p256dh.trim(),
+      auth: auth.trim(),
+      userAgent: req.headers["user-agent"] || "",
+    });
+    console.log("[messenger] push device registered", {
+      userId: req.user.id,
+      username: req.user.username,
+      deviceId: device.device_id,
+      endpointPrefix: device.endpoint.slice(0, 48),
+    });
+    res.json({ ok: true, deviceId: device.device_id });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.delete("/messenger/devices/:deviceId", requireAuth(), async (req, res) => {
+  try {
+    if (!isNonEmptyString(req.params.deviceId, 160)) return res.status(400).json({ error: "Некорректный deviceId" });
+    await removeMessengerDevice(req.user.id, req.params.deviceId.trim());
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -630,6 +619,7 @@ router.post("/chats/:chatId/participants", requireAuth(), async (req, res) => {
     await addChatParticipant(chatId, userId, "member", encryptedChatKey);
     const participants = await getChatParticipants(chatId);
     const receipts = await getReceiptsByChat(chatId);
+    await recordSyncEvent(chatId, "participant_added", { chatId, userId });
 
     // Notify all current participants (refresh participant list)
     const payload = { type: "participant_added", chatId, userId, participants };
@@ -679,6 +669,8 @@ router.delete("/chats/:chatId/participants/:userId", requireAuth(), async (req, 
 
     await removeChatParticipant(chatId, targetUserId);
     const participants = await getChatParticipants(chatId);
+    await recordSyncEvent(chatId, "participant_removed", { chatId, userId: targetUserId });
+    await recordSyncEvent(null, "participant_removed", { chatId, userId: targetUserId }, targetUserId);
 
     const payload = { type: "participant_removed", chatId, userId: targetUserId, participants };
     await broadcastToChat(chatId, payload, null);
@@ -700,19 +692,20 @@ router.post("/chats/:chatId/files", requireAuth(), upload.single("file"), async 
   try {
     const chatId = Number(req.params.chatId);
     if (!(await requireParticipant(req, res, chatId))) {
-      // Clean up uploaded file on auth failure
-      if (req.file) fs.unlink(req.file.path, () => {});
       return;
     }
     if (!req.file) return res.status(400).json({ error: "Файл не передан" });
 
     const fileId = uuidv4();
+    const storagePath = path.join(CHAT_UPLOADS_DIR, `${fileId}.enc`);
+    const encryptedPayload = encryptBuffer(req.file.buffer);
+    fs.writeFileSync(storagePath, encryptedPayload);
     const row = await insertChatFile(
       fileId, chatId, req.user.id,
       req.body.originalName || req.file.originalname || "file",
       req.body.mimeType || req.file.mimetype || "application/octet-stream",
       req.file.size,
-      req.file.path
+      storagePath
     );
 
     res.json({ file: row });
@@ -729,23 +722,24 @@ router.get("/chats/:chatId/files/:fileId", requireAuth(), async (req, res) => {
 
     const file = await getChatFile(req.params.fileId);
     if (!file || file.chat_id !== chatId) return res.status(404).json({ error: "Файл не найден" });
+    if (!fs.existsSync(file.storage_path)) return res.status(404).json({ error: "Файл не найден на диске" });
 
     const encodedOriginalName = encodeURIComponent(file.original_name || "file");
-    res.setHeader("Content-Type", "application/octet-stream");
+    let plain;
+    try {
+      const encryptedPayload = fs.readFileSync(file.storage_path, "utf8");
+      plain = decryptBuffer(encryptedPayload);
+    } catch (_) {
+      return res.status(422).json({ error: "Файл повреждён" });
+    }
+
+    res.setHeader("Content-Type", file.mime_type || "application/octet-stream");
     res.setHeader("Content-Disposition", `attachment; filename="${encodedOriginalName}"`);
     res.setHeader("X-Original-Mime", file.mime_type);
     // Keep this header ASCII-only to avoid Node.js header validation errors.
     res.setHeader("X-Original-Name", encodedOriginalName);
 
-    const stream = fs.createReadStream(file.storage_path);
-    stream.on("error", () => {
-      if (!res.headersSent) {
-        res.status(404).json({ error: "Файл не найден на диске" });
-      } else {
-        res.destroy();
-      }
-    });
-    stream.pipe(res);
+    res.send(plain);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
