@@ -1235,6 +1235,40 @@ const hideMessageForUser = async (messageId, userId) => {
   );
 };
 
+const getMessagesByIds = async (chatId, ids) => {
+  if (!ids || ids.length === 0) return [];
+  const r = await pool.query(
+    `SELECT id, sender_id, deleted_for_all FROM messages WHERE chat_id = $1 AND id = ANY($2::int[])`,
+    [chatId, ids]
+  );
+  return r.rows;
+};
+
+const deleteMessagesForAllBulk = async (chatId, ids, deletedBy) => {
+  const r = await pool.query(
+    `UPDATE messages
+       SET deleted_for_all = true,
+           deleted_for_all_at = NOW(),
+           deleted_by = $3
+     WHERE chat_id = $1 AND id = ANY($2::int[]) AND deleted_for_all = false
+     RETURNING id`,
+    [chatId, ids, deletedBy]
+  );
+  return r.rows.map((row) => row.id);
+};
+
+const hideMessagesForUserBulk = async (userId, ids) => {
+  if (!ids || ids.length === 0) return 0;
+  const r = await pool.query(
+    `INSERT INTO message_hidden_for_users (message_id, user_id)
+     SELECT id, $1 FROM unnest($2::int[]) AS id
+     ON CONFLICT (message_id, user_id) DO NOTHING
+     RETURNING message_id`,
+    [userId, ids]
+  );
+  return r.rows.length;
+};
+
 // ─── Sub-project A: pin helpers ──────────────────────────────────────────────
 
 const PIN_FOR_ALL_LIMIT = 5;
@@ -1486,6 +1520,7 @@ module.exports = {
   addChatParticipant, removeChatParticipant, getChatParticipants, getChatParticipantsForChats, isParticipant, getParticipantRole,
   // messenger: messages
   insertMessage, getMessageById, updateMessageContent, deleteMessageForAll, hideMessageForUser, getMessages,
+  getMessagesByIds, deleteMessagesForAllBulk, hideMessagesForUserBulk,
   PIN_FOR_ALL_LIMIT, PIN_FOR_ME_LIMIT,
   countPinnedForAll, pinMessageForAll, unpinMessageForAll, listPinnedForAll,
   countPinnedForUser, pinMessageForUser, unpinMessageForUser, listPinnedForUser,
