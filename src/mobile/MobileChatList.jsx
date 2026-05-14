@@ -97,6 +97,10 @@ export default function MobileChatList({ onOpenChat, onOpenSettings, onOpenSearc
         )}
         {filtered.map(({ chat, last }) => {
           const unread = getUnreadCount(chat, messages, user);
+          const hasUnreadMention = ((messages[chat.id] || [])).some((m) => {
+            const lastRead = (chat.receipts || []).find((r) => r.user_id === user?.id)?.last_read_message_id || 0;
+            return m.id > lastRead && m.sender_id !== user?.id && Array.isArray(m.meta?.mentionedUserIds) && m.meta.mentionedUserIds.includes(user?.id);
+          });
           return (
             <button
               key={chat.id}
@@ -124,6 +128,9 @@ export default function MobileChatList({ onOpenChat, onOpenSettings, onOpenSearc
                   <strong style={{ fontSize: 16, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", letterSpacing: 0, fontWeight: unread > 0 ? 800 : 700 }}>{chat.title || "Чат"}</strong>
                   <span style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
                     {last && <span style={{ color: unread > 0 ? $.ac : $.txS, fontSize: 11 }}>{fmtTime(last.created_at)}</span>}
+                    {hasUnreadMention && (
+                      <span style={{ minWidth: 18, height: 18, borderRadius: 9, background: $.ac, color: "#fff", fontSize: 11, fontWeight: 700, display: "grid", placeItems: "center", padding: "0 5px" }}>@</span>
+                    )}
                     {unread > 0 && (
                       <span style={{ minWidth: 22, height: 22, padding: "0 7px", borderRadius: 999, background: $.ac, color: "#fff", display: "grid", placeItems: "center", fontSize: 12, fontWeight: 800, lineHeight: 1 }}>
                         {unread > 99 ? "99+" : unread}
