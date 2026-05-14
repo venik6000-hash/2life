@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { useAuth } from "../context/AuthContext";
 import { useTheme } from "../context/ThemeContext";
 import { useMessenger } from "../context/MessengerContext";
@@ -31,29 +31,29 @@ export default function MobileChatList({ onOpenChat, onOpenSettings, onOpenSearc
   const { chats, activeChatId, setActiveChatId, messages, wsConnected, chatsLoaded } = useMessenger();
   const [query, setQuery] = useState("");
   const [chatAction, setChatAction] = useState(null); // { x, y, chatId } | null
+  const lpTimer = useRef(null);
+  const lpStartX = useRef(0);
+  const lpStartY = useRef(0);
 
-  const chatLongPressHandlers = (chat) => {
-    let timer = null;
-    let startX = 0;
-    let startY = 0;
-    return {
-      onPointerDown: (e) => {
-        startX = e.clientX; startY = e.clientY;
-        timer = window.setTimeout(() => {
-          if (navigator.vibrate) navigator.vibrate(10);
-          setChatAction({ x: e.clientX, y: e.clientY, chatId: chat.id });
-        }, LONG_PRESS_MS);
-      },
-      onPointerMove: (e) => {
-        if (Math.abs(e.clientX - startX) > MOVE_TOLERANCE || Math.abs(e.clientY - startY) > MOVE_TOLERANCE) {
-          window.clearTimeout(timer);
-        }
-      },
-      onPointerUp: () => { window.clearTimeout(timer); },
-      onPointerCancel: () => { window.clearTimeout(timer); },
-      onContextMenu: (e) => { e.preventDefault(); },
-    };
-  };
+  const makeHandlers = useCallback((chat) => ({
+    onPointerDown: (e) => {
+      lpStartX.current = e.clientX;
+      lpStartY.current = e.clientY;
+      lpTimer.current = window.setTimeout(() => {
+        if (navigator.vibrate) navigator.vibrate(10);
+        setChatAction({ x: lpStartX.current, y: lpStartY.current, chatId: chat.id });
+      }, LONG_PRESS_MS);
+    },
+    onPointerMove: (e) => {
+      if (Math.abs(e.clientX - lpStartX.current) > MOVE_TOLERANCE ||
+          Math.abs(e.clientY - lpStartY.current) > MOVE_TOLERANCE) {
+        window.clearTimeout(lpTimer.current);
+      }
+    },
+    onPointerUp: () => window.clearTimeout(lpTimer.current),
+    onPointerCancel: () => window.clearTimeout(lpTimer.current),
+    onContextMenu: (e) => e.preventDefault(),
+  }), []);
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -133,7 +133,7 @@ export default function MobileChatList({ onOpenChat, onOpenSettings, onOpenSearc
               key={chat.id}
               type="button"
               onClick={() => { setActiveChatId(chat.id); onOpenChat(); }}
-              {...chatLongPressHandlers(chat)}
+              {...makeHandlers(chat)}
               style={{
                 width: "100%",
                 minHeight: 74,

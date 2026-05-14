@@ -10,7 +10,10 @@ import MessengerMentionPicker from "../components/MessengerMentionPicker";
 import MobileChatSearchOverlay from "./MobileChatSearchOverlay";
 import { fmtDate } from "../utils/messengerUiUtils";
 
-export default function MobileChatThread({ onBack }) {
+const LONG_PRESS_MS = 400;
+const MOVE_TOLERANCE = 8;
+
+export default function MobileChatThread({ onBack, pendingScrollId }) {
   const { user } = useAuth();
   const { $ } = useTheme();
   const {
@@ -54,6 +57,9 @@ export default function MobileChatThread({ onBack }) {
   const bottomRef = useRef(null);
   const textareaRef = useRef(null);
   const messageRefs = useRef(new Map());
+  const lpTimer = useRef(null);
+  const lpStartX = useRef(0);
+  const lpStartY = useRef(0);
 
   const activeChat = chats.find((chat) => chat.id === activeChatId) || null;
   const msgList = messages[activeChatId] || [];
@@ -70,6 +76,17 @@ export default function MobileChatThread({ onBack }) {
     const last = msgList[msgList.length - 1];
     if (last && last.sender_id !== user?.id) markRead(activeChatId, last.id);
   }, [activeChatId, markRead, msgList, user?.id]);
+
+  useEffect(() => {
+    const id = pendingScrollId?.current;
+    if (!id) return;
+    pendingScrollId.current = null;
+    const t = setTimeout(() => {
+      const el = messageRefs.current.get(id);
+      el?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 150);
+    return () => clearTimeout(t);
+  }, [pendingScrollId]);
 
   const grouped = useMemo(() => {
     const items = [];
@@ -101,31 +118,25 @@ export default function MobileChatThread({ onBack }) {
     return ids;
   };
 
-  const LONG_PRESS_MS = 400;
-  const MOVE_TOLERANCE = 8;
-
-  const longPressHandlers = (msg) => {
-    let timer = null;
-    let startX = 0;
-    let startY = 0;
-    return {
-      onPointerDown: (e) => {
-        startX = e.clientX; startY = e.clientY;
-        timer = window.setTimeout(() => {
-          if (navigator.vibrate) navigator.vibrate(10);
-          setCtx({ x: startX, y: startY, msg });
-        }, LONG_PRESS_MS);
-      },
-      onPointerMove: (e) => {
-        if (Math.abs(e.clientX - startX) > MOVE_TOLERANCE || Math.abs(e.clientY - startY) > MOVE_TOLERANCE) {
-          window.clearTimeout(timer);
-        }
-      },
-      onPointerUp: () => { window.clearTimeout(timer); },
-      onPointerCancel: () => { window.clearTimeout(timer); },
-      onContextMenu: (e) => { e.preventDefault(); },
-    };
-  };
+  const makeLongPressHandlers = useCallback((msg) => ({
+    onPointerDown: (e) => {
+      lpStartX.current = e.clientX;
+      lpStartY.current = e.clientY;
+      lpTimer.current = window.setTimeout(() => {
+        if (navigator.vibrate) navigator.vibrate(10);
+        setCtx({ x: lpStartX.current, y: lpStartY.current, msg });
+      }, LONG_PRESS_MS);
+    },
+    onPointerMove: (e) => {
+      if (Math.abs(e.clientX - lpStartX.current) > MOVE_TOLERANCE ||
+          Math.abs(e.clientY - lpStartY.current) > MOVE_TOLERANCE) {
+        window.clearTimeout(lpTimer.current);
+      }
+    },
+    onPointerUp: () => window.clearTimeout(lpTimer.current),
+    onPointerCancel: () => window.clearTimeout(lpTimer.current),
+    onContextMenu: (e) => e.preventDefault(),
+  }), []);
 
   const handleSend = async () => {
     const trimmed = text.trim();
@@ -315,7 +326,7 @@ export default function MobileChatThread({ onBack }) {
         ) : (
           <div
             key={item.msg.id || item.msg.client_message_id}
-            {...longPressHandlers(item.msg)}
+            {...makeLongPressHandlers(item.msg)}
             ref={(el) => { if (el) messageRefs.current.set(item.msg.id, el); else messageRefs.current.delete(item.msg.id); }}
           >
             <MessageBubble

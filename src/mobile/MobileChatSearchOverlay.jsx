@@ -10,13 +10,16 @@ export default function MobileChatSearchOverlay({ chatId, onClose, onJumpToMessa
   const [index, setIndex] = useState(0);
 
   useEffect(() => {
+    let cancelled = false;
     const t = setTimeout(async () => {
       if (q.trim().length < 2) { setMatches([]); return; }
       const r = await searchInChat(chatId, q.trim());
-      setMatches(r.matches || []);
-      setIndex(0);
+      if (!cancelled) {
+        setMatches(r.matches || []);
+        setIndex(0);
+      }
     }, 300);
-    return () => clearTimeout(t);
+    return () => { cancelled = true; clearTimeout(t); };
   }, [q, chatId, searchInChat]);
 
   return (

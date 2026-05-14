@@ -10,14 +10,17 @@ export default function MobileSearchScreen({ onBack, onSelectChat }) {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
+    let cancelled = false;
     const t = setTimeout(async () => {
       if (q.trim().length < 2) { setGroups([]); return; }
       setBusy(true);
       const r = await searchGlobal(q.trim());
-      setGroups(r.groups || []);
-      setBusy(false);
+      if (!cancelled) {
+        setGroups(r.groups || []);
+        setBusy(false);
+      }
     }, 300);
-    return () => clearTimeout(t);
+    return () => { cancelled = true; clearTimeout(t); };
   }, [q, searchGlobal]);
 
   return (

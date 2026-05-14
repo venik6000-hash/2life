@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMessenger } from "../context/MessengerContext";
 import MobileChatList from "./MobileChatList";
 import MobileChatThread from "./MobileChatThread";
@@ -11,6 +11,7 @@ import MessengerIosInstallBanner, { shouldShowIosInstallBanner } from "../compon
 export default function MobileMessengerShell() {
   const { activeChatId, setActiveChatId, loadChats, ready } = useMessenger();
   const [view, setView] = useState("chats");
+  const pendingScrollId = useRef(null);
   const [showPushPrompt, setShowPushPrompt] = useState(false);
   const [showIosBanner, setShowIosBanner] = useState(false);
   const [bookmarksChatId, setBookmarksChatId] = useState(null);
@@ -47,11 +48,14 @@ export default function MobileMessengerShell() {
         <MobileBookmarksScreen
           chatId={bookmarksChatId ?? activeChatId}
           onBack={() => setView("thread")}
-          onJumpToMessage={() => { setView("thread"); }}
+          onJumpToMessage={(messageId) => {
+            pendingScrollId.current = messageId;
+            setView("thread");
+          }}
         />
       )}
       {view === "thread" && activeChatId && (
-        <MobileChatThread onBack={() => setView("chats")} />
+        <MobileChatThread onBack={() => setView("chats")} pendingScrollId={pendingScrollId} />
       )}
       {(view === "chats" || (view === "thread" && !activeChatId)) && (
         <MobileChatList
