@@ -9,6 +9,13 @@
     "dev:server": "npm --prefix server run dev",
     "verify:messenger-unread": "node scripts/verifyMessengerUnread.mjs",
     "verify:messenger-push-client": "node scripts/verifyMessengerPushClient.mjs",
+    "verify:messenger-pin": "node scripts/verifyMessengerPin.mjs",
+    "verify:messenger-reply": "node scripts/verifyMessengerReply.mjs",
+    "verify:messenger-bulk": "node scripts/verifyMessengerBulk.mjs",
+    "verify:messenger-search": "node scripts/verifyMessengerSearch.mjs",
+    "verify:messenger-mention": "node scripts/verifyMessengerMention.mjs",
+    "verify:messenger-settings": "node scripts/verifyMessengerSettings.mjs",
+    "verify:messenger-all": "npm run verify:messenger-unread && npm run verify:messenger-push-client && npm run verify:messenger-pin && npm run verify:messenger-reply && npm run verify:messenger-bulk && npm run verify:messenger-search && npm run verify:messenger-mention && npm run verify:messenger-settings",
     "build": "vite build",
     "preview": "vite preview"
   },
