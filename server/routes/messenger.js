@@ -14,6 +14,9 @@ const { pool, hasAllClientsAccess, getAssignmentsByUser,
   upsertReceipt, getReceiptsByChat, getReceiptsForChats,
   insertChatFile, getChatFile,
   listUsers,
+  PIN_FOR_ALL_LIMIT, PIN_FOR_ME_LIMIT,
+  countPinnedForAll, pinMessageForAll, unpinMessageForAll, listPinnedForAll,
+  countPinnedForUser, pinMessageForUser, unpinMessageForUser, listPinnedForUser,
 } = require("../services/db");
 const {
   syncUserChatAccessByClientPermissions,
@@ -506,6 +509,131 @@ router.delete("/chats/:chatId/messages/:messageId", requireAuth(), async (req, r
     }
 
     return res.status(400).json({ error: "Недопустимый scope. Используйте self или all" });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/chats/:chatId/messages/:messageId/pin — pin for all in chat
+router.post("/chats/:chatId/messages/:messageId/pin", requireAuth(), async (req, res) => {
+  try {
+    const chatId = Number(req.params.chatId);
+    const messageId = Number(req.params.messageId);
+    if (!(await requireParticipant(req, res, chatId))) return;
+
+    const existing = await getMessageById(chatId, messageId);
+    if (!existing) return res.status(404).json({ error: "Сообщение не найдено" });
+    if (existing.deleted_for_all) return res.status(400).json({ error: "Сообщение удалено" });
+    if (existing.pinned_at) return res.json({ ok: true, alreadyPinned: true });
+
+    const count = await countPinnedForAll(chatId);
+    if (count >= PIN_FOR_ALL_LIMIT) {
+      return res.status(409).json({ error: "PIN_LIMIT_REACHED", limit: PIN_FOR_ALL_LIMIT });
+    }
+
+    const pinned = await pinMessageForAll(chatId, messageId);
+    if (!pinned) return res.status(404).json({ error: "Не удалось закрепить" });
+
+    const payload = { type: "message_pinned", chatId, messageId, pinnedAt: pinned.pinned_at };
+    await createSyncEvent(pool, { chatId, eventType: "message_pinned", payload: { messageId } });
+    await broadcastToChat(chatId, payload, null);
+    sendTo(req.user.id, payload);
+
+    res.json({ ok: true, messageId, pinnedAt: pinned.pinned_at });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// DELETE /api/chats/:chatId/messages/:messageId/pin — unpin for all
+router.delete("/chats/:chatId/messages/:messageId/pin", requireAuth(), async (req, res) => {
+  try {
+    const chatId = Number(req.params.chatId);
+    const messageId = Number(req.params.messageId);
+    if (!(await requireParticipant(req, res, chatId))) return;
+
+    const ok = await unpinMessageForAll(chatId, messageId);
+    if (!ok) return res.json({ ok: true, wasPinned: false });
+
+    const payload = { type: "message_unpinned", chatId, messageId };
+    await createSyncEvent(pool, { chatId, eventType: "message_unpinned", payload: { messageId } });
+    await broadcastToChat(chatId, payload, null);
+    sendTo(req.user.id, payload);
+
+    res.json({ ok: true, wasPinned: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/chats/:chatId/messages/:messageId/pin-for-me — personal pin
+router.post("/chats/:chatId/messages/:messageId/pin-for-me", requireAuth(), async (req, res) => {
+  try {
+    const chatId = Number(req.params.chatId);
+    const messageId = Number(req.params.messageId);
+    if (!(await requireParticipant(req, res, chatId))) return;
+
+    const existing = await getMessageById(chatId, messageId);
+    if (!existing) return res.status(404).json({ error: "Сообщение не найдено" });
+    if (existing.deleted_for_all) return res.status(400).json({ error: "Сообщение удалено" });
+
+    const count = await countPinnedForUser(chatId, req.user.id);
+    if (count >= PIN_FOR_ME_LIMIT) {
+      return res.status(409).json({ error: "PERSONAL_PIN_LIMIT_REACHED", limit: PIN_FOR_ME_LIMIT });
+    }
+
+    const pinned = await pinMessageForUser(req.user.id, messageId);
+    await createSyncEvent(pool, {
+      chatId, userId: req.user.id,
+      eventType: "personal_pin_added",
+      payload: { messageId, userId: req.user.id }
+    });
+    sendTo(req.user.id, { type: "personal_pin_added", chatId, messageId });
+    res.json({ ok: true, messageId, pinnedAt: pinned?.pinned_at ?? null });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// DELETE /api/chats/:chatId/messages/:messageId/pin-for-me
+router.delete("/chats/:chatId/messages/:messageId/pin-for-me", requireAuth(), async (req, res) => {
+  try {
+    const chatId = Number(req.params.chatId);
+    const messageId = Number(req.params.messageId);
+    if (!(await requireParticipant(req, res, chatId))) return;
+
+    const ok = await unpinMessageForUser(req.user.id, messageId);
+    await createSyncEvent(pool, {
+      chatId, userId: req.user.id,
+      eventType: "personal_pin_removed",
+      payload: { messageId, userId: req.user.id }
+    });
+    sendTo(req.user.id, { type: "personal_pin_removed", chatId, messageId });
+    res.json({ ok: true, wasPinned: ok });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/chats/:chatId/pinned — top-5 for-all pins (newest first)
+router.get("/chats/:chatId/pinned", requireAuth(), async (req, res) => {
+  try {
+    const chatId = Number(req.params.chatId);
+    if (!(await requireParticipant(req, res, chatId))) return;
+    const rows = await listPinnedForAll(chatId, PIN_FOR_ALL_LIMIT);
+    res.json({ messages: rows.map(serializeMessage) });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/chats/:chatId/pinned-for-me — personal pins for this user
+router.get("/chats/:chatId/pinned-for-me", requireAuth(), async (req, res) => {
+  try {
+    const chatId = Number(req.params.chatId);
+    if (!(await requireParticipant(req, res, chatId))) return;
+    const rows = await listPinnedForUser(chatId, req.user.id, PIN_FOR_ME_LIMIT);
+    res.json({ messages: rows.map(serializeMessage) });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
