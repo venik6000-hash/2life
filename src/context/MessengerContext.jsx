@@ -469,10 +469,18 @@ export function MessengerProvider({ children }) {
           )));
         }
         break;
+      case "message_pinned":
+      case "message_unpinned":
+        loadPinnedForAll(event.chatId).catch(() => {});
+        break;
+      case "personal_pin_added":
+      case "personal_pin_removed":
+        loadPinnedForMe(event.chatId).catch(() => {});
+        break;
       default:
         break;
     }
-  }, [clearRemovedChatLocalState, clearRetryTimer, persistPendingQueue, removeMessage, upsertMessage, user?.id]);
+  }, [clearRemovedChatLocalState, clearRetryTimer, loadPinnedForAll, loadPinnedForMe, persistPendingQueue, removeMessage, upsertMessage, user?.id]);
 
   useEffect(() => {
     if (!token || !user) return undefined;
@@ -653,6 +661,54 @@ export function MessengerProvider({ children }) {
     }));
   }, [authFetch, user?.id]);
 
+  const loadPinnedForAll = useCallback(async (chatId) => {
+    try {
+      const { messages: pinned } = await MessengerApi.listPinnedForAll(authFetch, chatId);
+      setPinnedForAll((prev) => ({ ...prev, [chatId]: pinned.map((m) => normalizeMessage(m, chatId)) }));
+    } catch {}
+  }, [authFetch]);
+
+  const loadPinnedForMe = useCallback(async (chatId) => {
+    try {
+      const { messages: pinned } = await MessengerApi.listPinnedForMe(authFetch, chatId);
+      setPinnedForMe((prev) => ({ ...prev, [chatId]: pinned.map((m) => normalizeMessage(m, chatId)) }));
+    } catch {}
+  }, [authFetch]);
+
+  const pinForAll = useCallback(async (chatId, messageId) => {
+    try {
+      await MessengerApi.pinForAll(authFetch, chatId, messageId);
+      await loadPinnedForAll(chatId);
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  }, [authFetch, loadPinnedForAll]);
+
+  const unpinForAll = useCallback(async (chatId, messageId) => {
+    try {
+      await MessengerApi.unpinForAll(authFetch, chatId, messageId);
+      await loadPinnedForAll(chatId);
+      return { ok: true };
+    } catch (e) { return { ok: false, error: e.message }; }
+  }, [authFetch, loadPinnedForAll]);
+
+  const pinForMe = useCallback(async (chatId, messageId) => {
+    try {
+      await MessengerApi.pinForMe(authFetch, chatId, messageId);
+      await loadPinnedForMe(chatId);
+      return { ok: true };
+    } catch (e) { return { ok: false, error: e.message }; }
+  }, [authFetch, loadPinnedForMe]);
+
+  const unpinForMe = useCallback(async (chatId, messageId) => {
+    try {
+      await MessengerApi.unpinForMe(authFetch, chatId, messageId);
+      await loadPinnedForMe(chatId);
+      return { ok: true };
+    } catch (e) { return { ok: false, error: e.message }; }
+  }, [authFetch, loadPinnedForMe]);
+
   const createNewChat = useCallback(async (payload, legacyTitle, legacyParticipantUserIds) => {
     const normalized = payload && typeof payload === "object" && !Array.isArray(payload)
       ? payload
@@ -787,6 +843,12 @@ export function MessengerProvider({ children }) {
   useEffect(() => {
     syncMessengerRef.current = syncMessenger;
   }, [syncMessenger]);
+
+  useEffect(() => {
+    if (!activeChatId) return;
+    loadPinnedForAll(activeChatId);
+    loadPinnedForMe(activeChatId);
+  }, [activeChatId, loadPinnedForAll, loadPinnedForMe]);
 
   const registerDevice = useCallback(async (payload) => {
     const data = await MessengerApi.registerDevice(authFetch, payload);
