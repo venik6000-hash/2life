@@ -562,6 +562,23 @@ const initSchema = async () => {
     await pool.query("UPDATE messages SET deleted_for_all = false WHERE deleted_for_all IS NULL");
   } catch (_) {}
 
+  // ─── Sub-project A: messenger telegram-parity ───────────────────────────────
+  try { await pool.query("ALTER TABLE messages ADD COLUMN pinned_at TIMESTAMPTZ"); } catch (_) {}
+  try { await pool.query("ALTER TABLE messages ADD COLUMN reply_to_message_id INTEGER REFERENCES messages(id) ON DELETE SET NULL"); } catch (_) {}
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS message_pinned_for_users (
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+        pinned_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (user_id, message_id)
+      )
+    `);
+  } catch (_) {}
+  try { await pool.query("CREATE INDEX IF NOT EXISTS idx_msg_chat_pinned ON messages(chat_id, pinned_at) WHERE pinned_at IS NOT NULL"); } catch (_) {}
+  try { await pool.query("CREATE INDEX IF NOT EXISTS idx_msg_reply_to ON messages(reply_to_message_id) WHERE reply_to_message_id IS NOT NULL"); } catch (_) {}
+  try { await pool.query("CREATE INDEX IF NOT EXISTS idx_mpf_user ON message_pinned_for_users(user_id)"); } catch (_) {}
+
 };
 
 // ─── Users ──────────────────────────────────────────────────────────────────
