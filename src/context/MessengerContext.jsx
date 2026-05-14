@@ -970,6 +970,41 @@ export function MessengerProvider({ children }) {
     }
   }, [authFetch]);
 
+  const searchInChat = useCallback(async (chatId, q, before = null) => {
+    try { return await MessengerApi.searchInChat(authFetch, chatId, q, before); }
+    catch (e) { return { matches: [], done: true, error: e.message }; }
+  }, [authFetch]);
+
+  const searchGlobal = useCallback(async (q, before = null) => {
+    try { return await MessengerApi.searchGlobal(authFetch, q, before); }
+    catch (e) { return { groups: [], done: true, error: e.message }; }
+  }, [authFetch]);
+
+  const updateDisplayName = useCallback(async (displayName) => {
+    try {
+      const result = await MessengerApi.updateDisplayName(authFetch, displayName);
+      return { ok: true, ...result };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  }, [authFetch]);
+
+  const setFontSize = useCallback((size) => {
+    const safe = ["S", "M", "L"].includes(size) ? size : "M";
+    setFontSizeState(safe);
+    localStorage.setItem("messenger_font_size", safe);
+  }, []);
+
+  const listDevices = useCallback(async () => {
+    try { return (await MessengerApi.listDevices(authFetch))?.devices || []; }
+    catch { return []; }
+  }, [authFetch]);
+
+  const revokeDevice = useCallback(async (deviceId) => {
+    try { return await MessengerApi.removeDevice(authFetch, deviceId); }
+    catch (e) { return { ok: false, error: e.message }; }
+  }, [authFetch]);
+
   const clearLocalCache = useCallback(async () => {
     cacheResetVersionRef.current += 1;
     for (const entry of retryTimersRef.current.values()) window.clearTimeout(entry?.timer || entry);
