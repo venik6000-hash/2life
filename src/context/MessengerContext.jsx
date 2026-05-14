@@ -502,11 +502,24 @@ export function MessengerProvider({ children }) {
     };
   }, [getTicket, handleWsEvent, token, user]);
 
-  const sendMsg = useCallback(async (chatId, text) => {
+  const setReplyTarget = useCallback((chatId, message) => {
+    setReplyTargets((prev) => ({ ...prev, [chatId]: message || null }));
+  }, []);
+
+  const clearReplyTarget = useCallback((chatId) => {
+    setReplyTargets((prev) => ({ ...prev, [chatId]: null }));
+  }, []);
+
+  const sendMsg = useCallback(async (chatId, text, options = {}) => {
     const trimmed = String(text || "").trim();
     if (!trimmed) return false;
-    return sendPayload(chatId, { text: trimmed, meta: {}, msgType: "text" });
-  }, [sendPayload]);
+    const payload = { text: trimmed, meta: {}, msgType: "text" };
+    if (options.replyToMessageId) payload.replyToMessageId = options.replyToMessageId;
+    if (options.mentionedUserIds?.length) payload.mentionedUserIds = options.mentionedUserIds;
+    const result = await sendPayload(chatId, payload);
+    if (options.replyToMessageId) clearReplyTarget(chatId);
+    return result;
+  }, [sendPayload, clearReplyTarget]);
 
   const uploadFile = useCallback(async (chatId, file) => {
     const form = new FormData();
