@@ -138,6 +138,19 @@ router.get("/auth/me", requireAuth(), async (req, res) => {
   }
 });
 
+// PATCH /api/auth/me — self-update display_name (only)
+router.patch("/auth/me", requireAuth(), async (req, res) => {
+  try {
+    const raw = req.body?.displayName;
+    if (typeof raw !== "string") return res.status(400).json({ error: "displayName обязателен" });
+    const next = raw.trim().slice(0, 80);
+    await pool.query("UPDATE users SET display_name = $1 WHERE id = $2", [next, req.user.id]);
+    res.json({ ok: true, displayName: next });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // POST /api/auth/sse-ticket — одноразовый тикет для SSE-соединения (30 сек TTL)
 router.post("/auth/sse-ticket", requireAuth(), (req, res) => {
   const { createTicket } = require("../services/sseTickets");
