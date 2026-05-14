@@ -16,6 +16,13 @@
       ::-webkit-scrollbar { width: 6px; }
       ::-webkit-scrollbar-track { background: transparent; }
       ::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+      .messenger-highlight {
+        animation: messenger-highlight-flash 1200ms ease-out;
+      }
+      @keyframes messenger-highlight-flash {
+        0%   { background: rgba(255, 220, 100, 0.45); }
+        100% { background: transparent; }
+      }
     </style>
   </head>
   <body>

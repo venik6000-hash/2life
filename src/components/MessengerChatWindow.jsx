@@ -1,11 +1,14 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useTheme } from "../context/ThemeContext";
+import { useMessenger } from "../context/MessengerContext";
 import Button from "./Button";
 import EmojiPicker from "./EmojiPicker";
 import MessageBubble from "./MessageBubble";
 import MessengerContextMenu from "./MessengerContextMenu";
 import MessengerForwardModal from "./MessengerForwardModal";
 import MessengerImageViewer from "./MessengerImageViewer";
+import MessengerMentionPicker from "./MessengerMentionPicker";
+import MessengerPinBar from "./MessengerPinBar";
 import TextArea from "./TextArea";
 import { fmtDate, parseBundleFiles, isImageLike } from "../utils/messengerUiUtils";
 
@@ -16,6 +19,15 @@ export default function MessengerChatWindow({
   updateChatSettings,
 }) {
   const { $ } = useTheme();
+  const {
+    pinnedForAll, pinnedForMe, replyTargets, selectionMode, selectedIds,
+    pinForAll, unpinForAll, pinForMe, unpinForMe,
+    setReplyTarget, clearReplyTarget,
+    enterSelectionMode, exitSelectionMode, toggleSelection,
+    bulkDelete,
+    searchInChat,
+  } = useMessenger();
+
   const [text, setText] = useState("");
   const [showEmoji, setShowEmoji] = useState(false);
   const [sending, setSending] = useState(false);
@@ -25,13 +37,37 @@ export default function MessengerChatWindow({
   const [actionError, setActionError] = useState("");
   const [metaBusy, setMetaBusy] = useState(false);
   const [imageViewer, setImageViewer] = useState(null);
+  const [pinCycleIndex, setPinCycleIndex] = useState(0);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState([]);
+  const [searchIndex, setSearchIndex] = useState(0);
+  const [mentionQuery, setMentionQuery] = useState(null);
+
   const bottomRef = useRef(null);
   const fileRef = useRef(null);
+  const textareaRef = useRef(null);
+  const messageRefs = useRef(new Map());
   const imageViewerUrlRef = useRef("");
   const imageViewerReqRef = useRef(0);
   const imageViewerStateRef = useRef(null);
   const msgList = messages[chat.id] || [];
   const chatReceipts = chat.receipts || [];
+
+  const chatPins = pinnedForAll[chat?.id] || [];
+
+  const onJumpToMessage = useCallback((messageId) => {
+    const el = messageRefs.current.get(messageId);
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    el.classList.add("messenger-highlight");
+    setTimeout(() => el.classList.remove("messenger-highlight"), 1200);
+  }, []);
+
+  const findMessageById = useCallback((id) => {
+    const list = messages[chat?.id] || [];
+    return list.find((m) => m.id === id) || null;
+  }, [messages, chat?.id]);
 
   const imageGallery = useMemo(() => {
     const items = [];
@@ -77,6 +113,17 @@ export default function MessengerChatWindow({
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { imageViewerStateRef.current = imageViewer; }, [imageViewer]);
+
+  useEffect(() => {
+    if (!searchOpen) { setSearchResults([]); return; }
+    const t = setTimeout(async () => {
+      if (searchQuery.trim().length < 2) { setSearchResults([]); return; }
+      const result = await searchInChat(chat.id, searchQuery.trim());
+      setSearchResults(result.matches || []);
+      setSearchIndex(0);
+    }, 300);
+    return () => clearTimeout(t);
+  }, [searchOpen, searchQuery, chat?.id, searchInChat]);
 
   const closeImageViewer = useCallback(() => {
     imageViewerReqRef.current += 1;
@@ -147,15 +194,51 @@ export default function MessengerChatWindow({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [imageViewer, navigateImageViewer]);
 
+  const parseMentions = (textValue, participants) => {
+    const ids = [];
+    for (const p of participants || []) {
+      const name = p.display_name || p.username;
+      if (!name) continue;
+      const re = new RegExp(`@${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?=\\s|$|[^\\w-])`);
+      if (re.test(textValue)) ids.push(p.user_id);
+    }
+    return ids;
+  };
+
+  const handleInputChange = (e) => {
+    const value = e.target.value;
+    setText(value);
+    const cursor = e.target.selectionStart;
+    const before = value.slice(0, cursor);
+    const match = before.match(/(?:^|\s)@(\S*)$/);
+    setMentionQuery(match ? match[1] : null);
+  };
+
+  const pickMention = (participant) => {
+    const cursor = textareaRef.current?.selectionStart ?? text.length;
+    const before = text.slice(0, cursor).replace(/@\S*$/, "");
+    const after = text.slice(cursor);
+    const insertion = `@${participant.display_name || participant.username} `;
+    setText(before + insertion + after);
+    setMentionQuery(null);
+  };
+
   const handleSend = async () => {
     const trimmed = text.trim();
     if (!trimmed || sending) return;
     setSending(true);
     setActionError("");
     let ok = false;
-    if (editTarget?.id) { ok = await editMsg(chat.id, editTarget.id, trimmed); }
-    else { ok = await sendMsg(chat.id, trimmed); }
-    if (ok) { setText(""); setEditTarget(null); }
+    if (editTarget?.id) {
+      ok = await editMsg(chat.id, editTarget.id, trimmed);
+    } else {
+      const mentioned = parseMentions(trimmed, chat?.participants || []);
+      const options = {};
+      if (replyTargets[chat?.id]) options.replyToMessageId = replyTargets[chat.id].id;
+      if (mentioned.length > 0) options.mentionedUserIds = mentioned;
+      ok = await sendMsg(chat.id, trimmed, options);
+    }
+    if (ok) { setText(""); setEditTarget(null); setMentionQuery(null); }
     else { setActionError(editTarget ? "Не удалось отредактировать сообщение" : "Не удалось отправить сообщение"); }
     setSending(false);
   };
@@ -243,26 +326,91 @@ export default function MessengerChatWindow({
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
-      {/* Header */}
-      <div style={{ padding: "10px 16px", borderBottom: `1px solid ${$.brd}`, display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
-        <div style={{ flex: 1 }}>
-          <div style={{ fontWeight: 700, fontSize: 14, display: "flex", alignItems: "center", gap: 8 }}>
-            <span style={{ fontSize: 16, lineHeight: 1 }}>{chat.icon || (chat.is_internal ? "💬" : "👤")}</span>
-            <span>{chat.title}</span>
-            {chat.is_pinned && <span style={{ fontSize: 12, color: $.ac }}>📌</span>}
-          </div>
-          <div style={{ fontSize: 11, color: $.txM }}>
-            {(chat.participants || []).map((p) => p.display_name || p.username).join(", ")}
-          </div>
+      {/* Selection action bar */}
+      {selectionMode && (
+        <div style={{
+          display: "flex", alignItems: "center", gap: 8, padding: "10px 14px",
+          borderBottom: `1px solid ${$.brd}`, background: $.bgC, flexShrink: 0,
+        }}>
+          <button type="button" onClick={exitSelectionMode}
+                  style={{ border: "none", background: "transparent", color: $.tx, fontSize: 20, cursor: "pointer" }}>←</button>
+          <div style={{ flex: 1, fontWeight: 600 }}>Выбрано: {selectedIds.length}</div>
+          <button type="button"
+            onClick={async () => {
+              if (selectedIds.length === 0) return;
+              const choice = window.confirm(`Удалить ${selectedIds.length} сообщ. у всех? (Отмена = у себя)`);
+              const scope = choice ? "all" : "self";
+              const result = await bulkDelete(chat.id, selectedIds, scope);
+              if (!result.ok && result.error?.includes?.("BULK_DELETE_FORBIDDEN")) {
+                alert("Нельзя удалить чужие сообщения у всех.");
+              }
+            }}
+            style={{ height: 36, padding: "0 12px", borderRadius: 8, border: `1px solid ${$.brd}`, background: $.bgC, color: $.tx, cursor: "pointer" }}>
+            Удалить
+          </button>
         </div>
-        <Button variant="pill" tone="accent" size="sm" active={chat.is_pinned} onClick={handleTogglePin} disabled={metaBusy} title={chat.is_pinned ? "Открепить чат" : "Закрепить чат"}>📌</Button>
-        {canEditInternalChat && (
-          <Button variant="ghost" size="sm" onClick={handleEditInternalMeta} disabled={metaBusy} title="Изменить имя и иконку">✎</Button>
-        )}
-        <Button variant="soft" tone="accent" size="sm" onClick={() => setShowParticipants(!showParticipants)} title="Участники">
-          👥 {(chat.participants || []).length}
-        </Button>
-      </div>
+      )}
+
+      {/* Header */}
+      {!selectionMode && (
+        searchOpen ? (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, padding: 10, borderBottom: `1px solid ${$.brd}`, flexShrink: 0 }}>
+            <input
+              autoFocus
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Поиск в чате..."
+              style={{ flex: 1, height: 36, padding: "0 12px", border: `1px solid ${$.brd}`, borderRadius: 8, background: $.bg, color: $.tx }}
+            />
+            <div style={{ fontSize: 12, color: $.txS, minWidth: 60 }}>
+              {searchResults.length > 0 ? `${searchIndex + 1}/${searchResults.length}` : "—"}
+            </div>
+            <button type="button" disabled={searchResults.length === 0}
+                    onClick={() => { const n = (searchIndex - 1 + searchResults.length) % searchResults.length; setSearchIndex(n); onJumpToMessage(searchResults[n].messageId); }}>↑</button>
+            <button type="button" disabled={searchResults.length === 0}
+                    onClick={() => { const n = (searchIndex + 1) % searchResults.length; setSearchIndex(n); onJumpToMessage(searchResults[n].messageId); }}>↓</button>
+            <button type="button" onClick={() => { setSearchOpen(false); setSearchQuery(""); setSearchResults([]); }}>×</button>
+          </div>
+        ) : (
+          <div style={{ padding: "10px 16px", borderBottom: `1px solid ${$.brd}`, display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 700, fontSize: 14, display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontSize: 16, lineHeight: 1 }}>{chat.icon || (chat.is_internal ? "💬" : "👤")}</span>
+                <span>{chat.title}</span>
+                {chat.is_pinned && <span style={{ fontSize: 12, color: $.ac }}>📌</span>}
+              </div>
+              <div style={{ fontSize: 11, color: $.txM }}>
+                {(chat.participants || []).map((p) => p.display_name || p.username).join(", ")}
+              </div>
+            </div>
+            <button type="button" onClick={() => setSearchOpen(true)}
+                    style={{ width: 36, height: 36, borderRadius: 8, border: "none", background: "transparent", color: $.tx, cursor: "pointer", fontSize: 16 }}>🔍</button>
+            <Button variant="pill" tone="accent" size="sm" active={chat.is_pinned} onClick={handleTogglePin} disabled={metaBusy} title={chat.is_pinned ? "Открепить чат" : "Закрепить чат"}>📌</Button>
+            {canEditInternalChat && (
+              <Button variant="ghost" size="sm" onClick={handleEditInternalMeta} disabled={metaBusy} title="Изменить имя и иконку">✎</Button>
+            )}
+            <Button variant="soft" tone="accent" size="sm" onClick={() => setShowParticipants(!showParticipants)} title="Участники">
+              👥 {(chat.participants || []).length}
+            </Button>
+          </div>
+        )
+      )}
+
+      {/* PinBar */}
+      {chatPins.length > 0 && (
+        <MessengerPinBar
+          pinnedMessages={chatPins}
+          currentIndex={pinCycleIndex}
+          onClickNext={() => {
+            if (chatPins.length === 0) return;
+            const target = chatPins[pinCycleIndex];
+            if (target) onJumpToMessage(target.id);
+            setPinCycleIndex((i) => (i + 1) % chatPins.length);
+          }}
+          onUnpin={(id) => unpinForAll(chat.id, id)}
+          canUnpin={true}
+        />
+      )}
 
       {/* Messages */}
       <div style={{ flex: 1, overflowY: "auto", padding: "14px 16px", display: "flex", flexDirection: "column" }}>
@@ -279,20 +427,30 @@ export default function MessengerChatWindow({
             </div>
           )
           : (
-            <MessageBubble
+            <div
               key={item.msg.id}
-              msg={item.msg}
-              isMine={item.msg.sender_id === user.id}
-              chatReceipts={chatReceipts}
-              participants={chat.participants}
-              currentUserId={user.id}
-              chatId={chat.id}
-              downloadFile={downloadFile}
-              downloadFiles={downloadFiles}
-              getFileUrl={getFileUrl}
-              onOpenImage={openImageViewer}
-              onContextMenu={(e, msg) => { e.preventDefault(); setContextMenu({ x: e.clientX, y: e.clientY, msg }); }}
-            />
+              ref={(el) => { if (el) messageRefs.current.set(item.msg.id, el); else messageRefs.current.delete(item.msg.id); }}
+              onClick={(e) => { if (selectionMode) { toggleSelection(item.msg.id); e.preventDefault(); } }}
+            >
+              <MessageBubble
+                msg={item.msg}
+                isMine={item.msg.sender_id === user.id}
+                chatReceipts={chatReceipts}
+                participants={chat.participants}
+                currentUserId={user.id}
+                chatId={chat.id}
+                downloadFile={downloadFile}
+                downloadFiles={downloadFiles}
+                getFileUrl={getFileUrl}
+                onOpenImage={openImageViewer}
+                onContextMenu={(e, msg) => { e.preventDefault(); setContextMenu({ x: e.clientX, y: e.clientY, msg }); }}
+                replyToMessage={item.msg.reply_to_message_id ? findMessageById(item.msg.reply_to_message_id) : null}
+                onJumpToMessage={onJumpToMessage}
+                selectionMode={selectionMode}
+                isSelected={selectedIds.includes(item.msg.id)}
+                onToggleSelection={toggleSelection}
+              />
+            </div>
           )
         )}
         <div ref={bottomRef} />
@@ -308,15 +466,45 @@ export default function MessengerChatWindow({
             <Button variant="bare" tone="danger" size="xs" onClick={() => { setEditTarget(null); setText(""); }}>Отмена</Button>
           </div>
         )}
+
+        {/* Reply preview */}
+        {replyTargets[chat?.id] && (
+          <div style={{
+            display: "flex", alignItems: "center", gap: 10,
+            padding: "8px 12px", borderTop: `1px solid ${$.brd}`, background: $.bgC,
+            marginBottom: 8, borderRadius: 8,
+          }}>
+            <div style={{ width: 3, height: 32, background: $.ac, borderRadius: 2 }} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: $.ac }}>Ответ на:</div>
+              <div style={{ fontSize: 12, color: $.txS, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {replyTargets[chat.id].text?.slice(0, 80) || "[файл]"}
+              </div>
+            </div>
+            <button type="button" onClick={() => clearReplyTarget(chat.id)}
+                    style={{ border: "none", background: "transparent", color: $.txS, fontSize: 18, cursor: "pointer" }}
+                    aria-label="Отменить ответ">×</button>
+          </div>
+        )}
+
         <div style={{ display: "flex", gap: 8, alignItems: "flex-end", position: "relative" }}>
           {showEmoji && <EmojiPicker onPick={(em) => { setText((t) => t + em); setShowEmoji(false); }} />}
           <Button variant="bare" tone="neutral" size="icon" onClick={() => setShowEmoji(!showEmoji)}>😊</Button>
           <Button variant="bare" tone="neutral" size="icon" onClick={() => fileRef.current?.click()} title="Прикрепить файлы">📎</Button>
           <input ref={fileRef} type="file" multiple style={{ display: "none" }} onChange={handleFile} />
-          <div style={{ flex: 1 }}>
+          <div style={{ flex: 1, position: "relative" }}>
+            {mentionQuery !== null && (
+              <MessengerMentionPicker
+                participants={chat?.participants || []}
+                query={mentionQuery}
+                onPick={pickMention}
+                currentUserId={user?.id}
+              />
+            )}
             <TextArea
+              inputRef={textareaRef}
               value={text}
-              onChange={(e) => setText(e.target.value)}
+              onChange={handleInputChange}
               onKeyDown={handleKey}
               placeholder={editTarget ? "Измените сообщение..." : "Сообщение... (Enter — отправить, Shift+Enter — новая строка)"}
               rows={1}
@@ -348,10 +536,22 @@ export default function MessengerChatWindow({
           y={contextMenu.y}
           canEdit={canEdit}
           canDeleteForAll={canDeleteForAll}
+          msgType={contextMenu.msg?.msg_type}
+          onReply={() => { setReplyTarget(chat.id, contextMenu.msg); setContextMenu(null); }}
           onForward={() => { setContextMenu(null); setForwardTarget(contextMenu.msg); }}
           onEdit={() => handleStartEdit(contextMenu.msg)}
           onDeleteSelf={() => handleDelete(contextMenu.msg, "self")}
           onDeleteAll={() => handleDelete(contextMenu.msg, "all")}
+          onPinForAll={() => { pinForAll(chat.id, contextMenu.msg.id); setContextMenu(null); }}
+          onUnpinForAll={() => { unpinForAll(chat.id, contextMenu.msg.id); setContextMenu(null); }}
+          onPinForMe={() => { pinForMe(chat.id, contextMenu.msg.id); setContextMenu(null); }}
+          onUnpinForMe={() => { unpinForMe(chat.id, contextMenu.msg.id); setContextMenu(null); }}
+          isPinnedForAll={!!contextMenu.msg?.pinned_at}
+          isPinnedForMe={(pinnedForMe[chat?.id] || []).some((m) => m.id === contextMenu.msg?.id)}
+          canPinForAll={chatPins.length < 5}
+          canPinForMe={(pinnedForMe[chat?.id] || []).length < 5}
+          onCopy={() => { navigator.clipboard?.writeText(contextMenu.msg?.text || ""); setContextMenu(null); }}
+          onEnterSelection={() => { enterSelectionMode(contextMenu.msg?.id); setContextMenu(null); }}
         />
       )}
 
