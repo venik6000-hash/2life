@@ -1,5 +1,6 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTheme } from "../context/ThemeContext";
+import { useMessenger } from "../context/MessengerContext";
 import { fmtTime, isImageLike, parseBundleFiles } from "../utils/messengerUiUtils";
 import { getUnreadCount } from "../utils/messengerUnread";
 
@@ -13,7 +14,21 @@ export default function MessengerChatList({
   canCreateChat,
 }) {
   const { $ } = useTheme();
+  const { searchGlobal } = useMessenger();
   const [creating, setCreating] = useState(false);
+  const [globalSearchOpen, setGlobalSearchOpen] = useState(false);
+  const [globalQuery, setGlobalQuery] = useState("");
+  const [globalGroups, setGlobalGroups] = useState([]);
+
+  useEffect(() => {
+    if (!globalSearchOpen) { setGlobalGroups([]); return; }
+    const t = setTimeout(async () => {
+      if (globalQuery.trim().length < 2) { setGlobalGroups([]); return; }
+      const result = await searchGlobal(globalQuery.trim());
+      setGlobalGroups(result.groups || []);
+    }, 300);
+    return () => clearTimeout(t);
+  }, [globalQuery, globalSearchOpen, searchGlobal]);
 
   const handleCreate = async () => {
     if (!canCreateChat || creating) return;
@@ -102,6 +117,51 @@ export default function MessengerChatList({
         )}
       </div>
 
+      {/* Global search bar */}
+      <div style={{ padding: 10, borderBottom: `1px solid ${$.brd}` }}>
+        {globalSearchOpen ? (
+          <div style={{ display: "flex", gap: 8 }}>
+            <input
+              autoFocus
+              value={globalQuery}
+              onChange={(e) => setGlobalQuery(e.target.value)}
+              placeholder="Поиск по всем чатам..."
+              style={{ flex: 1, height: 34, padding: "0 10px", border: `1px solid ${$.brd}`, borderRadius: 8, background: $.bg, color: $.tx }}
+            />
+            <button type="button" onClick={() => { setGlobalSearchOpen(false); setGlobalQuery(""); setGlobalGroups([]); }}>×</button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setGlobalSearchOpen(true)}
+            style={{ width: "100%", height: 34, borderRadius: 8, border: `1px solid ${$.brd}`, background: $.bg, color: $.txS, textAlign: "left", padding: "0 10px", cursor: "pointer" }}
+          >
+            🔍 Поиск по сообщениям
+          </button>
+        )}
+      </div>
+
+      {/* Global search results */}
+      {globalSearchOpen && globalGroups.length > 0 && (
+        <div style={{ borderBottom: `1px solid ${$.brd}`, padding: "4px 0", maxHeight: 360, overflowY: "auto" }}>
+          {globalGroups.map((g) => (
+            <div key={g.chatId} style={{ padding: "6px 12px" }}>
+              <div style={{ fontWeight: 700, fontSize: 12, color: $.txS, marginBottom: 4 }}>{g.chatTitle}</div>
+              {g.matches.map((m) => (
+                <button
+                  key={m.messageId}
+                  type="button"
+                  onClick={() => { setActiveChatId?.(g.chatId); setGlobalSearchOpen(false); }}
+                  style={{ display: "block", width: "100%", textAlign: "left", padding: "6px 8px", border: "none", background: "transparent", color: $.tx, cursor: "pointer", borderRadius: 6, fontSize: 12 }}
+                >
+                  {m.snippet}
+                </button>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+
       <div style={{ flex: 1, overflowY: "auto" }}>
         {chats.length === 0 && (
           <div style={{ padding: 16, fontSize: 12, color: $.txM, textAlign: "center" }}>
@@ -113,6 +173,14 @@ export default function MessengerChatList({
           const chatMessages = messages[chat.id] || [];
           const lastMessage = chatMessages[chatMessages.length - 1];
           const icon = chat.icon || (chat.is_internal ? "💬" : "👤");
+
+          // Check for unread mention
+          const hasUnreadMention = (() => {
+            const list = chatMessages;
+            const lastRead = (chat.receipts || []).find((r) => r.user_id === user?.id)?.last_read_message_id || 0;
+            return list.some((m) => m.id > lastRead && m.sender_id !== user?.id && Array.isArray(m.meta?.mentionedUserIds) && m.meta.mentionedUserIds.includes(user?.id));
+          })();
+
           return (
             <div
               key={chat.id}
@@ -135,7 +203,12 @@ export default function MessengerChatList({
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }}>
                   {lastMessage && <span style={{ fontSize: 10, color: $.txM }}>{fmtTime(lastMessage.created_at)}</span>}
-                  {unread > 0 && <span style={{ background: $.ac, color: "#fff", borderRadius: 10, fontSize: 10, fontWeight: 700, padding: "1px 6px", minWidth: 18, textAlign: "center" }}>{unread}</span>}
+                  <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                    {hasUnreadMention && (
+                      <span style={{ minWidth: 18, height: 18, borderRadius: 9, background: $.ac, color: "#fff", fontSize: 11, fontWeight: 700, display: "grid", placeItems: "center", padding: "0 5px" }}>@</span>
+                    )}
+                    {unread > 0 && <span style={{ background: $.ac, color: "#fff", borderRadius: 10, fontSize: 10, fontWeight: 700, padding: "1px 6px", minWidth: 18, textAlign: "center" }}>{unread}</span>}
+                  </div>
                 </div>
               </div>
               <div style={{ fontSize: 11, color: $.txM, marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
