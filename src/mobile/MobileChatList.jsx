@@ -22,7 +22,7 @@ function lastMessagePreview(message) {
   return text.length > 70 ? `${text.slice(0, 70)}...` : text;
 }
 
-export default function MobileChatList({ onOpenChat, onOpenSettings }) {
+export default function MobileChatList({ onOpenChat, onOpenSettings, onOpenSearch }) {
   const { $ } = useTheme();
   const { user } = useAuth();
   const { chats, activeChatId, setActiveChatId, messages, wsConnected, chatsLoaded } = useMessenger();
@@ -61,14 +61,24 @@ export default function MobileChatList({ onOpenChat, onOpenSettings }) {
               {wsConnected ? "online" : "offline"}
             </div>
           </div>
-          <button
-            type="button"
-            onClick={onOpenSettings}
-            aria-label="Настройки"
-            style={{ minWidth: 44, height: 44, borderRadius: 12, border: `1px solid ${$.brd}`, background: $.bgC, color: $.tx, fontSize: 20 }}
-          >
-            ⚙
-          </button>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              type="button"
+              onClick={onOpenSearch}
+              aria-label="Поиск"
+              style={{ minWidth: 44, height: 44, borderRadius: 12, border: `1px solid ${$.brd}`, background: $.bgC, color: $.tx, fontSize: 20 }}
+            >
+              🔍
+            </button>
+            <button
+              type="button"
+              onClick={onOpenSettings}
+              aria-label="Настройки"
+              style={{ minWidth: 44, height: 44, borderRadius: 12, border: `1px solid ${$.brd}`, background: $.bgC, color: $.tx, fontSize: 20 }}
+            >
+              ⚙
+            </button>
+          </div>
         </div>
         <input
           value={query}
