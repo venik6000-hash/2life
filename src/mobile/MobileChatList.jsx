@@ -22,11 +22,38 @@ function lastMessagePreview(message) {
   return text.length > 70 ? `${text.slice(0, 70)}...` : text;
 }
 
-export default function MobileChatList({ onOpenChat, onOpenSettings, onOpenSearch }) {
+const LONG_PRESS_MS = 400;
+const MOVE_TOLERANCE = 8;
+
+export default function MobileChatList({ onOpenChat, onOpenSettings, onOpenSearch, onOpenBookmarks }) {
   const { $ } = useTheme();
   const { user } = useAuth();
   const { chats, activeChatId, setActiveChatId, messages, wsConnected, chatsLoaded } = useMessenger();
   const [query, setQuery] = useState("");
+  const [chatAction, setChatAction] = useState(null); // { x, y, chatId } | null
+
+  const chatLongPressHandlers = (chat) => {
+    let timer = null;
+    let startX = 0;
+    let startY = 0;
+    return {
+      onPointerDown: (e) => {
+        startX = e.clientX; startY = e.clientY;
+        timer = window.setTimeout(() => {
+          if (navigator.vibrate) navigator.vibrate(10);
+          setChatAction({ x: e.clientX, y: e.clientY, chatId: chat.id });
+        }, LONG_PRESS_MS);
+      },
+      onPointerMove: (e) => {
+        if (Math.abs(e.clientX - startX) > MOVE_TOLERANCE || Math.abs(e.clientY - startY) > MOVE_TOLERANCE) {
+          window.clearTimeout(timer);
+        }
+      },
+      onPointerUp: () => { window.clearTimeout(timer); },
+      onPointerCancel: () => { window.clearTimeout(timer); },
+      onContextMenu: (e) => { e.preventDefault(); },
+    };
+  };
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -106,6 +133,7 @@ export default function MobileChatList({ onOpenChat, onOpenSettings, onOpenSearc
               key={chat.id}
               type="button"
               onClick={() => { setActiveChatId(chat.id); onOpenChat(); }}
+              {...chatLongPressHandlers(chat)}
               style={{
                 width: "100%",
                 minHeight: 74,
@@ -146,6 +174,18 @@ export default function MobileChatList({ onOpenChat, onOpenSettings, onOpenSearc
           );
         })}
       </section>
+
+      {chatAction && (
+        <>
+          <div onClick={() => setChatAction(null)} style={{ position: "fixed", inset: 0, zIndex: 9998 }} />
+          <div style={{ position: "fixed", top: chatAction.y, left: chatAction.x, width: 180, background: $.bgC, border: `1px solid ${$.brd}`, borderRadius: 10, padding: 6, zIndex: 9999 }}>
+            <button type="button" onClick={() => { onOpenBookmarks?.(chatAction.chatId); setChatAction(null); }}
+                    style={{ width: "100%", textAlign: "left", padding: "9px 12px", background: "none", border: "none", color: $.tx, borderRadius: 6, fontSize: 13, cursor: "pointer" }}>
+              Закладки
+            </button>
+          </div>
+        </>
+      )}
     </main>
   );
 }

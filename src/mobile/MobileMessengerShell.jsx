@@ -13,6 +13,7 @@ export default function MobileMessengerShell() {
   const [view, setView] = useState("chats");
   const [showPushPrompt, setShowPushPrompt] = useState(false);
   const [showIosBanner, setShowIosBanner] = useState(false);
+  const [bookmarksChatId, setBookmarksChatId] = useState(null);
 
   useEffect(() => {
     if (ready) loadChats();
@@ -44,7 +45,7 @@ export default function MobileMessengerShell() {
       )}
       {view === "bookmarks" && (
         <MobileBookmarksScreen
-          chatId={activeChatId}
+          chatId={bookmarksChatId ?? activeChatId}
           onBack={() => setView("thread")}
           onJumpToMessage={() => { setView("thread"); }}
         />
@@ -57,6 +58,7 @@ export default function MobileMessengerShell() {
           onOpenChat={() => setView("thread")}
           onOpenSettings={() => setView("settings")}
           onOpenSearch={() => setView("search")}
+          onOpenBookmarks={(chatId) => { setBookmarksChatId(chatId); setView("bookmarks"); }}
         />
       )}
     </>
