@@ -21,6 +21,8 @@ const call = async (path, method = "GET", body = null) => {
 // Send 2 own messages
 const a = await call(`/api/chats/${CHAT_ID}/messages`, "POST", { text: "bulk a", clientMessageId: `bulk-a-${Date.now()}` });
 const b = await call(`/api/chats/${CHAT_ID}/messages`, "POST", { text: "bulk b", clientMessageId: `bulk-b-${Date.now()}` });
+assert.equal(a.status, 200, "send message a should succeed");
+assert.equal(b.status, 200, "send message b should succeed");
 
 // Mixed selection (own + foreign), scope=all → expect 403 atomic reject
 const mixed = await call(`/api/chats/${CHAT_ID}/messages/bulk-delete`, "POST", {

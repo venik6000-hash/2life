@@ -6,21 +6,16 @@ const CHAT_ID = Number(process.env.SMOKE_CHAT_ID);
 
 if (!TOKEN || !CHAT_ID) { console.log("set MESSENGER_TEST_TOKEN, SMOKE_CHAT_ID"); process.exit(0); }
 
-const call = async (path) => {
-  const res = await fetch(`${BASE}${path}`, { headers: { Authorization: `Bearer ${TOKEN}` } });
-  return { status: res.status, data: await res.json().catch(() => null) };
-};
-
-const post = async (path, body) => {
+const call = async (path, method = "GET", body = null) => {
   const res = await fetch(`${BASE}${path}`, {
-    method: "POST", headers: { Authorization: `Bearer ${TOKEN}`, "Content-Type": "application/json" },
-    body: JSON.stringify(body),
+    method, headers: { Authorization: `Bearer ${TOKEN}`, "Content-Type": "application/json" },
+    body: body ? JSON.stringify(body) : undefined,
   });
   return { status: res.status, data: await res.json().catch(() => null) };
 };
 
 const needle = `marker-${Date.now()}`;
-const send = await post(`/api/chats/${CHAT_ID}/messages`, { text: `hello ${needle} world`, clientMessageId: needle });
+const send = await call(`/api/chats/${CHAT_ID}/messages`, "POST", { text: `hello ${needle} world`, clientMessageId: needle });
 assert.equal(send.status, 200);
 
 // In-chat search

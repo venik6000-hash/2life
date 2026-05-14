@@ -11,23 +11,23 @@ if (!TOKEN || !CHAT_ID || !TARGET_USER_ID || !NON_PARTICIPANT_USER_ID) {
   process.exit(0);
 }
 
-const post = async (path, body) => {
+const call = async (path, method = "GET", body = null) => {
   const res = await fetch(`${BASE}${path}`, {
-    method: "POST", headers: { Authorization: `Bearer ${TOKEN}`, "Content-Type": "application/json" },
-    body: JSON.stringify(body),
+    method, headers: { Authorization: `Bearer ${TOKEN}`, "Content-Type": "application/json" },
+    body: body ? JSON.stringify(body) : undefined,
   });
   return { status: res.status, data: await res.json().catch(() => null) };
 };
 
 // Valid mention
-const ok = await post(`/api/chats/${CHAT_ID}/messages`, {
+const ok = await call(`/api/chats/${CHAT_ID}/messages`, "POST", {
   text: "hi @someone", mentionedUserIds: [TARGET_USER_ID], clientMessageId: `mention-ok-${Date.now()}`,
 });
 assert.equal(ok.status, 200);
 assert.deepEqual(ok.data.message.meta?.mentionedUserIds, [TARGET_USER_ID]);
 
 // Invalid mention (non-participant)
-const bad = await post(`/api/chats/${CHAT_ID}/messages`, {
+const bad = await call(`/api/chats/${CHAT_ID}/messages`, "POST", {
   text: "hi", mentionedUserIds: [NON_PARTICIPANT_USER_ID], clientMessageId: `mention-bad-${Date.now()}`,
 });
 assert.equal(bad.status, 400);

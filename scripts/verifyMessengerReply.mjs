@@ -29,11 +29,13 @@ assert.equal(reply.status, 200);
 assert.equal(reply.data.message.reply_to_message_id, parentId);
 
 // Delete parent for all (only works if you own it)
-await call(`/api/chats/${CHAT_ID}/messages/${parentId}?scope=all`, "DELETE");
+const del = await call(`/api/chats/${CHAT_ID}/messages/${parentId}?scope=all`, "DELETE");
+assert.equal(del.status, 200);
 
 // Re-fetch reply — reply_to_message_id should now be null (ON DELETE SET NULL)
 const fetched = await call(`/api/chats/${CHAT_ID}/messages?before=${reply.data.message.id + 1}&limit=20`);
 const found = fetched.data.messages.find((m) => m.id === reply.data.message.id);
+assert.ok(found, "reply message should still be in history");
 assert.equal(found.reply_to_message_id, null);
 
 console.log("messenger reply ok");

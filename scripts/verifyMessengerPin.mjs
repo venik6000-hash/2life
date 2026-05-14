@@ -48,7 +48,9 @@ for (const id of MSG_IDS.slice(0, 5)) {
 }
 const sixthMe = await call(`/api/chats/${CHAT_ID}/messages/${MSG_IDS[5]}/pin-for-me`, "POST");
 assert.equal(sixthMe.status, 409);
+assert.match(sixthMe.data?.error || "", /PIN_LIMIT_REACHED/);
 const listMe = await call(`/api/chats/${CHAT_ID}/pinned-for-me`);
+assert.equal(listMe.status, 200);
 assert.equal(listMe.data.messages.length, 5);
 for (const id of MSG_IDS.slice(0, 5)) {
   await call(`/api/chats/${CHAT_ID}/messages/${id}/pin-for-me`, "DELETE");

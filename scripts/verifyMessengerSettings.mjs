@@ -23,7 +23,8 @@ assert.equal(patch.status, 200);
 assert.match(patch.data.displayName, /^verify-/);
 
 // Restore
-await call(`/api/auth/me`, "PATCH", { displayName: original });
+const restore = await call(`/api/auth/me`, "PATCH", { displayName: original });
+assert.equal(restore.status, 200, "restore display name should succeed");
 
 // Devices list
 const devices = await call(`/api/messenger/devices`);
