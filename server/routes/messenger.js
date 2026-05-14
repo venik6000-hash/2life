@@ -11,6 +11,7 @@ const { pool, hasAllClientsAccess, getAssignmentsByUser,
   addChatParticipant, removeChatParticipant, getChatParticipants, getChatParticipantsForChats,
   isParticipant, getParticipantRole,
   insertMessage, getMessageById, updateMessageContent, deleteMessageForAll, hideMessageForUser, getMessages,
+  getMessagesByIds, deleteMessagesForAllBulk, hideMessagesForUserBulk,
   upsertReceipt, getReceiptsByChat, getReceiptsForChats,
   insertChatFile, getChatFile,
   listUsers,
@@ -648,6 +649,49 @@ router.delete("/chats/:chatId/messages/:messageId/pin-for-me", requireAuth(), as
     });
     sendTo(req.user.id, { type: "personal_pin_removed", chatId, messageId });
     res.json({ ok: true, wasPinned: ok });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/chats/:chatId/messages/bulk-delete
+// body: { ids: number[], scope: "self" | "all" }
+router.post("/chats/:chatId/messages/bulk-delete", requireAuth(), async (req, res) => {
+  try {
+    const chatId = Number(req.params.chatId);
+    if (!(await requireParticipant(req, res, chatId))) return;
+
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(Number).filter((n) => Number.isInteger(n) && n > 0) : [];
+    const scope = String(req.body?.scope || "all");
+    if (ids.length === 0) return res.status(400).json({ error: "Передайте ids" });
+    if (ids.length > 100) return res.status(400).json({ error: "Слишком много сообщений (max 100)" });
+
+    if (scope === "self") {
+      const hidden = await hideMessagesForUserBulk(req.user.id, ids);
+      sendTo(req.user.id, { type: "messages_deleted_self_bulk", chatId, messageIds: ids });
+      return res.json({ ok: true, scope: "self", hidden });
+    }
+
+    if (scope === "all") {
+      const rows = await getMessagesByIds(chatId, ids);
+      if (rows.length !== ids.length) {
+        return res.status(404).json({ error: "Некоторые сообщения не найдены", missingIds: ids.filter((id) => !rows.find((r) => r.id === id)) });
+      }
+      const denied = rows.filter((r) => r.sender_id !== req.user.id && req.user.role !== "admin").map((r) => r.id);
+      if (denied.length > 0 && req.user.role !== "admin") {
+        return res.status(403).json({ error: "BULK_DELETE_FORBIDDEN", deniedIds: denied });
+      }
+      const deletedIds = await deleteMessagesForAllBulk(chatId, ids, req.user.id);
+      for (const id of deletedIds) {
+        const payload = { type: "message_deleted_all", chatId, messageId: id, userId: req.user.id };
+        await createSyncEvent(pool, { chatId, eventType: "message_deleted_all", payload: { messageId: id, userId: req.user.id } });
+        await broadcastToChat(chatId, payload, null);
+        sendTo(req.user.id, payload);
+      }
+      return res.json({ ok: true, scope: "all", deletedIds });
+    }
+
+    return res.status(400).json({ error: "Недопустимый scope" });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
