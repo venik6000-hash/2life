@@ -94,6 +94,8 @@ const serializeMessage = (row) => {
     client_message_id: row.client_message_id,
     deleted_for_all: !!row.deleted_for_all,
     created_at: row.created_at,
+    reply_to_message_id: row.reply_to_message_id || null,
+    pinned_at: row.pinned_at || null,
     edited_at: row.edited_at || null,
   };
 };
@@ -395,17 +397,53 @@ router.post("/chats/:chatId/messages", requireAuth(), async (req, res) => {
     const chatId = Number(req.params.chatId);
     if (!(await requireParticipant(req, res, chatId))) return;
 
-    const { text = "", meta = {}, msgType = "text", fileId = null, clientMessageId = "", deviceId = "" } = req.body || {};
+    const {
+      text = "",
+      meta = {},
+      msgType = "text",
+      fileId = null,
+      clientMessageId = "",
+      deviceId = "",
+      replyToMessageId = null,
+      mentionedUserIds = [],
+    } = req.body || {};
     if (!String(text).trim() && msgType === "text") return res.status(400).json({ error: "Сообщение пустое" });
+
+    let replyParentId = null;
+    if (replyToMessageId != null) {
+      const replyId = Number(replyToMessageId);
+      if (!Number.isInteger(replyId) || replyId <= 0) {
+        return res.status(400).json({ error: "Некорректный replyToMessageId" });
+      }
+      const parent = await getMessageById(chatId, replyId);
+      if (!parent) return res.status(400).json({ error: "Сообщение-оригинал не найдено в этом чате" });
+      replyParentId = replyId;
+    }
+
+    const safeMentions = Array.isArray(mentionedUserIds)
+      ? Array.from(new Set(mentionedUserIds.map(Number).filter((id) => Number.isInteger(id) && id > 0)))
+      : [];
+    if (safeMentions.length > 0) {
+      const participants = await getChatParticipants(chatId);
+      const participantIds = new Set(participants.map((p) => Number(p.user_id)));
+      for (const id of safeMentions) {
+        if (!participantIds.has(id)) {
+          return res.status(400).json({ error: "Упоминаемый пользователь не участник чата", userId: id });
+        }
+      }
+    }
+    const mergedMeta = { ...(meta && typeof meta === "object" ? meta : {}) };
+    if (safeMentions.length > 0) mergedMeta.mentionedUserIds = safeMentions;
 
     const saved = await insertMessage(
       chatId,
       req.user.id,
       encryptText(text),
-      encryptJson(meta),
+      encryptJson(mergedMeta),
       msgType,
       fileId || null,
-      String(clientMessageId || "")
+      String(clientMessageId || ""),
+      replyParentId,
     );
     const message = serializeMessage({
       ...saved,
