@@ -1407,6 +1407,76 @@ const getMessages = async (chatId, userId, beforeId, limit) => {
   return r.rows.reverse();
 };
 
+const fetchMessagesForSearchInChat = async (chatId, userId, beforeId, batchSize) => {
+  const lim = Math.min(batchSize || 200, 500);
+  if (beforeId) {
+    const r = await pool.query(
+      `SELECT m.id, m.chat_id, m.sender_id, m.encrypted_text, m.encrypted_meta, m.msg_type,
+              m.created_at, u.username AS sender_username, u.display_name AS sender_display_name
+         FROM messages m
+         JOIN users u ON u.id = m.sender_id
+        WHERE m.chat_id = $1
+          AND m.deleted_for_all = false
+          AND m.id < $3
+          AND NOT EXISTS (SELECT 1 FROM message_hidden_for_users mh WHERE mh.message_id = m.id AND mh.user_id = $2)
+        ORDER BY m.id DESC
+        LIMIT $4`,
+      [chatId, userId, beforeId, lim]
+    );
+    return r.rows;
+  }
+  const r = await pool.query(
+    `SELECT m.id, m.chat_id, m.sender_id, m.encrypted_text, m.encrypted_meta, m.msg_type,
+            m.created_at, u.username AS sender_username, u.display_name AS sender_display_name
+       FROM messages m
+       JOIN users u ON u.id = m.sender_id
+      WHERE m.chat_id = $1
+        AND m.deleted_for_all = false
+        AND NOT EXISTS (SELECT 1 FROM message_hidden_for_users mh WHERE mh.message_id = m.id AND mh.user_id = $2)
+      ORDER BY m.id DESC
+      LIMIT $3`,
+    [chatId, userId, lim]
+  );
+  return r.rows;
+};
+
+const fetchMessagesForSearchGlobal = async (userId, beforeId, batchSize) => {
+  const lim = Math.min(batchSize || 300, 500);
+  if (beforeId) {
+    const r = await pool.query(
+      `SELECT m.id, m.chat_id, m.sender_id, m.encrypted_text, m.encrypted_meta, m.msg_type,
+              m.created_at, u.username AS sender_username, u.display_name AS sender_display_name,
+              c.title AS chat_title
+         FROM messages m
+         JOIN chat_participants cp ON cp.chat_id = m.chat_id AND cp.user_id = $1
+         JOIN chats c ON c.id = m.chat_id
+         JOIN users u ON u.id = m.sender_id
+        WHERE m.deleted_for_all = false
+          AND m.id < $2
+          AND NOT EXISTS (SELECT 1 FROM message_hidden_for_users mh WHERE mh.message_id = m.id AND mh.user_id = $1)
+        ORDER BY m.id DESC
+        LIMIT $3`,
+      [userId, beforeId, lim]
+    );
+    return r.rows;
+  }
+  const r = await pool.query(
+    `SELECT m.id, m.chat_id, m.sender_id, m.encrypted_text, m.encrypted_meta, m.msg_type,
+            m.created_at, u.username AS sender_username, u.display_name AS sender_display_name,
+            c.title AS chat_title
+       FROM messages m
+       JOIN chat_participants cp ON cp.chat_id = m.chat_id AND cp.user_id = $1
+       JOIN chats c ON c.id = m.chat_id
+       JOIN users u ON u.id = m.sender_id
+      WHERE m.deleted_for_all = false
+        AND NOT EXISTS (SELECT 1 FROM message_hidden_for_users mh WHERE mh.message_id = m.id AND mh.user_id = $1)
+      ORDER BY m.id DESC
+      LIMIT $2`,
+    [userId, lim]
+  );
+  return r.rows;
+};
+
 // ─── Messenger: read receipts ─────────────────────────────────────────────────
 
 const upsertReceipt = async (chatId, userId, messageId) => {
@@ -1524,6 +1594,7 @@ module.exports = {
   PIN_FOR_ALL_LIMIT, PIN_FOR_ME_LIMIT,
   countPinnedForAll, pinMessageForAll, unpinMessageForAll, listPinnedForAll,
   countPinnedForUser, pinMessageForUser, unpinMessageForUser, listPinnedForUser,
+  fetchMessagesForSearchInChat, fetchMessagesForSearchGlobal,
   // messenger: receipts
   upsertReceipt, getReceiptsByChat, getReceiptsForChats,
   // messenger: files
