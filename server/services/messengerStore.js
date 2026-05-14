@@ -43,6 +43,17 @@ async function removeMessengerDevice(userId, deviceId) {
   await pool.query("DELETE FROM messenger_devices WHERE user_id = $1 AND device_id = $2", [userId, deviceId]);
 }
 
+const listMessengerDevicesForUser = async (pool, userId) => {
+  const r = await pool.query(
+    `SELECT id, device_id, user_agent, last_seen_at, created_at
+       FROM messenger_devices
+      WHERE user_id = $1
+      ORDER BY last_seen_at DESC NULLS LAST, created_at DESC`,
+    [userId]
+  );
+  return r.rows;
+};
+
 async function listPushDevicesForUsers(userIds) {
   if (!Array.isArray(userIds) || userIds.length === 0) return [];
   const r = await pool.query(
@@ -59,4 +70,5 @@ module.exports = {
   upsertMessengerDevice,
   removeMessengerDevice,
   listPushDevicesForUsers,
+  listMessengerDevicesForUser,
 };

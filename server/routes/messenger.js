@@ -5,7 +5,7 @@ const fs       = require("fs");
 const { v4: uuidv4 } = require("uuid");
 const { requireAuth } = require("../middleware/auth");
 const { encryptText, decryptText, encryptJson, decryptJson, encryptBuffer, decryptBuffer } = require("../services/messengerCrypto");
-const { createSyncEvent, listSyncEventsForUser, upsertMessengerDevice, removeMessengerDevice } = require("../services/messengerStore");
+const { createSyncEvent, listSyncEventsForUser, upsertMessengerDevice, removeMessengerDevice, listMessengerDevicesForUser } = require("../services/messengerStore");
 const { pool, hasAllClientsAccess, getAssignmentsByUser,
   createChat, getChatById, getChatsByUser, updateChatMeta, setChatPinned,
   addChatParticipant, removeChatParticipant, getChatParticipants, getChatParticipantsForChats,
@@ -927,6 +927,16 @@ router.post("/messenger/devices", requireAuth(), async (req, res) => {
       endpointPrefix: device.endpoint.slice(0, 48),
     });
     res.json({ ok: true, deviceId: device.device_id });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/messenger/devices — list my push-enabled devices
+router.get("/messenger/devices", requireAuth(), async (req, res) => {
+  try {
+    const devices = await listMessengerDevicesForUser(pool, req.user.id);
+    res.json({ devices });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
