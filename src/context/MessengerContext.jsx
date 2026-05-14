@@ -521,6 +521,44 @@ export function MessengerProvider({ children }) {
     return result;
   }, [sendPayload, clearReplyTarget]);
 
+  const enterSelectionMode = useCallback((initialId = null) => {
+    setSelectionMode(true);
+    setSelectedIds(initialId ? [initialId] : []);
+  }, []);
+
+  const exitSelectionMode = useCallback(() => {
+    setSelectionMode(false);
+    setSelectedIds([]);
+  }, []);
+
+  const toggleSelection = useCallback((messageId) => {
+    setSelectedIds((prev) => (
+      prev.includes(messageId)
+        ? prev.filter((id) => id !== messageId)
+        : [...prev, messageId]
+    ));
+  }, []);
+
+  const bulkDelete = useCallback(async (chatId, ids, scope) => {
+    try {
+      const result = await MessengerApi.bulkDelete(authFetch, chatId, ids, scope);
+      exitSelectionMode();
+      return { ok: true, ...result };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  }, [authFetch, exitSelectionMode]);
+
+  const bulkForward = useCallback(async (chatId, ids, targetChatId) => {
+    try {
+      const result = await MessengerApi.bulkForward(authFetch, chatId, ids, targetChatId);
+      exitSelectionMode();
+      return { ok: true, ...result };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  }, [authFetch, exitSelectionMode]);
+
   const uploadFile = useCallback(async (chatId, file) => {
     const form = new FormData();
     const name = String(file?.name || "file");
