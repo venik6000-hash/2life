@@ -1142,7 +1142,7 @@ const getParticipantRole = async (chatId, userId) => {
 
 // ─── Messenger: messages ─────────────────────────────────────────────────────
 
-const insertMessage = async (chatId, senderId, encryptedText, encryptedMeta, msgType, fileId, clientMessageId = "") => {
+const insertMessage = async (chatId, senderId, encryptedText, encryptedMeta, msgType, fileId, clientMessageId = "", replyToMessageId = null) => {
   const safeClientMessageId = String(clientMessageId || "");
   if (safeClientMessageId) {
     const client = await pool.connect();
@@ -1165,10 +1165,10 @@ const insertMessage = async (chatId, senderId, encryptedText, encryptedMeta, msg
         return { ...existing.rows[0], __existing: true };
       }
       const inserted = await client.query(
-        `INSERT INTO messages (chat_id, sender_id, encrypted_text, encrypted_meta, msg_type, file_id, client_message_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
+        `INSERT INTO messages (chat_id, sender_id, encrypted_text, encrypted_meta, msg_type, file_id, client_message_id, reply_to_message_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
          RETURNING *, encrypted_text AS ciphertext, encrypted_meta AS iv`,
-        [chatId, senderId, encryptedText, encryptedMeta, msgType, fileId || null, safeClientMessageId]
+        [chatId, senderId, encryptedText, encryptedMeta, msgType, fileId || null, safeClientMessageId, replyToMessageId || null]
       );
       await client.query("COMMIT");
       return { ...inserted.rows[0], __existing: false };
@@ -1181,10 +1181,10 @@ const insertMessage = async (chatId, senderId, encryptedText, encryptedMeta, msg
   }
 
   const r = await pool.query(
-    `INSERT INTO messages (chat_id, sender_id, encrypted_text, encrypted_meta, msg_type, file_id, client_message_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
+    `INSERT INTO messages (chat_id, sender_id, encrypted_text, encrypted_meta, msg_type, file_id, client_message_id, reply_to_message_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
      RETURNING *, encrypted_text AS ciphertext, encrypted_meta AS iv`,
-    [chatId, senderId, encryptedText, encryptedMeta, msgType, fileId || null, safeClientMessageId]
+    [chatId, senderId, encryptedText, encryptedMeta, msgType, fileId || null, safeClientMessageId, replyToMessageId || null]
   );
   return { ...r.rows[0], __existing: false };
 };
