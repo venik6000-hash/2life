@@ -103,6 +103,12 @@ export function MessengerProvider({ children }) {
   const [notificationStatus, setNotificationStatus] = useState(() => (
     typeof Notification === "undefined" ? "unsupported" : Notification.permission
   ));
+  const [pinnedForAll, setPinnedForAll] = useState({}); // { [chatId]: Message[] }
+  const [pinnedForMe, setPinnedForMe] = useState({});   // { [chatId]: Message[] }
+  const [replyTargets, setReplyTargets] = useState({}); // { [chatId]: Message | null }
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState([]);    // message ids (current active chat)
+  const [fontSize, setFontSizeState] = useState(() => localStorage.getItem("messenger_font_size") || "M");
   const wsRef = useRef(null);
   const flushInFlightRef = useRef(false);
   const retryTimersRef = useRef(new Map());
