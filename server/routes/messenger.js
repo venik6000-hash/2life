@@ -18,12 +18,14 @@ const { pool, hasAllClientsAccess, getAssignmentsByUser,
   PIN_FOR_ALL_LIMIT, PIN_FOR_ME_LIMIT,
   countPinnedForAll, pinMessageForAll, unpinMessageForAll, listPinnedForAll,
   countPinnedForUser, pinMessageForUser, unpinMessageForUser, listPinnedForUser,
+  fetchMessagesForSearchInChat, fetchMessagesForSearchGlobal,
 } = require("../services/db");
 const {
   syncUserChatAccessByClientPermissions,
   syncChatParticipantsByClientAccess,
   userHasClientAccess,
 } = require("../services/chatAccessSync");
+const { matchAndSnippet } = require("../services/messengerSearch");
 const { sendPrivateMessagePush } = require("../services/messengerPush");
 const { broadcastToChat, sendTo } = require("../services/ws");
 const { ensureDir } = require("../services/storage");
@@ -749,6 +751,97 @@ router.post("/chats/:chatId/messages/bulk-forward", requireAuth(), async (req, r
     }
 
     res.json({ ok: true, forwarded: forwarded.length, ids: forwarded });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/chats/:chatId/messages/search?q=...&limit=50&before=...
+router.get("/chats/:chatId/messages/search", requireAuth(), async (req, res) => {
+  try {
+    const chatId = Number(req.params.chatId);
+    if (!(await requireParticipant(req, res, chatId))) return;
+    const q = String(req.query.q || "").trim();
+    const limit = Math.min(Number(req.query.limit) || 50, 100);
+    const before = req.query.before ? Number(req.query.before) : null;
+    if (q.length < 2) return res.json({ matches: [], done: true });
+
+    const matches = [];
+    let nextBefore = before;
+    const HARD_CAP_BATCHES = 10;
+    for (let batch = 0; batch < HARD_CAP_BATCHES; batch++) {
+      const rows = await fetchMessagesForSearchInChat(chatId, req.user.id, nextBefore, 200);
+      if (rows.length === 0) {
+        return res.json({ matches, done: true });
+      }
+      for (const row of rows) {
+        let text = "";
+        try { text = row.encrypted_text ? decryptText(row.encrypted_text) : ""; } catch (_) { text = ""; }
+        const snip = matchAndSnippet(text, q);
+        if (snip) {
+          matches.push({
+            messageId: row.id,
+            chatId: row.chat_id,
+            senderId: row.sender_id,
+            senderDisplayName: row.sender_display_name || row.sender_username,
+            createdAt: row.created_at,
+            ...snip,
+          });
+          if (matches.length >= limit) {
+            return res.json({ matches, done: false, nextBefore: row.id });
+          }
+        }
+        nextBefore = row.id;
+      }
+    }
+    res.json({ matches, done: false, nextBefore });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/messenger/search?q=...&limit=50&before=...
+router.get("/messenger/search", requireAuth(), async (req, res) => {
+  try {
+    const q = String(req.query.q || "").trim();
+    const limit = Math.min(Number(req.query.limit) || 50, 100);
+    const before = req.query.before ? Number(req.query.before) : null;
+    if (q.length < 2) return res.json({ groups: [], done: true });
+
+    const groupsMap = new Map(); // chatId -> { chatId, chatTitle, matches: [] }
+    let nextBefore = before;
+    let totalMatches = 0;
+    const HARD_CAP_BATCHES = 10;
+
+    for (let batch = 0; batch < HARD_CAP_BATCHES; batch++) {
+      const rows = await fetchMessagesForSearchGlobal(req.user.id, nextBefore, 300);
+      if (rows.length === 0) {
+        return res.json({ groups: Array.from(groupsMap.values()), done: true });
+      }
+      for (const row of rows) {
+        let text = "";
+        try { text = row.encrypted_text ? decryptText(row.encrypted_text) : ""; } catch (_) { text = ""; }
+        const snip = matchAndSnippet(text, q);
+        if (snip) {
+          if (!groupsMap.has(row.chat_id)) {
+            groupsMap.set(row.chat_id, { chatId: row.chat_id, chatTitle: row.chat_title || "Чат", matches: [] });
+          }
+          groupsMap.get(row.chat_id).matches.push({
+            messageId: row.id,
+            senderId: row.sender_id,
+            senderDisplayName: row.sender_display_name || row.sender_username,
+            createdAt: row.created_at,
+            ...snip,
+          });
+          totalMatches++;
+          if (totalMatches >= limit) {
+            return res.json({ groups: Array.from(groupsMap.values()), done: false, nextBefore: row.id });
+          }
+        }
+        nextBefore = row.id;
+      }
+    }
+    res.json({ groups: Array.from(groupsMap.values()), done: false, nextBefore });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
