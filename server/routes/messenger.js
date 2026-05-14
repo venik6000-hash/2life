@@ -697,6 +697,63 @@ router.post("/chats/:chatId/messages/bulk-delete", requireAuth(), async (req, re
   }
 });
 
+// POST /api/chats/:chatId/messages/bulk-forward
+// body: { ids: number[], targetChatId: number }
+router.post("/chats/:chatId/messages/bulk-forward", requireAuth(), async (req, res) => {
+  try {
+    const chatId = Number(req.params.chatId);
+    const targetChatId = Number(req.body?.targetChatId);
+    if (!(await requireParticipant(req, res, chatId))) return;
+    if (!Number.isInteger(targetChatId) || targetChatId <= 0) {
+      return res.status(400).json({ error: "Некорректный targetChatId" });
+    }
+    const targetParticipant = await isParticipant(targetChatId, req.user.id);
+    if (!targetParticipant) return res.status(403).json({ error: "Нет доступа к целевому чату" });
+
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(Number).filter((n) => Number.isInteger(n) && n > 0) : [];
+    if (ids.length === 0) return res.status(400).json({ error: "Передайте ids" });
+    if (ids.length > 50) return res.status(400).json({ error: "Слишком много (max 50)" });
+
+    const rows = await getMessagesByIds(chatId, ids);
+    if (rows.length === 0) return res.status(404).json({ error: "Сообщения не найдены" });
+
+    const forwarded = [];
+    for (const id of ids) {
+      const full = await getMessageById(chatId, id);
+      if (!full || full.deleted_for_all) continue;
+      const serializedSource = serializeMessage({
+        ...full,
+        sender_username: full.sender_username,
+        sender_display_name: full.sender_display_name,
+      });
+      const forwardedText = `[Переслано от ${serializedSource.sender_display_name || serializedSource.sender_username}]\n${serializedSource.text || ""}`;
+      const saved = await insertMessage(
+        targetChatId,
+        req.user.id,
+        encryptText(forwardedText),
+        encryptJson({ forwardedFrom: { chatId, messageId: id, senderId: full.sender_id } }),
+        "text",
+        null,
+        `fwd-${chatId}-${id}-${Date.now()}`,
+        null,
+      );
+      const message = serializeMessage({
+        ...saved,
+        sender_username: req.user.username,
+        sender_display_name: req.user.display_name || "",
+      });
+      const payload = { type: "new_message", message };
+      await createSyncEvent(pool, { chatId: targetChatId, eventType: "new_message", payload: { messageId: saved.id } });
+      await broadcastToChat(targetChatId, payload, null);
+      forwarded.push(message.id);
+    }
+
+    res.json({ ok: true, forwarded: forwarded.length, ids: forwarded });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // GET /api/chats/:chatId/pinned — top-5 for-all pins (newest first)
 router.get("/chats/:chatId/pinned", requireAuth(), async (req, res) => {
   try {
