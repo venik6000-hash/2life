@@ -778,6 +778,7 @@ router.post("/chats/:chatId/messages/bulk-forward", requireAuth(), async (req, r
 router.get("/chats/:chatId/messages/search", requireAuth(), async (req, res) => {
   try {
     const chatId = Number(req.params.chatId);
+    await syncUserChatAccessCached(req.user.id);
     if (!(await requireParticipant(req, res, chatId))) return;
     const q = String(req.query.q || "").trim();
     const limit = Math.min(Number(req.query.limit) || 50, 100);
