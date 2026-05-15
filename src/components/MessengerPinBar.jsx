@@ -6,6 +6,7 @@ export default function MessengerPinBar({ pinnedMessages, currentIndex = 0, onCl
   const safeIndex = Math.min(currentIndex, pinnedMessages.length - 1);
   const current = pinnedMessages[safeIndex];
   const total = pinnedMessages.length;
+  const isPersonal = !!current?._personal;
 
   const preview = (() => {
     if (current.deleted_for_all) return "Сообщение удалено";
@@ -13,6 +14,10 @@ export default function MessengerPinBar({ pinnedMessages, currentIndex = 0, onCl
     if (current.msg_type === "image" || current.msg_type === "image_bundle") return "🖼️ Фото";
     return (current.text || "").slice(0, 120);
   })();
+
+  const label = total > 1
+    ? `Закреплено ${safeIndex + 1}/${total}${isPersonal ? " · только у вас" : ""}`
+    : (isPersonal ? "Закреплено · только у вас" : "Закреплено");
 
   return (
     <div style={{
@@ -25,9 +30,7 @@ export default function MessengerPinBar({ pinnedMessages, currentIndex = 0, onCl
     }} onClick={onClickNext} role="button" aria-label="Закреплённые сообщения">
       <span style={{ fontSize: 14, color: $.ac, flexShrink: 0 }}>📌</span>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 11, color: $.txS, fontWeight: 600 }}>
-          {total > 1 ? `Закреплено ${safeIndex + 1}/${total}` : "Закреплено"}
-        </div>
+        <div style={{ fontSize: 11, color: $.txS, fontWeight: 600 }}>{label}</div>
         <div style={{ fontSize: 13, color: $.tx, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {preview}
         </div>
@@ -35,7 +38,7 @@ export default function MessengerPinBar({ pinnedMessages, currentIndex = 0, onCl
       {canUnpin && (
         <button
           type="button"
-          onClick={(e) => { e.stopPropagation(); onUnpin?.(current.id); }}
+          onClick={(e) => { e.stopPropagation(); onUnpin?.(current); }}
           style={{ width: 28, height: 28, borderRadius: 8, border: "none", background: "transparent", color: $.txS, cursor: "pointer", fontSize: 16 }}
           aria-label="Открепить"
         >×</button>

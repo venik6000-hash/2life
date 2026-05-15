@@ -7,7 +7,7 @@ const MSG_IDS = String(process.env.SMOKE_MSG_IDS || "").split(",").map(Number).f
 
 if (!TOKEN || !CHAT_ID || MSG_IDS.length < 6) {
   console.log("set MESSENGER_TEST_TOKEN, SMOKE_CHAT_ID, SMOKE_MSG_IDS (>=6 ids comma-sep)");
-  process.exit(0);
+  process.exit(1);
 }
 
 const call = async (path, method = "GET", body = null) => {

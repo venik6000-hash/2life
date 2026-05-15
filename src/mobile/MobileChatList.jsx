@@ -132,6 +132,7 @@ export default function MobileChatList({ onOpenChat, onOpenSettings, onOpenSearc
             <button
               key={chat.id}
               type="button"
+              data-messenger-no-select=""
               onClick={() => { setActiveChatId(chat.id); onOpenChat(); }}
               {...makeHandlers(chat)}
               style={{
@@ -146,6 +147,10 @@ export default function MobileChatList({ onOpenChat, onOpenSettings, onOpenSearc
                 alignItems: "center",
                 padding: "11px 16px",
                 textAlign: "left",
+                WebkitUserSelect: "none",
+                userSelect: "none",
+                WebkitTouchCallout: "none",
+                WebkitTapHighlightColor: "transparent",
               }}
             >
               <span style={{ width: 44, height: 44, borderRadius: 14, background: unread > 0 ? $.acD : $.bgC, display: "grid", placeItems: "center", fontSize: 20, flexShrink: 0, border: unread > 0 ? `1px solid ${$.ac}` : "1px solid transparent" }}>

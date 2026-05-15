@@ -105,7 +105,7 @@ router.post("/auth/login", loginLimiter, async (req, res) => {
     res.json({
       ok: true,
       token,
-      user: { id: user.id, username: user.username, role: user.role, all_clients_access: !!user.all_clients_access },
+      user: { id: user.id, username: user.username, role: user.role, all_clients_access: !!user.all_clients_access, display_name: user.display_name || "" },
       permissions,
     });
   } catch (e) {
@@ -124,11 +124,17 @@ router.post("/auth/logout", requireAuth(), (req, res) => {
 router.get("/auth/me", requireAuth(), async (req, res) => {
   try {
     const userRes = await pool.query(
-      "SELECT id, username, role, all_clients_access FROM users WHERE id = $1 LIMIT 1",
+      "SELECT id, username, role, all_clients_access, display_name FROM users WHERE id = $1 LIMIT 1",
       [req.user.id]
     );
     const currentUser = userRes.rows[0]
-      ? { ...req.user, all_clients_access: !!userRes.rows[0].all_clients_access, username: userRes.rows[0].username, role: userRes.rows[0].role }
+      ? {
+          ...req.user,
+          all_clients_access: !!userRes.rows[0].all_clients_access,
+          username: userRes.rows[0].username,
+          role: userRes.rows[0].role,
+          display_name: userRes.rows[0].display_name || "",
+        }
       : req.user;
     const permissions = await getPermissionsForRole(currentUser.role);
     res.json({ ok: true, user: currentUser, permissions });
@@ -161,7 +167,9 @@ router.post("/auth/sse-ticket", requireAuth(), (req, res) => {
 // POST /api/auth/ws-ticket — одноразовый тикет для WebSocket-соединения (30 сек TTL)
 router.post("/auth/ws-ticket", requireAuth(), (req, res) => {
   const { createWsTicket } = require("../services/wsTickets");
-  const ticket = createWsTicket(req.user);
+  const deviceId = (req.headers["x-messenger-device-id"] && String(req.headers["x-messenger-device-id"]).slice(0, 160))
+    || (req.body && typeof req.body.deviceId === "string" ? req.body.deviceId.slice(0, 160) : null);
+  const ticket = createWsTicket(req.user, deviceId);
   res.json({ ok: true, ticket });
 });
 

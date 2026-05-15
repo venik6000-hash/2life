@@ -23,6 +23,8 @@ export default function MessengerSection() {
 
   const [showParticipants, setShowParticipants] = useState(false);
   const autoCreateRef = useRef(false);
+  const pendingJumpRef = useRef(null);
+  const [jumpToMessageId, setJumpToMessageId] = useState(null);
   const activeChat = chats.find((c) => c.id === activeChatId) || null;
   const canCreateChat = !isClientRole(user?.role);
   const hasGlobalClientAccess = isAdmin || !!user?.all_clients_access;
@@ -54,6 +56,12 @@ export default function MessengerSection() {
     if (!messages[activeChatId]) loadMessages(activeChatId);
   }, [activeChatId, ready]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  useEffect(() => {
+    if (!activeChatId || pendingJumpRef.current?.chatId !== activeChatId) return;
+    setJumpToMessageId(pendingJumpRef.current.messageId);
+    pendingJumpRef.current = null;
+  }, [activeChatId]);
+
   return (
     <MessengerShell
       chatList={(
@@ -65,6 +73,14 @@ export default function MessengerSection() {
           createNewChat={createNewChat}
           messages={messages}
           canCreateChat={canCreateChat}
+          onSearchJump={(chatId, messageId) => {
+            pendingJumpRef.current = { chatId, messageId };
+            setActiveChatId(chatId);
+            if (chatId === activeChatId) {
+              setJumpToMessageId(messageId);
+              pendingJumpRef.current = null;
+            }
+          }}
         />
       )}
       banner={!wsConnected ? <ConnectionBanner /> : null}
@@ -89,6 +105,8 @@ export default function MessengerSection() {
               showParticipants={showParticipants}
               setShowParticipants={setShowParticipants}
               updateChatSettings={updateChatSettings}
+              jumpToMessageId={jumpToMessageId}
+              onJumpHandled={() => setJumpToMessageId(null)}
             />
           </Wrapper>
           {showParticipants && (

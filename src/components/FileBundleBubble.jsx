@@ -69,7 +69,7 @@ export default function FileBundleBubble({ msg, chatId, downloadFile, downloadFi
 
   if (isPhotoBundle) {
     return (
-      <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 230, maxWidth: 340 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6, width: "min(340px, 100%)", minWidth: 0 }}>
         <div style={{
           display: "grid",
           gridTemplateColumns: `repeat(${photoLayout.cols}, minmax(0, 1fr))`,
@@ -115,7 +115,7 @@ export default function FileBundleBubble({ msg, chatId, downloadFile, downloadFi
           <button
             onClick={handleDownloadAll}
             disabled={loading || files.length === 0}
-            style={{ border: "none", cursor: loading || files.length === 0 ? "default" : "pointer", fontSize: 11, padding: "4px 8px", borderRadius: 6, background: "rgba(255,255,255,.15)", color: "#fff", opacity: loading || files.length === 0 ? .65 : 1 }}
+            style={{ border: "none", cursor: loading || files.length === 0 ? "default" : "pointer", fontSize: 11, padding: "4px 8px", borderRadius: 6, background: "rgba(255,255,255,.15)", color: "inherit", opacity: loading || files.length === 0 ? .65 : 1 }}
           >
             {loading ? "..." : "Скачать все"}
           </button>
@@ -126,13 +126,13 @@ export default function FileBundleBubble({ msg, chatId, downloadFile, downloadFi
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 230 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 6, width: "min(340px, 100%)", minWidth: 0 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
         <div style={{ fontSize: 12, fontWeight: 700 }}>📎 Файлы ({files.length})</div>
         <button
           onClick={handleDownloadAll}
           disabled={loading || files.length === 0}
-          style={{ border: "none", cursor: loading || files.length === 0 ? "default" : "pointer", fontSize: 11, padding: "4px 8px", borderRadius: 6, background: "rgba(255,255,255,.15)", color: "#fff", opacity: loading || files.length === 0 ? .65 : 1 }}
+          style={{ border: "none", cursor: loading || files.length === 0 ? "default" : "pointer", fontSize: 11, padding: "4px 8px", borderRadius: 6, background: "rgba(255,255,255,.15)", color: "inherit", opacity: loading || files.length === 0 ? .65 : 1 }}
         >
           {loading ? "..." : "Скачать все"}
         </button>

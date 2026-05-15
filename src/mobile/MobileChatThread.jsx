@@ -12,6 +12,9 @@ import { fmtDate } from "../utils/messengerUiUtils";
 
 const LONG_PRESS_MS = 400;
 const MOVE_TOLERANCE = 8;
+const SWIPE_EDGE_PX = 30;           // зона у левого края, где стартует back-swipe
+const SWIPE_BACK_THRESHOLD = 80;    // расстояние, после которого вернёмся к списку чатов
+const SWIPE_MAX_TRACK = 280;        // насколько далеко тащим (для интерполяции)
 
 export default function MobileChatThread({ onBack, pendingScrollId }) {
   const { user } = useAuth();
@@ -23,6 +26,8 @@ export default function MobileChatThread({ onBack, pendingScrollId }) {
     loadMessages,
     sendMsg,
     sendFiles,
+    editMsg,
+    deleteMsg,
     markRead,
     downloadFile,
     downloadFiles,
@@ -52,6 +57,8 @@ export default function MobileChatThread({ onBack, pendingScrollId }) {
   const [ctx, setCtx] = useState(null); // { x, y, msg } | null
   const [pinCycleIndex, setPinCycleIndex] = useState(0);
   const [mentionQuery, setMentionQuery] = useState(null);
+  const [editTarget, setEditTarget] = useState(null);
+  const [deleteSheet, setDeleteSheet] = useState(null); // { ids: number[], canForAll: boolean } | null
 
   const fileRef = useRef(null);
   const bottomRef = useRef(null);
@@ -61,21 +68,29 @@ export default function MobileChatThread({ onBack, pendingScrollId }) {
   const lpStartX = useRef(0);
   const lpStartY = useRef(0);
 
+  // Telegram-style swipe-right: edge-drag по левому краю возвращает на список чатов.
+  const [swipeX, setSwipeX] = useState(0);
+  const swipeStateRef = useRef({ active: false, startX: 0, startY: 0, locked: null });
+
   const activeChat = chats.find((chat) => chat.id === activeChatId) || null;
   const msgList = messages[activeChatId] || [];
 
   useEffect(() => {
     if (activeChatId && !messages[activeChatId]) loadMessages(activeChatId);
-  }, [activeChatId, loadMessages, messages]);
+    // Не включаем messages в deps — он меняется на каждый WS-эвент и приводит к лишним перевызовам.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeChatId, loadMessages]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [msgList.length]);
 
+  // markRead — только когда меняется ID последнего сообщения (а не каждый ререндер msgList).
+  const lastMsgId = msgList[msgList.length - 1]?.id;
+  const lastMsgSenderId = msgList[msgList.length - 1]?.sender_id;
   useEffect(() => {
-    const last = msgList[msgList.length - 1];
-    if (last && last.sender_id !== user?.id) markRead(activeChatId, last.id);
-  }, [activeChatId, markRead, msgList, user?.id]);
+    if (lastMsgId && lastMsgSenderId !== user?.id) markRead(activeChatId, lastMsgId);
+  }, [activeChatId, lastMsgId, lastMsgSenderId, markRead, user?.id]);
 
   useEffect(() => {
     const id = pendingScrollId?.current;
@@ -118,6 +133,49 @@ export default function MobileChatThread({ onBack, pendingScrollId }) {
     return ids;
   };
 
+  // ── Swipe-back gesture (как в Telegram) ─────────────────────────────────────
+  const onSwipeStart = useCallback((e) => {
+    // Запускаем только при касании у левого края и одиночным пальцем.
+    if (e.pointerType === "mouse") return;
+    if (e.clientX > SWIPE_EDGE_PX) return;
+    if (ctx || searchOpen || selectionMode || editTarget) return;
+    swipeStateRef.current = { active: true, startX: e.clientX, startY: e.clientY, locked: null };
+  }, [ctx, searchOpen, selectionMode, editTarget]);
+
+  const onSwipeMove = useCallback((e) => {
+    const s = swipeStateRef.current;
+    if (!s.active) return;
+    const dx = e.clientX - s.startX;
+    const dy = e.clientY - s.startY;
+    // Определяем направление один раз: если первое заметное движение по вертикали — отключаем жест,
+    // чтобы не мешать скроллу ленты.
+    if (s.locked == null) {
+      if (Math.abs(dx) < 6 && Math.abs(dy) < 6) return;
+      s.locked = Math.abs(dx) > Math.abs(dy) ? "h" : "v";
+      if (s.locked === "v") { s.active = false; return; }
+    }
+    if (s.locked === "h" && dx > 0) {
+      // Тянем содержимое вправо, но с резиновой кривой.
+      const clamped = Math.min(dx, SWIPE_MAX_TRACK);
+      setSwipeX(clamped);
+      e.preventDefault?.();
+    }
+  }, []);
+
+  const onSwipeEnd = useCallback(() => {
+    const s = swipeStateRef.current;
+    if (!s.active) { setSwipeX(0); return; }
+    s.active = false;
+    if (swipeX > SWIPE_BACK_THRESHOLD) {
+      // Анимируем «уход» вправо и возвращаемся к списку.
+      setSwipeX(window.innerWidth || 800);
+      setTimeout(() => { setSwipeX(0); onBack?.(); }, 180);
+    } else {
+      // Откат назад.
+      setSwipeX(0);
+    }
+  }, [swipeX, onBack]);
+
   const makeLongPressHandlers = useCallback((msg) => ({
     onPointerDown: (e) => {
       lpStartX.current = e.clientX;
@@ -143,13 +201,19 @@ export default function MobileChatThread({ onBack, pendingScrollId }) {
     if (!trimmed || sending || !activeChat) return;
     setSending(true);
     setError("");
-    const mentioned = parseMentions(trimmed, activeChat?.participants || []);
-    const options = {};
-    if (replyTargets[activeChat?.id]) options.replyToMessageId = replyTargets[activeChat.id].id;
-    if (mentioned.length > 0) options.mentionedUserIds = mentioned;
-    const ok = await sendMsg(activeChat.id, trimmed, options);
+    let ok = false;
+    if (editTarget?.id) {
+      ok = await editMsg(activeChat.id, editTarget.id, trimmed);
+    } else {
+      const mentioned = parseMentions(trimmed, activeChat?.participants || []);
+      const options = {};
+      if (replyTargets[activeChat?.id]) options.replyToMessageId = replyTargets[activeChat.id].id;
+      if (mentioned.length > 0) options.mentionedUserIds = mentioned;
+      ok = await sendMsg(activeChat.id, trimmed, options);
+    }
     if (ok) {
       setText("");
+      setEditTarget(null);
       setShowEmoji(false);
       setMentionQuery(null);
     } else {
@@ -176,6 +240,14 @@ export default function MobileChatThread({ onBack, pendingScrollId }) {
       event.preventDefault();
       handleSend();
     }
+  };
+
+  const handleDelete = async (msg, scope) => {
+    if (!activeChat || !msg?.id) return;
+    setCtx(null);
+    // Без системного confirm: одиночное удаление сразу применяется, ошибки покажем красным баннером.
+    const ok = await deleteMsg(activeChat.id, msg.id, scope);
+    if (!ok) setError("Не удалось удалить сообщение");
   };
 
   const handleTextChange = (event) => {
@@ -224,7 +296,23 @@ export default function MobileChatThread({ onBack, pendingScrollId }) {
   }
 
   return (
-    <main style={{ height: "100dvh", background: $.bg, color: $.tx, display: "flex", flexDirection: "column", fontFamily: "system-ui, sans-serif", overflow: "hidden" }}>
+    <main
+      onPointerDown={onSwipeStart}
+      onPointerMove={onSwipeMove}
+      onPointerUp={onSwipeEnd}
+      onPointerCancel={onSwipeEnd}
+      style={{
+        height: "100dvh",
+        background: $.bg,
+        color: $.tx,
+        display: "flex",
+        flexDirection: "column",
+        fontFamily: "system-ui, sans-serif",
+        overflow: "hidden",
+        transform: swipeX ? `translateX(${swipeX}px)` : undefined,
+        transition: swipeX === 0 || swipeX >= SWIPE_MAX_TRACK ? "transform 180ms ease-out" : "none",
+        touchAction: "pan-y",
+      }}>
       {/* Context menu overlay */}
       {ctx && (
         <>
@@ -232,22 +320,31 @@ export default function MobileChatThread({ onBack, pendingScrollId }) {
           <MessengerContextMenu
             x={ctx.x} y={ctx.y}
             msgType={ctx.msg.msg_type}
-            canEdit={ctx.msg.sender_id === user?.id && !ctx.msg.deleted_for_all && ctx.msg.msg_type === "text"}
-            canDeleteForAll={ctx.msg.sender_id === user?.id}
+            canEdit={ctx.msg.sender_id === user?.id && !ctx.msg.deleted_for_all && ctx.msg.msg_type === "text" && !ctx.msg.deleted_for_all}
+            canDeleteForAll={ctx.msg.sender_id === user?.id || user?.role === "admin"}
             isPinnedForAll={!!ctx.msg.pinned_at}
             isPinnedForMe={(pinnedForMe[activeChat?.id] || []).some((m) => m.id === ctx.msg.id)}
             canPinForAll={(pinnedForAll[activeChat?.id] || []).length < 5}
             canPinForMe={(pinnedForMe[activeChat?.id] || []).length < 5}
             onReply={() => { setReplyTarget(activeChat.id, ctx.msg); setCtx(null); }}
-            onForward={() => { setCtx(null); }}
-            onEdit={() => { setCtx(null); }}
+            onEdit={() => { setEditTarget(ctx.msg); setText(ctx.msg.text || ""); setCtx(null); }}
             onCopy={() => { navigator.clipboard?.writeText(ctx.msg.text || ""); setCtx(null); }}
             onPinForAll={() => { pinForAll(activeChat.id, ctx.msg.id); setCtx(null); }}
             onUnpinForAll={() => { unpinForAll(activeChat.id, ctx.msg.id); setCtx(null); }}
-            onPinForMe={() => { pinForMe(activeChat.id, ctx.msg.id); setCtx(null); }}
-            onUnpinForMe={() => { unpinForMe(activeChat.id, ctx.msg.id); setCtx(null); }}
-            onDeleteSelf={() => { setCtx(null); }}
-            onDeleteAll={() => { setCtx(null); }}
+            onPinForMe={async () => {
+              const id = ctx.msg.id;
+              setCtx(null);
+              const r = await pinForMe(activeChat.id, id);
+              if (r && r.ok === false) setError(r.error || "Не удалось закрепить");
+            }}
+            onUnpinForMe={async () => {
+              const id = ctx.msg.id;
+              setCtx(null);
+              const r = await unpinForMe(activeChat.id, id);
+              if (r && r.ok === false) setError(r.error || "Не удалось открепить");
+            }}
+            onDeleteSelf={() => handleDelete(ctx.msg, "self")}
+            onDeleteAll={() => handleDelete(ctx.msg, "all")}
             onEnterSelection={() => { enterSelectionMode(ctx.msg.id); setCtx(null); }}
           />
         </>
@@ -270,12 +367,13 @@ export default function MobileChatThread({ onBack, pendingScrollId }) {
         <header style={{ padding: "calc(env(safe-area-inset-top) + 10px) 12px 10px", borderBottom: `1px solid ${$.brd}`, display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
           <button type="button" onClick={exitSelectionMode} style={{ width: 42, height: 42, borderRadius: 12, border: `1px solid ${$.brd}`, background: $.bgC, color: $.tx, fontSize: 18 }}>✕</button>
           <div style={{ flex: 1, fontWeight: 700 }}>Выбрано: {selectedIds.length}</div>
-          <button type="button" onClick={async () => {
+          <button type="button" onClick={() => {
               if (selectedIds.length === 0) return;
-              const choice = window.confirm(`Удалить ${selectedIds.length} сообщ. у всех? (Отмена = у себя)`);
-              const scope = choice ? "all" : "self";
-              const r = await bulkDelete(activeChat.id, selectedIds, scope);
-              if (!r.ok && r.error?.includes?.("BULK_DELETE_FORBIDDEN")) alert("Нельзя удалить чужие у всех");
+              // Telegram-style: "Удалить у всех" доступен только если все выделенные сообщения мои (или я админ).
+              const list = msgList.filter((m) => selectedIds.includes(m.id));
+              const onlyMine = list.length > 0 && list.every((m) => m.sender_id === user?.id);
+              const canForAll = onlyMine || user?.role === "admin";
+              setDeleteSheet({ ids: [...selectedIds], canForAll });
             }} style={{ width: 42, height: 42, borderRadius: 12, border: `1px solid ${$.brd}`, background: $.bgC, color: $.tx, fontSize: 18 }}>🗑</button>
         </header>
       ) : (
@@ -294,23 +392,36 @@ export default function MobileChatThread({ onBack, pendingScrollId }) {
         </header>
       )}
 
-      {/* Pin bar */}
-      {(pinnedForAll[activeChat?.id] || []).length > 0 && (
-        <MessengerPinBar
-          pinnedMessages={pinnedForAll[activeChat?.id]}
-          currentIndex={pinCycleIndex}
-          onClickNext={() => {
-            const list = pinnedForAll[activeChat?.id];
-            const target = list[pinCycleIndex];
-            if (target) {
-              const el = messageRefs.current.get(target.id);
-              el?.scrollIntoView({ behavior: "smooth", block: "center" });
-            }
-            setPinCycleIndex((i) => (i + 1) % list.length);
-          }}
-          onUnpin={(id) => unpinForAll(activeChat.id, id)}
-        />
-      )}
+      {/* Pin bar: общие + личные (как Telegram) */}
+      {(() => {
+        const all = pinnedForAll[activeChat?.id] || [];
+        const mine = pinnedForMe[activeChat?.id] || [];
+        const seen = new Set();
+        const combined = [];
+        for (const m of all) if (m?.id && !seen.has(m.id)) { seen.add(m.id); combined.push({ ...m, _personal: false }); }
+        for (const m of mine) if (m?.id && !seen.has(m.id)) { seen.add(m.id); combined.push({ ...m, _personal: true }); }
+        if (combined.length === 0) return null;
+        const safeIndex = Math.min(pinCycleIndex, combined.length - 1);
+        return (
+          <MessengerPinBar
+            pinnedMessages={combined}
+            currentIndex={safeIndex}
+            onClickNext={() => {
+              const target = combined[safeIndex];
+              if (target) {
+                const el = messageRefs.current.get(target.id);
+                el?.scrollIntoView({ behavior: "smooth", block: "center" });
+              }
+              setPinCycleIndex((i) => (i + 1) % combined.length);
+            }}
+            onUnpin={(item) => {
+              if (!item) return;
+              if (item._personal) unpinForMe(activeChat.id, item.id);
+              else unpinForAll(activeChat.id, item.id);
+            }}
+          />
+        );
+      })()}
 
       <section style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "12px 10px", display: "flex", flexDirection: "column" }}>
         {msgList.length === 0 && (
@@ -326,8 +437,10 @@ export default function MobileChatThread({ onBack, pendingScrollId }) {
         ) : (
           <div
             key={item.msg.id || item.msg.client_message_id}
+            data-messenger-no-select=""
             {...makeLongPressHandlers(item.msg)}
             ref={(el) => { if (el) messageRefs.current.set(item.msg.id, el); else messageRefs.current.delete(item.msg.id); }}
+            style={{ WebkitUserSelect: "none", userSelect: "none", WebkitTouchCallout: "none", WebkitTapHighlightColor: "transparent" }}
           >
             <MessageBubble
               msg={item.msg}
@@ -382,7 +495,7 @@ export default function MobileChatThread({ onBack, pendingScrollId }) {
               <MessengerMentionPicker
                 query={mentionQuery}
                 participants={activeChat.participants || []}
-                onSelect={(participant) => {
+                onPick={(participant) => {
                   const name = participant.display_name || participant.username;
                   const val = text;
                   const cursor = textareaRef.current?.selectionStart ?? val.length;
@@ -429,7 +542,71 @@ export default function MobileChatThread({ onBack, pendingScrollId }) {
           </button>
         </div>
       </footer>
+
+      {/* Telegram-style bottom sheet для bulk-delete */}
+      {deleteSheet && (
+        <>
+          <div
+            onClick={() => setDeleteSheet(null)}
+            style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 10000 }}
+          />
+          <div
+            role="dialog"
+            aria-label="Удалить сообщения"
+            style={{
+              position: "fixed",
+              left: 0, right: 0, bottom: 0,
+              background: $.bgC,
+              borderTopLeftRadius: 16, borderTopRightRadius: 16,
+              padding: "12px 12px calc(env(safe-area-inset-bottom) + 14px)",
+              boxShadow: "0 -8px 30px rgba(0,0,0,0.25)",
+              zIndex: 10001,
+              display: "grid",
+              gap: 8,
+            }}
+          >
+            <div style={{ textAlign: "center", padding: "8px 4px 6px", color: $.txS, fontSize: 13 }}>
+              Удалить {deleteSheet.ids.length} сообщ.?
+            </div>
+            {deleteSheet.canForAll && (
+              <button
+                type="button"
+                onClick={async () => {
+                  const ids = deleteSheet.ids;
+                  setDeleteSheet(null);
+                  const r = await bulkDelete(activeChat.id, ids, "all");
+                  if (r && r.ok === false) setError(r.error || "Не удалось удалить");
+                }}
+                style={{
+                  height: 50, borderRadius: 12, border: "none", background: $.dn, color: "#fff",
+                  fontSize: 16, fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
+                }}
+              >Удалить у всех</button>
+            )}
+            <button
+              type="button"
+              onClick={async () => {
+                const ids = deleteSheet.ids;
+                setDeleteSheet(null);
+                const r = await bulkDelete(activeChat.id, ids, "self");
+                if (r && r.ok === false) setError(r.error || "Не удалось удалить");
+              }}
+              style={{
+                height: 50, borderRadius: 12, border: `1px solid ${$.brd}`, background: $.bg, color: $.tx,
+                fontSize: 16, fontWeight: 500, cursor: "pointer", fontFamily: "inherit",
+              }}
+            >Удалить у меня</button>
+            <button
+              type="button"
+              onClick={() => setDeleteSheet(null)}
+              style={{
+                height: 50, borderRadius: 12, border: "none", background: "transparent", color: $.tx,
+                fontSize: 16, fontWeight: 500, cursor: "pointer", fontFamily: "inherit",
+              }}
+            >Отмена</button>
+          </div>
+        </>
+      )}
     </main>
   );
 }
-

@@ -30,7 +30,7 @@ export default function MobileChatSearchOverlay({ chatId, onClose, onJumpToMessa
       display: "flex", gap: 8, alignItems: "center", zIndex: 9990,
     }}>
       <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Поиск в чате..."
-             style={{ flex: 1, height: 38, padding: "0 12px", borderRadius: 10, border: `1px solid ${$.brd}`, background: $.bg, color: $.tx, fontSize: 14 }} />
+             style={{ flex: 1, minWidth: 0, height: 40, padding: "0 12px", borderRadius: 10, border: `1px solid ${$.brd}`, background: $.bg, color: $.tx, fontSize: 16 }} />
       <div style={{ fontSize: 12, color: $.txS, minWidth: 50, textAlign: "center" }}>{matches.length > 0 ? `${index + 1}/${matches.length}` : "—"}</div>
       <button type="button" disabled={matches.length === 0}
               onClick={() => { const i = (index - 1 + matches.length) % matches.length; setIndex(i); onJumpToMessage?.(matches[i].messageId); }}

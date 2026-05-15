@@ -61,7 +61,7 @@ export default function FileMessageBubble({ msg, chatId, downloadFile, getFileUr
     const previewSrc = meta?.thumb || previewUrl;
     return (
       <div
-        style={{ cursor: "pointer", maxWidth: 240, display: "flex", flexDirection: "column", gap: 4 }}
+        style={{ cursor: "pointer", width: "min(240px, 100%)", display: "flex", flexDirection: "column", gap: 4 }}
         onClick={() => onOpenImage?.({ fileId: msg.file_id, iv: meta?.iv, name: meta?.name, type: meta?.type || "image/*" })}
         title="Открыть изображение"
       >
@@ -86,11 +86,11 @@ export default function FileMessageBubble({ msg, chatId, downloadFile, getFileUr
   }
 
   return (
-    <div style={{ cursor: "pointer" }} onClick={handleDownload}>
+    <div style={{ cursor: "pointer", minWidth: 0 }} onClick={handleDownload}>
       <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 10px", background: "rgba(255,255,255,.1)", borderRadius: 6 }}>
         <span style={{ fontSize: 16 }}>📎</span>
-        <div>
-          <div style={{ fontSize: 12, fontWeight: 600 }}>{meta?.name || "Файл"}</div>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{meta?.name || "Файл"}</div>
           <div style={{ fontSize: 10, opacity: .7 }}>{meta?.size ? `${Math.round(meta.size / 1024)} KB` : ""} {loading ? "· Загрузка..." : ""}</div>
         </div>
       </div>

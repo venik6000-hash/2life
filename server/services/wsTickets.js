@@ -5,12 +5,14 @@ const TICKET_TTL_MS = 30_000;
 // ticket -> { id, username, role, expiry }
 const tickets = new Map();
 
-const createWsTicket = (user) => {
+const createWsTicket = (user, deviceId = null) => {
   const ticket = crypto.randomBytes(32).toString("hex");
   tickets.set(ticket, {
     id: user.id,
     username: user.username,
     role: user.role,
+    jti: user.jti || null,
+    deviceId: deviceId || null,
     expiry: Date.now() + TICKET_TTL_MS,
   });
   return ticket;

@@ -53,6 +53,14 @@ const normalizeMessage = (message, fallbackChatId = null) => ({
   deleted_for_all: !!message?.deleted_for_all,
 });
 
+const buildMessageMeta = (payload = {}) => {
+  const meta = payload.meta && typeof payload.meta === "object" ? { ...payload.meta } : {};
+  if (Array.isArray(payload.mentionedUserIds) && payload.mentionedUserIds.length > 0) {
+    meta.mentionedUserIds = payload.mentionedUserIds;
+  }
+  return meta;
+};
+
 const normalizeChatList = (items = []) => {
   const seen = new Set();
   const normalized = [];
@@ -88,7 +96,7 @@ const removeChatMessagesFromCache = (chatId, scope) => {
 };
 
 export function MessengerProvider({ children }) {
-  const { token, user, authFetch } = useAuth();
+  const { token, user, authFetch, updateUser, logout } = useAuth();
   const cacheScope = user?.id ? `user_${user.id}` : "anonymous";
   const cursorKey = `${CURSOR_KEY}_${cacheScope}`;
   const [ready, setReady] = useState(false);
@@ -215,6 +223,22 @@ export function MessengerProvider({ children }) {
     });
   }, [cacheScope]);
 
+  const patchMessage = useCallback((chatId, messageId, patch) => {
+    if (!chatId || !messageId) return;
+    setMessages((prev) => {
+      const current = prev[chatId] || [];
+      let changed = false;
+      const nextList = current.map((message) => {
+        if (message.id !== messageId) return message;
+        changed = true;
+        return { ...message, ...patch };
+      });
+      if (!changed) return prev;
+      saveCachedMessages(chatId, nextList, cacheScope).catch(() => {});
+      return { ...prev, [chatId]: nextList };
+    });
+  }, [cacheScope]);
+
   const queuePendingMessage = useCallback((chatId, payload) => {
     const id = payload.clientMessageId || makeId();
     const item = {
@@ -232,9 +256,10 @@ export function MessengerProvider({ children }) {
       sender_username: user?.username,
       sender_display_name: user?.display_name || "",
       text: payload.text || "",
-      meta: payload.meta || {},
+      meta: buildMessageMeta(payload),
       msg_type: payload.msgType || "text",
       file_id: payload.fileId || null,
+      reply_to_message_id: payload.replyToMessageId || null,
       client_message_id: id,
       created_at: item.createdAt,
       pending: true,
@@ -261,7 +286,11 @@ export function MessengerProvider({ children }) {
   }, [cacheScope, persistPendingQueue]);
 
   const getTicket = useCallback(async () => {
-    const res = await authFetch("/api/auth/ws-ticket", { method: "POST" });
+    const res = await authFetch("/api/auth/ws-ticket", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ deviceId: getOrCreateDeviceId() }),
+    });
     if (!res.ok) throw new Error("ws-ticket failed");
     const payload = await res.json();
     return payload.ticket;
@@ -330,9 +359,10 @@ export function MessengerProvider({ children }) {
         sender_username: user?.username,
         sender_display_name: user?.display_name || "",
         text: fullPayload.text || "",
-        meta: fullPayload.meta || {},
+        meta: buildMessageMeta(fullPayload),
         msg_type: fullPayload.msgType || "text",
         file_id: fullPayload.fileId || null,
+        reply_to_message_id: fullPayload.replyToMessageId || null,
         client_message_id: clientMessageId,
         created_at: new Date().toISOString(),
         pending: true,
@@ -368,6 +398,20 @@ export function MessengerProvider({ children }) {
       return true;
     }
   }, [authFetch, queuePendingMessage, upsertMessage, user]);
+
+  const loadPinnedForAll = useCallback(async (chatId) => {
+    try {
+      const { messages: pinned } = await MessengerApi.listPinnedForAll(authFetch, chatId);
+      setPinnedForAll((prev) => ({ ...prev, [chatId]: pinned.map((m) => normalizeMessage(m, chatId)) }));
+    } catch {}
+  }, [authFetch]);
+
+  const loadPinnedForMe = useCallback(async (chatId) => {
+    try {
+      const { messages: pinned } = await MessengerApi.listPinnedForMe(authFetch, chatId);
+      setPinnedForMe((prev) => ({ ...prev, [chatId]: pinned.map((m) => normalizeMessage(m, chatId)) }));
+    } catch {}
+  }, [authFetch]);
 
   const flushPendingQueue = useCallback(async () => {
     if (!ready || !isOnline() || pendingQueue.length === 0 || flushInFlightRef.current) return;
@@ -438,6 +482,9 @@ export function MessengerProvider({ children }) {
       case "message_deleted_self":
         removeMessage(event.chatId, event.messageId);
         break;
+      case "messages_deleted_self_bulk":
+        for (const id of event.messageIds || []) removeMessage(event.chatId, id);
+        break;
       case "receipts_update":
         setChats((prev) => prev.map((chat) => (
           chat.id === event.chatId ? { ...chat, receipts: event.receipts || [] } : chat
@@ -470,17 +517,49 @@ export function MessengerProvider({ children }) {
         }
         break;
       case "message_pinned":
+        patchMessage(event.chatId, event.messageId, { pinned_at: event.pinnedAt || new Date().toISOString() });
+        loadPinnedForAll(event.chatId).catch(() => {});
+        break;
       case "message_unpinned":
+        patchMessage(event.chatId, event.messageId, { pinned_at: null });
         loadPinnedForAll(event.chatId).catch(() => {});
         break;
       case "personal_pin_added":
       case "personal_pin_removed":
         loadPinnedForMe(event.chatId).catch(() => {});
         break;
+      case "force_logout": {
+        // Серверный отзыв этого устройства: чистим всё и выходим.
+        const ourDevice = getOrCreateDeviceId();
+        if (!event.deviceId || event.deviceId === ourDevice) {
+          try { logout?.(); } catch (_) {}
+        }
+        break;
+      }
+      case "user_updated":
+        // Кто-то из участников чата сменил display_name — обновим локально, чтобы шапки не были стали.
+        if (event.user?.id) {
+          setChats((prev) => prev.map((chat) => ({
+            ...chat,
+            participants: (chat.participants || []).map((p) =>
+              p.user_id === event.user.id ? { ...p, display_name: event.user.display_name || p.display_name } : p
+            ),
+          })));
+          setMessages((prev) => {
+            const next = {};
+            for (const [chatId, list] of Object.entries(prev)) {
+              next[chatId] = list.map((m) =>
+                m.sender_id === event.user.id ? { ...m, sender_display_name: event.user.display_name || m.sender_display_name } : m
+              );
+            }
+            return next;
+          });
+        }
+        break;
       default:
         break;
     }
-  }, [clearRemovedChatLocalState, clearRetryTimer, loadPinnedForAll, loadPinnedForMe, persistPendingQueue, removeMessage, upsertMessage, user?.id]);
+  }, [clearRemovedChatLocalState, clearRetryTimer, loadPinnedForAll, loadPinnedForMe, logout, patchMessage, persistPendingQueue, removeMessage, upsertMessage, user?.id]);
 
   useEffect(() => {
     if (!token || !user) return undefined;
@@ -540,14 +619,34 @@ export function MessengerProvider({ children }) {
   }, []);
 
   const bulkDelete = useCallback(async (chatId, ids, scope) => {
+    const safeIds = Array.isArray(ids) ? ids.filter((id) => Number.isFinite(Number(id))) : [];
+    if (safeIds.length === 0) return { ok: false, error: "Нет выделенных сообщений" };
+    // Снапшот для возможного отката (только при scope='all' с отказом сервера).
+    const snapshot = (messages[chatId] || []).filter((m) => safeIds.includes(m.id));
+    // Оптимистичное удаление + сразу выходим из selection mode (Telegram-style).
+    setMessages((prev) => {
+      const cur = prev[chatId] || [];
+      const next = cur.filter((m) => !safeIds.includes(m.id));
+      saveCachedMessages(chatId, next, cacheScope).catch(() => {});
+      return { ...prev, [chatId]: next };
+    });
+    exitSelectionMode();
     try {
-      const result = await MessengerApi.bulkDelete(authFetch, chatId, ids, scope);
-      exitSelectionMode();
+      const result = await MessengerApi.bulkDelete(authFetch, chatId, safeIds, scope);
       return { ok: true, ...result };
     } catch (e) {
+      // Откат: возвращаем удалённые сообщения, чтобы пользователь не остался в неконсистентном состоянии.
+      if (snapshot.length > 0) {
+        setMessages((prev) => {
+          const cur = prev[chatId] || [];
+          const merged = sortMessages([...cur, ...snapshot]);
+          saveCachedMessages(chatId, merged, cacheScope).catch(() => {});
+          return { ...prev, [chatId]: merged };
+        });
+      }
       return { ok: false, error: e.message };
     }
-  }, [authFetch, exitSelectionMode]);
+  }, [authFetch, cacheScope, exitSelectionMode, messages]);
 
   const bulkForward = useCallback(async (chatId, ids, targetChatId) => {
     try {
@@ -610,18 +709,22 @@ export function MessengerProvider({ children }) {
   const editMsg = useCallback(async (chatId, messageId, text) => {
     const trimmed = String(text || "").trim();
     if (!trimmed) return false;
+    // Запоминаем прежнее состояние для отката, если правка не пройдёт.
+    const prev = (messages[chatId] || []).find((m) => m.id === messageId) || null;
     const sent = wsRef.current?.send({ type: "edit_message", chatId, messageId, text: trimmed, meta: {} });
     if (!sent) {
       try {
         const data = await MessengerApi.editMessage(authFetch, chatId, messageId, { text: trimmed, meta: {} });
         if (data?.message) upsertMessage(chatId, data.message);
+        else if (prev) upsertMessage(chatId, prev);
       } catch {
+        if (prev) upsertMessage(chatId, prev); // откат
         return false;
       }
     }
     upsertMessage(chatId, { id: messageId, chat_id: chatId, text: trimmed, edited_at: new Date().toISOString() });
     return true;
-  }, [authFetch, upsertMessage]);
+  }, [authFetch, messages, upsertMessage]);
 
   const deleteMsg = useCallback(async (chatId, messageId, scope = "all") => {
     const normalizedScope = scope === "self" ? "self" : "all";
@@ -700,8 +803,12 @@ export function MessengerProvider({ children }) {
     return { ok: failed.length === 0, downloaded, total: files.length, failed };
   }, [downloadFile]);
 
+  const markReadLastRef = useRef(new Map()); // chatId -> last messageId we sent
   const markRead = useCallback((chatId, messageId) => {
     if (!chatId || !messageId) return;
+    const lastSent = markReadLastRef.current.get(chatId);
+    if (lastSent && Number(lastSent) >= Number(messageId)) return;
+    markReadLastRef.current.set(chatId, messageId);
     const sent = wsRef.current?.send({ type: "mark_read", chatId, messageId });
     if (!sent) MessengerApi.markRead(authFetch, chatId, messageId).catch(() => {});
     setChats((prev) => prev.map((chat) => {
@@ -712,37 +819,25 @@ export function MessengerProvider({ children }) {
     }));
   }, [authFetch, user?.id]);
 
-  const loadPinnedForAll = useCallback(async (chatId) => {
-    try {
-      const { messages: pinned } = await MessengerApi.listPinnedForAll(authFetch, chatId);
-      setPinnedForAll((prev) => ({ ...prev, [chatId]: pinned.map((m) => normalizeMessage(m, chatId)) }));
-    } catch {}
-  }, [authFetch]);
-
-  const loadPinnedForMe = useCallback(async (chatId) => {
-    try {
-      const { messages: pinned } = await MessengerApi.listPinnedForMe(authFetch, chatId);
-      setPinnedForMe((prev) => ({ ...prev, [chatId]: pinned.map((m) => normalizeMessage(m, chatId)) }));
-    } catch {}
-  }, [authFetch]);
-
   const pinForAll = useCallback(async (chatId, messageId) => {
     try {
       await MessengerApi.pinForAll(authFetch, chatId, messageId);
       await loadPinnedForAll(chatId);
+      patchMessage(chatId, messageId, { pinned_at: new Date().toISOString() });
       return { ok: true };
     } catch (e) {
       return { ok: false, error: e.message };
     }
-  }, [authFetch, loadPinnedForAll]);
+  }, [authFetch, loadPinnedForAll, patchMessage]);
 
   const unpinForAll = useCallback(async (chatId, messageId) => {
     try {
       await MessengerApi.unpinForAll(authFetch, chatId, messageId);
       await loadPinnedForAll(chatId);
+      patchMessage(chatId, messageId, { pinned_at: null });
       return { ok: true };
     } catch (e) { return { ok: false, error: e.message }; }
-  }, [authFetch, loadPinnedForAll]);
+  }, [authFetch, loadPinnedForAll, patchMessage]);
 
   const pinForMe = useCallback(async (chatId, messageId) => {
     try {
@@ -853,6 +948,22 @@ export function MessengerProvider({ children }) {
         case "message_deleted_self":
           if (chatId && payload.messageId) removeMessage(chatId, payload.messageId);
           break;
+        case "message_pinned":
+          if (chatId && payload.messageId) {
+            patchMessage(chatId, payload.messageId, { pinned_at: payload.pinnedAt || new Date().toISOString() });
+            loadPinnedForAll(chatId);
+          }
+          break;
+        case "message_unpinned":
+          if (chatId && payload.messageId) {
+            patchMessage(chatId, payload.messageId, { pinned_at: null });
+            loadPinnedForAll(chatId);
+          }
+          break;
+        case "personal_pin_added":
+        case "personal_pin_removed":
+          if (chatId) loadPinnedForMe(chatId);
+          break;
         case "chat_created":
         case "chat_updated":
         case "participant_added":
@@ -873,7 +984,7 @@ export function MessengerProvider({ children }) {
 
     await Promise.all(Array.from(refreshChats).map((chatId) => fetchChatById(chatId)));
     await Promise.all(Array.from(refreshMessages).map((chatId) => loadMessages(chatId)));
-  }, [clearRemovedChatLocalState, fetchChatById, loadMessages, removeMessage, user?.id]);
+  }, [clearRemovedChatLocalState, fetchChatById, loadMessages, loadPinnedForAll, loadPinnedForMe, patchMessage, removeMessage, user?.id]);
 
   const syncMessenger = useCallback(async () => {
     try {
@@ -983,11 +1094,32 @@ export function MessengerProvider({ children }) {
   const updateDisplayName = useCallback(async (displayName) => {
     try {
       const result = await MessengerApi.updateDisplayName(authFetch, displayName);
-      return { ok: true, ...result };
+      const nextName = result?.displayName ?? displayName;
+      // 1. Обновляем глобальный user в AuthContext (он используется в шапках, оптимистических сообщениях и т.п.)
+      try { updateUser?.({ display_name: nextName }); } catch (_) {}
+      // 2. Прокатываем имя по локальным чатам и сообщениям, чтобы не ждать перезагрузки.
+      if (user?.id) {
+        setChats((prev) => prev.map((chat) => ({
+          ...chat,
+          participants: (chat.participants || []).map((p) =>
+            p.user_id === user.id ? { ...p, display_name: nextName } : p
+          ),
+        })));
+        setMessages((prev) => {
+          const next = {};
+          for (const [chatId, list] of Object.entries(prev)) {
+            next[chatId] = list.map((m) =>
+              m.sender_id === user.id ? { ...m, sender_display_name: nextName } : m
+            );
+          }
+          return next;
+        });
+      }
+      return { ok: true, displayName: nextName };
     } catch (e) {
       return { ok: false, error: e.message };
     }
-  }, [authFetch]);
+  }, [authFetch, updateUser, user?.id]);
 
   const setFontSize = useCallback((size) => {
     const safe = ["S", "M", "L"].includes(size) ? size : "M";

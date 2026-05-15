@@ -2,7 +2,7 @@
 <html lang="ru">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <meta name="theme-color" content="#2563eb" />
     <meta name="mobile-web-app-capable" content="yes" />
@@ -12,7 +12,10 @@
     <title>2life — Дашборд</title>
     <style>
       * { margin: 0; padding: 0; box-sizing: border-box; }
-      body { overflow: auto; }
+      html, body { overflow-x: hidden; max-width: 100vw; }
+      body { overflow-y: auto; -webkit-text-size-adjust: 100%; }
+      /* iOS/Android: убираем системный синий highlight при long-press на интерактивных областях мессенджера */
+      [data-messenger-no-select] { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
       ::-webkit-scrollbar { width: 6px; }
       ::-webkit-scrollbar-track { background: transparent; }
       ::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }

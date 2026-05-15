@@ -2,17 +2,56 @@ import { useEffect, useState } from "react";
 import { useAuth } from "../context/AuthContext";
 import { useMessenger } from "../context/MessengerContext";
 import { useTheme } from "../context/ThemeContext";
+import { getMessengerFontConfig } from "../utils/messengerFont";
 
-export default function MessengerSettingsPanel({ onClose }) {
-  const { user, logout, authFetch } = useAuth();
-  // ThemeContext exposes dk (boolean) and setDk. Derive a "mode" string from it.
-  const { $, dk, setDk } = useTheme();
-  const {
-    wsConnected, notificationStatus, enableNotifications,
-    fontSize, setFontSize, updateDisplayName,
-    listDevices, revokeDevice,
-  } = useMessenger();
+function sectionStyle($) {
+  return {
+    display: "grid",
+    gap: 10,
+    padding: 14,
+    border: `1px solid ${$.brd}`,
+    borderRadius: 10,
+    background: $.bgC,
+    minWidth: 0,
+  };
+}
+
+function controlStyle($, cfg, extra = {}) {
+  return {
+    minHeight: cfg.controlHeight,
+    padding: "0 12px",
+    borderRadius: 8,
+    border: `1px solid ${$.brd}`,
+    background: $.bg,
+    color: $.tx,
+    cursor: "pointer",
+    fontSize: cfg.control,
+    fontFamily: "inherit",
+    lineHeight: 1.25,
+    minWidth: 0,
+    ...extra,
+  };
+}
+
+export function MessengerSettingsPanelContent({
+  $,
+  dk,
+  setDk,
+  user,
+  logout,
+  authFetch,
+  notificationStatus,
+  enableNotifications,
+  fontSize,
+  setFontSize,
+  updateDisplayName,
+  listDevices,
+  revokeDevice,
+  onClose,
+}) {
+  const cfg = getMessengerFontConfig(fontSize);
   const [displayName, setDisplayName] = useState(user?.display_name || user?.username || "");
+  const [nameMsg, setNameMsg] = useState("");
   const [devices, setDevices] = useState([]);
   const [pwOpen, setPwOpen] = useState(false);
   const [pwCurrent, setPwCurrent] = useState("");
@@ -24,10 +63,23 @@ export default function MessengerSettingsPanel({ onClose }) {
     listDevices().then(setDevices).catch(() => {});
   }, [listDevices]);
 
+  // Подтягиваем актуальное имя при изменении user (например, после успешного rename).
+  useEffect(() => {
+    setDisplayName(user?.display_name || user?.username || "");
+  }, [user?.display_name, user?.username]);
+
   const handleNameBlur = async () => {
-    if (displayName.trim() === (user?.display_name || "")) return;
-    const result = await updateDisplayName(displayName.trim());
-    if (!result.ok) setDisplayName(user?.display_name || "");
+    const next = displayName.trim();
+    if (next === (user?.display_name || "")) return;
+    setNameMsg("");
+    const result = await updateDisplayName(next);
+    if (!result.ok) {
+      setDisplayName(user?.display_name || "");
+      setNameMsg(result.error || "Не удалось сохранить имя");
+    } else {
+      setNameMsg("Имя обновлено");
+      setTimeout(() => setNameMsg(""), 1500);
+    }
   };
 
   const handlePwSubmit = async () => {
@@ -47,119 +99,138 @@ export default function MessengerSettingsPanel({ onClose }) {
   };
 
   return (
-    <div style={{ display: "grid", gap: 12, padding: 14, color: $.tx, fontFamily: "system-ui, sans-serif" }}>
-      <h2 style={{ margin: 0, fontSize: 18 }}>Настройки</h2>
+    <div style={{
+      display: "grid",
+      gap: 12,
+      padding: "clamp(12px, 4vw, 18px)",
+      color: $.tx,
+      fontFamily: "system-ui, sans-serif",
+      fontSize: cfg.base,
+      width: "100%",
+      maxWidth: 720,
+      margin: "0 auto",
+      boxSizing: "border-box",
+      minWidth: 0,
+    }}>
+      <h2 style={{ margin: 0, fontSize: cfg.heading, lineHeight: 1.25 }}>Настройки</h2>
 
       {/* Profile */}
-      <section style={{ display: "grid", gap: 6, padding: 12, border: `1px solid ${$.brd}`, borderRadius: 10, background: $.bgC }}>
-        <div style={{ fontSize: 11, color: $.txS, fontWeight: 700 }}>ПРОФИЛЬ</div>
-        <label style={{ fontSize: 12 }}>Отображаемое имя</label>
+      <section style={sectionStyle($)}>
+        <div style={{ fontSize: cfg.sectionLabel, color: $.txS, fontWeight: 700 }}>ПРОФИЛЬ</div>
+        <label style={{ fontSize: cfg.label }}>Отображаемое имя</label>
         <input
           value={displayName}
           onChange={(e) => setDisplayName(e.target.value)}
           onBlur={handleNameBlur}
-          style={{ height: 36, padding: "0 10px", border: `1px solid ${$.brd}`, borderRadius: 8, background: $.bg, color: $.tx }}
+          onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
+          style={controlStyle($, cfg, { cursor: "text", fontSize: Math.max(16, cfg.input) })}
         />
+        {nameMsg && (
+          <div style={{ fontSize: cfg.small, color: nameMsg === "Имя обновлено" ? $.ac : $.dn }}>{nameMsg}</div>
+        )}
       </section>
 
       {/* Notifications */}
-      <section style={{ display: "grid", gap: 6, padding: 12, border: `1px solid ${$.brd}`, borderRadius: 10, background: $.bgC }}>
-        <div style={{ fontSize: 11, color: $.txS, fontWeight: 700 }}>УВЕДОМЛЕНИЯ</div>
-        <div style={{ fontSize: 12 }}>Статус: {notificationStatus}</div>
+      <section style={sectionStyle($)}>
+        <div style={{ fontSize: cfg.sectionLabel, color: $.txS, fontWeight: 700 }}>УВЕДОМЛЕНИЯ</div>
+        <div style={{ fontSize: cfg.label }}>Статус: {notificationStatus}</div>
         <button
           type="button"
           onClick={enableNotifications}
-          style={{ height: 36, borderRadius: 8, border: `1px solid ${$.brd}`, background: $.bg, color: $.tx, cursor: "pointer" }}
+          style={controlStyle($, cfg)}
         >Включить уведомления</button>
       </section>
 
       {/* Appearance */}
-      <section style={{ display: "grid", gap: 8, padding: 12, border: `1px solid ${$.brd}`, borderRadius: 10, background: $.bgC }}>
-        <div style={{ fontSize: 11, color: $.txS, fontWeight: 700 }}>ВНЕШНИЙ ВИД</div>
-        <div style={{ display: "flex", gap: 6 }}>
+      <section style={sectionStyle($)}>
+        <div style={{ fontSize: cfg.sectionLabel, color: $.txS, fontWeight: 700 }}>ВНЕШНИЙ ВИД</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(104px, 1fr))", gap: 8 }}>
           <button
             type="button"
+            aria-pressed={!dk}
             onClick={() => setDk(false)}
-            style={{ flex: 1, height: 32, borderRadius: 8, border: `1px solid ${$.brd}`, background: !dk ? $.ac : $.bg, color: !dk ? "#fff" : $.tx, cursor: "pointer", fontSize: 12 }}
+            style={controlStyle($, cfg, { background: !dk ? $.ac : $.bg, color: !dk ? "#fff" : $.tx })}
           >Светлая</button>
           <button
             type="button"
+            aria-pressed={dk}
             onClick={() => setDk(true)}
-            style={{ flex: 1, height: 32, borderRadius: 8, border: `1px solid ${$.brd}`, background: dk ? $.ac : $.bg, color: dk ? "#fff" : $.tx, cursor: "pointer", fontSize: 12 }}
+            style={controlStyle($, cfg, { background: dk ? $.ac : $.bg, color: dk ? "#fff" : $.tx })}
           >Тёмная</button>
         </div>
-        <div style={{ fontSize: 11, color: $.txS, marginTop: 4 }}>Размер шрифта</div>
-        <div style={{ display: "flex", gap: 6 }}>
+        <div style={{ fontSize: cfg.sectionLabel, color: $.txS, marginTop: 2 }}>Размер шрифта</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 8 }}>
           {["S", "M", "L"].map((s) => (
             <button
               key={s}
               type="button"
+              aria-pressed={fontSize === s}
               onClick={() => setFontSize(s)}
-              style={{ flex: 1, height: 32, borderRadius: 8, border: `1px solid ${$.brd}`, background: fontSize === s ? $.ac : $.bg, color: fontSize === s ? "#fff" : $.tx, cursor: "pointer", fontSize: 12 }}
+              style={controlStyle($, cfg, { background: fontSize === s ? $.ac : $.bg, color: fontSize === s ? "#fff" : $.tx })}
             >{s}</button>
           ))}
         </div>
       </section>
 
       {/* Security */}
-      <section style={{ display: "grid", gap: 8, padding: 12, border: `1px solid ${$.brd}`, borderRadius: 10, background: $.bgC }}>
-        <div style={{ fontSize: 11, color: $.txS, fontWeight: 700 }}>БЕЗОПАСНОСТЬ</div>
+      <section style={sectionStyle($)}>
+        <div style={{ fontSize: cfg.sectionLabel, color: $.txS, fontWeight: 700 }}>БЕЗОПАСНОСТЬ</div>
         {!pwOpen ? (
           <button
             type="button"
             onClick={() => setPwOpen(true)}
-            style={{ height: 36, borderRadius: 8, border: `1px solid ${$.brd}`, background: $.bg, color: $.tx, cursor: "pointer" }}
+            style={controlStyle($, cfg)}
           >Сменить пароль</button>
         ) : (
-          <div style={{ display: "grid", gap: 6 }}>
+          <div style={{ display: "grid", gap: 8, minWidth: 0 }}>
             <input
               type="password"
               value={pwCurrent}
               onChange={(e) => setPwCurrent(e.target.value)}
               placeholder="Текущий пароль"
-              style={{ height: 36, padding: "0 10px", border: `1px solid ${$.brd}`, borderRadius: 8, background: $.bg, color: $.tx }}
+              style={controlStyle($, cfg, { cursor: "text", fontSize: Math.max(16, cfg.input) })}
             />
             <input
               type="password"
               value={pwNew}
               onChange={(e) => setPwNew(e.target.value)}
               placeholder="Новый пароль"
-              style={{ height: 36, padding: "0 10px", border: `1px solid ${$.brd}`, borderRadius: 8, background: $.bg, color: $.tx }}
+              style={controlStyle($, cfg, { cursor: "text", fontSize: Math.max(16, cfg.input) })}
             />
             <input
               type="password"
               value={pwConfirm}
               onChange={(e) => setPwConfirm(e.target.value)}
               placeholder="Повторите новый"
-              style={{ height: 36, padding: "0 10px", border: `1px solid ${$.brd}`, borderRadius: 8, background: $.bg, color: $.tx }}
+              style={controlStyle($, cfg, { cursor: "text", fontSize: Math.max(16, cfg.input) })}
             />
             {pwMsg && (
-              <div style={{ fontSize: 12, color: pwMsg === "Пароль изменён" ? $.ac : $.dn }}>{pwMsg}</div>
+              <div style={{ fontSize: cfg.small, color: pwMsg === "Пароль изменён" ? $.ac : $.dn }}>{pwMsg}</div>
             )}
-            <div style={{ display: "flex", gap: 6 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(112px, 1fr))", gap: 8 }}>
               <button
                 type="button"
                 onClick={handlePwSubmit}
-                style={{ flex: 1, height: 36, borderRadius: 8, border: "none", background: $.ac, color: "#fff", cursor: "pointer", fontWeight: 600 }}
+                style={controlStyle($, cfg, { border: "none", background: $.ac, color: "#fff", fontWeight: 600 })}
               >Сохранить</button>
               <button
                 type="button"
                 onClick={() => { setPwOpen(false); setPwMsg(""); }}
-                style={{ flex: 1, height: 36, borderRadius: 8, border: `1px solid ${$.brd}`, background: $.bg, color: $.tx, cursor: "pointer" }}
+                style={controlStyle($, cfg)}
               >Отмена</button>
             </div>
           </div>
         )}
 
-        <div style={{ fontSize: 11, color: $.txS, marginTop: 4 }}>Активные устройства</div>
+        <div style={{ fontSize: cfg.sectionLabel, color: $.txS, marginTop: 2 }}>Активные устройства</div>
         {devices.length === 0 && (
-          <div style={{ fontSize: 12, color: $.txS }}>Нет зарегистрированных устройств</div>
+          <div style={{ fontSize: cfg.small, color: $.txS }}>Нет зарегистрированных устройств</div>
         )}
         {devices.map((d) => (
-          <div key={d.device_id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0" }}>
+          <div key={d.device_id} style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8, padding: "6px 0", minWidth: 0 }}>
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.user_agent || "Устройство"}</div>
-              <div style={{ fontSize: 10, color: $.txS }}>{d.last_seen_at ? new Date(d.last_seen_at).toLocaleString() : "—"}</div>
+              <div style={{ fontSize: cfg.small, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.user_agent || "Устройство"}</div>
+              <div style={{ fontSize: cfg.meta, color: $.txS }}>{d.last_seen_at ? new Date(d.last_seen_at).toLocaleString() : "—"}</div>
             </div>
             <button
               type="button"
@@ -167,19 +238,19 @@ export default function MessengerSettingsPanel({ onClose }) {
                 await revokeDevice(d.device_id);
                 setDevices((prev) => prev.filter((x) => x.device_id !== d.device_id));
               }}
-              style={{ height: 30, padding: "0 10px", borderRadius: 8, border: `1px solid ${$.brd}`, background: $.bg, color: $.dn, cursor: "pointer", fontSize: 12 }}
+              style={controlStyle($, cfg, { minHeight: Math.max(30, cfg.controlHeight - 4), color: $.dn, fontSize: cfg.small })}
             >Отозвать</button>
           </div>
         ))}
       </section>
 
       {/* Data / logout */}
-      <section style={{ display: "grid", gap: 6, padding: 12, border: `1px solid ${$.brd}`, borderRadius: 10, background: $.bgC }}>
-        <div style={{ fontSize: 11, color: $.txS, fontWeight: 700 }}>ДАННЫЕ</div>
+      <section style={sectionStyle($)}>
+        <div style={{ fontSize: cfg.sectionLabel, color: $.txS, fontWeight: 700 }}>ДАННЫЕ</div>
         <button
           type="button"
           onClick={logout}
-          style={{ height: 36, borderRadius: 8, border: "none", background: $.dn, color: "#fff", cursor: "pointer", fontWeight: 600 }}
+          style={controlStyle($, cfg, { border: "none", background: $.dn, color: "#fff", fontWeight: 600 })}
         >Выйти</button>
       </section>
 
@@ -187,9 +258,38 @@ export default function MessengerSettingsPanel({ onClose }) {
         <button
           type="button"
           onClick={onClose}
-          style={{ height: 36, borderRadius: 8, border: `1px solid ${$.brd}`, background: $.bg, color: $.tx, cursor: "pointer" }}
+          style={controlStyle($, cfg)}
         >Закрыть</button>
       )}
     </div>
+  );
+}
+
+export default function MessengerSettingsPanel({ onClose }) {
+  const { user, logout, authFetch } = useAuth();
+  const { $, dk, setDk } = useTheme();
+  const {
+    notificationStatus, enableNotifications,
+    fontSize, setFontSize, updateDisplayName,
+    listDevices, revokeDevice,
+  } = useMessenger();
+
+  return (
+    <MessengerSettingsPanelContent
+      $={$}
+      dk={dk}
+      setDk={setDk}
+      user={user}
+      logout={logout}
+      authFetch={authFetch}
+      notificationStatus={notificationStatus}
+      enableNotifications={enableNotifications}
+      fontSize={fontSize}
+      setFontSize={setFontSize}
+      updateDisplayName={updateDisplayName}
+      listDevices={listDevices}
+      revokeDevice={revokeDevice}
+      onClose={onClose}
+    />
   );
 }

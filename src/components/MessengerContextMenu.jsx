@@ -27,18 +27,18 @@ export default function MessengerContextMenu({
         borderRadius: 10, boxShadow: $.sh, zIndex: 9999, padding: 6,
       }}
     >
-      <button onClick={onReply} style={{ ...itemStyle, color: $.tx }}>Ответить</button>
-      <button onClick={onForward} style={{ ...itemStyle, color: $.tx }}>Переслать</button>
+      {onReply && <button onClick={onReply} style={{ ...itemStyle, color: $.tx }}>Ответить</button>}
+      {onForward && <button onClick={onForward} style={{ ...itemStyle, color: $.tx }}>Переслать</button>}
       {isPinnedForAll
         ? <button onClick={onUnpinForAll} style={{ ...itemStyle, color: $.tx }}>Открепить</button>
         : canPinForAll && <button onClick={onPinForAll} style={{ ...itemStyle, color: $.tx }}>Закрепить для всех</button>}
       {isPinnedForMe
         ? <button onClick={onUnpinForMe} style={{ ...itemStyle, color: $.tx }}>Убрать из своих закладок</button>
         : canPinForMe && <button onClick={onPinForMe} style={{ ...itemStyle, color: $.tx }}>Закрепить для себя</button>}
-      {isText && <button onClick={onCopy} style={{ ...itemStyle, color: $.tx }}>Копировать</button>}
+      {isText && onCopy && <button onClick={onCopy} style={{ ...itemStyle, color: $.tx }}>Копировать</button>}
       {canEdit && <button onClick={onEdit} style={{ ...itemStyle, color: $.tx }}>Редактировать</button>}
-      <button onClick={onEnterSelection} style={{ ...itemStyle, color: $.tx }}>Выбрать</button>
-      <button onClick={onDeleteSelf} style={{ ...itemStyle, color: $.tx }}>Удалить у себя</button>
+      {onEnterSelection && <button onClick={onEnterSelection} style={{ ...itemStyle, color: $.tx }}>Выбрать</button>}
+      {onDeleteSelf && <button onClick={onDeleteSelf} style={{ ...itemStyle, color: $.tx }}>Удалить у себя</button>}
       {canDeleteForAll && <button onClick={onDeleteAll} style={{ ...itemStyle, color: $.dn }}>Удалить у всех</button>}
     </div>
   );

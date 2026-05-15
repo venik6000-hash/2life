@@ -35,7 +35,9 @@ export class MsgSocket {
     }
     try {
       const ticket = await this._getTicket();
-      const url    = `${WS_URL}?ticket=${encodeURIComponent(ticket)}`;
+      let deviceId = "";
+      try { deviceId = localStorage.getItem("dash_messenger_device_id") || ""; } catch (_) {}
+      const url    = `${WS_URL}?ticket=${encodeURIComponent(ticket)}${deviceId ? `&deviceId=${encodeURIComponent(deviceId)}` : ""}`;
       const ws     = new WebSocket(url);
       this._ws     = ws;
 

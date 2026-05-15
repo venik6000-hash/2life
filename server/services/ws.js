@@ -36,6 +36,21 @@ const sendTo = (userId, payload) => {
   }
 };
 
+// Принудительный логаут конкретного устройства: рассылаем событие во ВСЕ сокеты пользователя
+// (клиент сам сравнит свой deviceId с targetDeviceId) и закрываем сокеты, привязанные к этому устройству.
+const forceLogoutDevice = (userId, deviceId) => {
+  const set = connections.get(userId);
+  if (!set) return;
+  const payload = JSON.stringify({ type: "force_logout", deviceId });
+  for (const ws of set) {
+    if (ws.readyState !== 1) continue;
+    try { ws.send(payload); } catch (_) {}
+    if (ws.deviceId && ws.deviceId === deviceId) {
+      try { ws.close(4401, "device_revoked"); } catch (_) {}
+    }
+  }
+};
+
 const broadcastToChat = async (chatId, payload, exceptUserId) => {
   const participants = await getChatParticipants(chatId);
   for (const p of participants) {
@@ -94,6 +109,8 @@ const messagePayload = (row, user, { text = "", meta = {} } = {}) => ({
   client_message_id: row.client_message_id,
   deleted_for_all: !!row.deleted_for_all,
   created_at: row.created_at,
+  reply_to_message_id: row.reply_to_message_id || null,
+  pinned_at: row.pinned_at || null,
   edited_at: row.edited_at || null,
 });
 
@@ -315,6 +332,8 @@ const initWebSocket = (httpServer) => {
 
     wss.handleUpgrade(req, socket, head, (ws) => {
       ws.user = user;
+      // deviceId может прийти через ticket (для WS) или через query-параметр
+      ws.deviceId = (user && user.deviceId) || url.searchParams.get("deviceId") || null;
       wss.emit("connection", ws, req);
     });
   });
@@ -334,4 +353,4 @@ const initWebSocket = (httpServer) => {
   return wss;
 };
 
-module.exports = { initWebSocket, sendTo, broadcastToChat, connections };
+module.exports = { initWebSocket, sendTo, broadcastToChat, forceLogoutDevice, connections };

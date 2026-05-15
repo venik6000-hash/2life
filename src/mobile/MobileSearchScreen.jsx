@@ -24,11 +24,11 @@ export default function MobileSearchScreen({ onBack, onSelectChat }) {
   }, [q, searchGlobal]);
 
   return (
-    <main style={{ minHeight: "100dvh", background: $.bg, color: $.tx, fontFamily: "system-ui, sans-serif" }}>
+    <main style={{ height: "100dvh", overflowY: "auto", background: $.bg, color: $.tx, fontFamily: "system-ui, sans-serif" }}>
       <header style={{ padding: "calc(env(safe-area-inset-top) + 10px) 12px 10px", borderBottom: `1px solid ${$.brd}`, display: "flex", gap: 8, alignItems: "center" }}>
         <button type="button" onClick={onBack} style={{ width: 42, height: 42, borderRadius: 12, border: `1px solid ${$.brd}`, background: $.bgC, color: $.tx, fontSize: 22 }}>‹</button>
         <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Поиск по всем чатам..."
-               style={{ flex: 1, height: 40, padding: "0 12px", borderRadius: 12, border: `1px solid ${$.brd}`, background: $.bgC, color: $.tx, fontSize: 14 }} />
+               style={{ flex: 1, minWidth: 0, height: 40, padding: "0 12px", borderRadius: 12, border: `1px solid ${$.brd}`, background: $.bgC, color: $.tx, fontSize: 16 }} />
       </header>
       <section style={{ padding: 12, display: "grid", gap: 12 }}>
         {busy && <div style={{ color: $.txS, fontSize: 13 }}>Поиск...</div>}

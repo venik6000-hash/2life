@@ -12,6 +12,8 @@ export default function MessengerChatList({
   createNewChat,
   messages,
   canCreateChat,
+  onSearchJump,
+  onOpenSettings,
 }) {
   const { $ } = useTheme();
   const { searchGlobal } = useMessenger();
@@ -89,32 +91,54 @@ export default function MessengerChatList({
   }, [chats, getActivityTimestamp]);
 
   return (
-    <div style={{ width: 240, minWidth: 240, borderRight: `1px solid ${$.brd}`, display: "flex", flexDirection: "column", background: $.bgC }}>
+    <div style={{ width: 300, minWidth: 300, height: "100%", minHeight: 0, borderRight: `1px solid ${$.brd}`, display: "flex", flexDirection: "column", background: $.bgC }}>
       <div style={{ padding: "12px 14px", borderBottom: `1px solid ${$.brd}`, fontWeight: 700, fontSize: 14, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <span>💬 Чаты</span>
-        {canCreateChat && (
-          <button
-            title="Новый чат"
-            onClick={handleCreate}
-            disabled={creating}
-            style={{
-              background: $.ac,
-              color: "#fff",
-              border: "none",
-              borderRadius: 6,
-              width: 26,
-              height: 26,
-              cursor: creating ? "default" : "pointer",
-              opacity: creating ? 0.5 : 1,
-              fontSize: 16,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-          >
-            +
-          </button>
-        )}
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          {onOpenSettings && (
+            <button
+              type="button"
+              title="Настройки"
+              onClick={onOpenSettings}
+              style={{
+                background: $.bg,
+                color: $.tx,
+                border: `1px solid ${$.brd}`,
+                borderRadius: 6,
+                width: 28,
+                height: 28,
+                cursor: "pointer",
+                fontSize: 15,
+                display: "grid",
+                placeItems: "center",
+              }}
+            >
+              ⚙
+            </button>
+          )}
+          {canCreateChat && (
+            <button
+              title="Новый чат"
+              onClick={handleCreate}
+              disabled={creating}
+              style={{
+                background: $.ac,
+                color: "#fff",
+                border: "none",
+                borderRadius: 6,
+                width: 28,
+                height: 28,
+                cursor: creating ? "default" : "pointer",
+                opacity: creating ? 0.5 : 1,
+                fontSize: 16,
+                display: "grid",
+                placeItems: "center",
+              }}
+            >
+              +
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Global search bar */}
@@ -151,7 +175,7 @@ export default function MessengerChatList({
                 <button
                   key={m.messageId}
                   type="button"
-                  onClick={() => { setActiveChatId?.(g.chatId); setGlobalSearchOpen(false); }}
+                  onClick={() => { onSearchJump?.(g.chatId, m.messageId); setActiveChatId?.(g.chatId); setGlobalSearchOpen(false); }}
                   style={{ display: "block", width: "100%", textAlign: "left", padding: "6px 8px", border: "none", background: "transparent", color: $.tx, cursor: "pointer", borderRadius: 6, fontSize: 12 }}
                 >
                   {m.snippet}

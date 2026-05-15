@@ -577,6 +577,10 @@ const initSchema = async () => {
   } catch (_) {}
   try { await pool.query("CREATE INDEX IF NOT EXISTS idx_msg_chat_pinned ON messages(chat_id, pinned_at) WHERE pinned_at IS NOT NULL"); } catch (_) {}
   try { await pool.query("CREATE INDEX IF NOT EXISTS idx_msg_reply_to ON messages(reply_to_message_id) WHERE reply_to_message_id IS NOT NULL"); } catch (_) {}
+
+  // Device session tracking: одно поле jti на пару (user_id, device_id)
+  try { await pool.query("ALTER TABLE messenger_devices ADD COLUMN jti TEXT"); } catch (_) {}
+  try { await pool.query("CREATE INDEX IF NOT EXISTS idx_md_jti ON messenger_devices(jti) WHERE jti IS NOT NULL"); } catch (_) {}
   try { await pool.query("CREATE INDEX IF NOT EXISTS idx_mpf_user ON message_pinned_for_users(user_id)"); } catch (_) {}
 
 };
@@ -1257,14 +1261,16 @@ const deleteMessagesForAllBulk = async (chatId, ids, deletedBy) => {
   return r.rows.map((row) => row.id);
 };
 
-const hideMessagesForUserBulk = async (userId, ids) => {
+const hideMessagesForUserBulk = async (chatId, userId, ids) => {
   if (!ids || ids.length === 0) return 0;
   const r = await pool.query(
     `INSERT INTO message_hidden_for_users (message_id, user_id)
-     SELECT id, $1 FROM unnest($2::int[]) AS id
+     SELECT m.id, $2
+       FROM messages m
+      WHERE m.chat_id = $1 AND m.id = ANY($3::int[])
      ON CONFLICT (message_id, user_id) DO NOTHING
      RETURNING message_id`,
-    [userId, ids]
+    [chatId, userId, ids]
   );
   return r.rows.length;
 };
@@ -1287,8 +1293,13 @@ const pinMessageForAll = async (chatId, messageId) => {
     `UPDATE messages
        SET pinned_at = NOW()
      WHERE chat_id = $1 AND id = $2 AND deleted_for_all = false AND pinned_at IS NULL
+       AND (
+         SELECT COUNT(*)::int
+           FROM messages
+          WHERE chat_id = $1 AND pinned_at IS NOT NULL AND deleted_for_all = false
+       ) < $3
      RETURNING *, encrypted_text AS ciphertext, encrypted_meta AS iv`,
-    [chatId, messageId]
+    [chatId, messageId, PIN_FOR_ALL_LIMIT]
   );
   return r.rows[0] ?? null;
 };
@@ -1332,10 +1343,18 @@ const countPinnedForUser = async (chatId, userId) => {
 const pinMessageForUser = async (userId, messageId) => {
   const r = await pool.query(
     `INSERT INTO message_pinned_for_users (user_id, message_id)
-     VALUES ($1, $2)
+     SELECT $1, $2
+      WHERE (
+        SELECT COUNT(*)::int
+          FROM message_pinned_for_users mpu
+          JOIN messages m ON m.id = mpu.message_id
+         WHERE mpu.user_id = $1 AND m.chat_id = (
+           SELECT chat_id FROM messages WHERE id = $2
+         ) AND m.deleted_for_all = false
+      ) < $3
      ON CONFLICT (user_id, message_id) DO NOTHING
      RETURNING pinned_at`,
-    [userId, messageId]
+    [userId, messageId, PIN_FOR_ME_LIMIT]
   );
   return r.rows[0] ?? null;
 };

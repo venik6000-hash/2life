@@ -27,7 +27,9 @@ const {
 } = require("../services/chatAccessSync");
 const { matchAndSnippet } = require("../services/messengerSearch");
 const { sendPrivateMessagePush } = require("../services/messengerPush");
-const { broadcastToChat, sendTo } = require("../services/ws");
+const { broadcastToChat, sendTo, forceLogoutDevice } = require("../services/ws");
+const { blacklistToken } = require("../services/tokenBlacklist");
+const { getDeviceJti } = require("../services/messengerStore");
 const { ensureDir } = require("../services/storage");
 
 const router = express.Router();
@@ -573,10 +575,16 @@ router.post("/chats/:chatId/messages/:messageId/pin", requireAuth(), async (req,
     }
 
     const pinned = await pinMessageForAll(chatId, messageId);
-    if (!pinned) return res.status(404).json({ error: "Не удалось закрепить" });
+    if (!pinned) {
+      const latestCount = await countPinnedForAll(chatId);
+      if (latestCount >= PIN_FOR_ALL_LIMIT) {
+        return res.status(409).json({ error: "PIN_LIMIT_REACHED", limit: PIN_FOR_ALL_LIMIT });
+      }
+      return res.status(404).json({ error: "Не удалось закрепить" });
+    }
 
     const payload = { type: "message_pinned", chatId, messageId, pinnedAt: pinned.pinned_at };
-    await createSyncEvent(pool, { chatId, eventType: "message_pinned", payload: { messageId } });
+    await createSyncEvent(pool, { chatId, eventType: "message_pinned", payload: { messageId, pinnedAt: pinned.pinned_at } });
     await broadcastToChat(chatId, payload, null);
     sendTo(req.user.id, payload);
 
@@ -624,6 +632,12 @@ router.post("/chats/:chatId/messages/:messageId/pin-for-me", requireAuth(), asyn
     }
 
     const pinned = await pinMessageForUser(req.user.id, messageId);
+    if (!pinned) {
+      const latestCount = await countPinnedForUser(chatId, req.user.id);
+      if (latestCount >= PIN_FOR_ME_LIMIT) {
+        return res.status(409).json({ error: "PERSONAL_PIN_LIMIT_REACHED", limit: PIN_FOR_ME_LIMIT });
+      }
+    }
     await createSyncEvent(pool, {
       chatId, userId: req.user.id,
       eventType: "personal_pin_added",
@@ -663,13 +677,17 @@ router.post("/chats/:chatId/messages/bulk-delete", requireAuth(), async (req, re
     const chatId = Number(req.params.chatId);
     if (!(await requireParticipant(req, res, chatId))) return;
 
-    const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(Number).filter((n) => Number.isInteger(n) && n > 0) : [];
+    const ids = Array.from(new Set(Array.isArray(req.body?.ids) ? req.body.ids.map(Number).filter((n) => Number.isInteger(n) && n > 0) : []));
     const scope = String(req.body?.scope || "all");
     if (ids.length === 0) return res.status(400).json({ error: "Передайте ids" });
     if (ids.length > 100) return res.status(400).json({ error: "Слишком много сообщений (max 100)" });
 
     if (scope === "self") {
-      const hidden = await hideMessagesForUserBulk(req.user.id, ids);
+      const rows = await getMessagesByIds(chatId, ids);
+      if (rows.length !== ids.length) {
+        return res.status(404).json({ error: "Некоторые сообщения не найдены", missingIds: ids.filter((id) => !rows.find((r) => r.id === id)) });
+      }
+      const hidden = await hideMessagesForUserBulk(chatId, req.user.id, ids);
       sendTo(req.user.id, { type: "messages_deleted_self_bulk", chatId, messageIds: ids });
       return res.json({ ok: true, scope: "self", hidden });
     }
@@ -945,7 +963,16 @@ router.get("/messenger/devices", requireAuth(), async (req, res) => {
 router.delete("/messenger/devices/:deviceId", requireAuth(), async (req, res) => {
   try {
     if (!isNonEmptyString(req.params.deviceId, 160)) return res.status(400).json({ error: "Некорректный deviceId" });
-    await removeMessengerDevice(req.user.id, req.params.deviceId.trim());
+    const deviceId = req.params.deviceId.trim();
+    // Достаём jti, чтобы блэклистить активный токен этого устройства.
+    const jti = await getDeviceJti(req.user.id, deviceId).catch(() => null);
+    const removed = await removeMessengerDevice(req.user.id, deviceId);
+    const targetJti = jti || removed?.jti || null;
+    if (targetJti) {
+      try { blacklistToken(targetJti); } catch (_) {}
+    }
+    // Будим клиентов — все сокеты этого пользователя получат событие, целевое устройство закроется.
+    try { forceLogoutDevice(req.user.id, deviceId); } catch (_) {}
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: e.message });

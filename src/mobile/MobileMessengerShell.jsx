@@ -38,7 +38,8 @@ export default function MobileMessengerShell() {
       {view === "search" && (
         <MobileSearchScreen
           onBack={() => setView("chats")}
-          onSelectChat={(chatId) => {
+          onSelectChat={(chatId, messageId) => {
+            pendingScrollId.current = messageId || null;
             setActiveChatId(chatId);
             setView("thread");
           }}

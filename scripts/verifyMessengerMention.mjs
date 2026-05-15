@@ -8,7 +8,7 @@ const NON_PARTICIPANT_USER_ID = Number(process.env.SMOKE_NON_PARTICIPANT_USER_ID
 
 if (!TOKEN || !CHAT_ID || !TARGET_USER_ID || !NON_PARTICIPANT_USER_ID) {
   console.log("set MESSENGER_TEST_TOKEN, SMOKE_CHAT_ID, SMOKE_TARGET_USER_ID, SMOKE_NON_PARTICIPANT_USER_ID");
-  process.exit(0);
+  process.exit(1);
 }
 
 const call = async (path, method = "GET", body = null) => {

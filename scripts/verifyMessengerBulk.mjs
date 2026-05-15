@@ -7,7 +7,7 @@ const FOREIGN_MSG_ID = Number(process.env.SMOKE_FOREIGN_MSG_ID);
 
 if (!TOKEN || !CHAT_ID || !FOREIGN_MSG_ID) {
   console.log("set MESSENGER_TEST_TOKEN, SMOKE_CHAT_ID, SMOKE_FOREIGN_MSG_ID");
-  process.exit(0);
+  process.exit(1);
 }
 
 const call = async (path, method = "GET", body = null) => {

@@ -51,6 +51,16 @@ const requireAuth = (...roles) => (req, res, next) => {
       return res.status(403).json({ error: "Недостаточно прав" });
     }
     req.user = payload;
+
+    // Fire-and-forget: записываем (user_id, device_id) → jti для возможности отзыва сессии устройства.
+    const deviceId = req.headers["x-messenger-device-id"];
+    if (deviceId && typeof deviceId === "string" && deviceId.length > 0 && deviceId.length <= 160 && payload.jti) {
+      try {
+        const { recordDeviceSession } = require("../services/messengerStore");
+        recordDeviceSession(payload.id, deviceId, payload.jti, req.headers["user-agent"] || "").catch(() => {});
+      } catch (_) { /* best-effort */ }
+    }
+
     next();
   } catch (_) {
     res.status(401).json({ error: "Токен недействителен или истёк" });

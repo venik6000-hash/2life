@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 
 const BASE = process.env.API_BASE || "http://localhost:3001";
 const TOKEN = process.env.MESSENGER_TEST_TOKEN;
-if (!TOKEN) { console.log("set MESSENGER_TEST_TOKEN"); process.exit(0); }
+if (!TOKEN) { console.log("set MESSENGER_TEST_TOKEN"); process.exit(1); }
 
 const call = async (path, method = "GET", body = null) => {
   const res = await fetch(`${BASE}${path}`, {

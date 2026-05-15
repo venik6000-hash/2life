@@ -15,7 +15,8 @@
     "verify:messenger-search": "node scripts/verifyMessengerSearch.mjs",
     "verify:messenger-mention": "node scripts/verifyMessengerMention.mjs",
     "verify:messenger-settings": "node scripts/verifyMessengerSettings.mjs",
-    "verify:messenger-all": "npm run verify:messenger-unread && npm run verify:messenger-push-client && npm run verify:messenger-pin && npm run verify:messenger-reply && npm run verify:messenger-bulk && npm run verify:messenger-search && npm run verify:messenger-mention && npm run verify:messenger-settings",
+    "verify:messenger-static": "node scripts/verifyMessengerImplementationStatic.mjs",
+    "verify:messenger-all": "npm run verify:messenger-unread && npm run verify:messenger-push-client && npm run verify:messenger-static && npm run verify:messenger-pin && npm run verify:messenger-reply && npm run verify:messenger-bulk && npm run verify:messenger-search && npm run verify:messenger-mention && npm run verify:messenger-settings",
     "build": "vite build",
     "preview": "vite preview"
   },

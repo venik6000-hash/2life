@@ -40,7 +40,34 @@ async function upsertMessengerDevice(userId, device) {
 }
 
 async function removeMessengerDevice(userId, deviceId) {
-  await pool.query("DELETE FROM messenger_devices WHERE user_id = $1 AND device_id = $2", [userId, deviceId]);
+  const r = await pool.query(
+    "DELETE FROM messenger_devices WHERE user_id = $1 AND device_id = $2 RETURNING jti",
+    [userId, deviceId]
+  );
+  return r.rows[0] || null;
+}
+
+async function recordDeviceSession(userId, deviceId, jti, userAgent) {
+  if (!userId || !deviceId) return null;
+  const r = await pool.query(
+    `INSERT INTO messenger_devices (user_id, device_id, jti, user_agent, last_seen_at)
+     VALUES ($1, $2, $3, $4, NOW())
+     ON CONFLICT (user_id, device_id) DO UPDATE
+       SET jti = COALESCE(EXCLUDED.jti, messenger_devices.jti),
+           user_agent = CASE WHEN EXCLUDED.user_agent <> '' THEN EXCLUDED.user_agent ELSE messenger_devices.user_agent END,
+           last_seen_at = NOW()
+     RETURNING *`,
+    [userId, deviceId, jti || null, userAgent || ""]
+  );
+  return r.rows[0];
+}
+
+async function getDeviceJti(userId, deviceId) {
+  const r = await pool.query(
+    "SELECT jti FROM messenger_devices WHERE user_id = $1 AND device_id = $2 LIMIT 1",
+    [userId, deviceId]
+  );
+  return r.rows[0]?.jti || null;
 }
 
 const listMessengerDevicesForUser = async (pool, userId) => {
@@ -71,4 +98,6 @@ module.exports = {
   removeMessengerDevice,
   listPushDevicesForUsers,
   listMessengerDevicesForUser,
+  recordDeviceSession,
+  getDeviceJti,
 };

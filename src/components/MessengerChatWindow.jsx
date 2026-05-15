@@ -17,6 +17,8 @@ export default function MessengerChatWindow({
   sendMsg, sendFiles, forwardMsg, editMsg, deleteMsg,
   markRead, downloadFile, downloadFiles, getFileUrl, showParticipants, setShowParticipants,
   updateChatSettings,
+  jumpToMessageId,
+  onJumpHandled,
 }) {
   const { $ } = useTheme();
   const {
@@ -33,6 +35,7 @@ export default function MessengerChatWindow({
   const [sending, setSending] = useState(false);
   const [editTarget, setEditTarget] = useState(null);
   const [contextMenu, setContextMenu] = useState(null);
+  const [deleteSheet, setDeleteSheet] = useState(null); // { ids: number[], canForAll: boolean }
   const [forwardTarget, setForwardTarget] = useState(null);
   const [actionError, setActionError] = useState("");
   const [metaBusy, setMetaBusy] = useState(false);
@@ -54,7 +57,21 @@ export default function MessengerChatWindow({
   const msgList = messages[chat.id] || [];
   const chatReceipts = chat.receipts || [];
 
-  const chatPins = pinnedForAll[chat?.id] || [];
+  // Bug 5: показываем и общие, и личные закрепления единым списком (как Telegram).
+  // Личные приходят с флагом _personal, чтобы PinBar отображал «только у вас» и звал нужный unpin.
+  const chatPinsForAll = pinnedForAll[chat?.id] || [];
+  const chatPinsForMe = pinnedForMe[chat?.id] || [];
+  const chatPins = useMemo(() => {
+    const seen = new Set();
+    const out = [];
+    for (const m of chatPinsForAll) {
+      if (m?.id && !seen.has(m.id)) { seen.add(m.id); out.push({ ...m, _personal: false }); }
+    }
+    for (const m of chatPinsForMe) {
+      if (m?.id && !seen.has(m.id)) { seen.add(m.id); out.push({ ...m, _personal: true }); }
+    }
+    return out;
+  }, [chatPinsForAll, chatPinsForMe]);
 
   const onJumpToMessage = useCallback((messageId) => {
     const el = messageRefs.current.get(messageId);
@@ -113,6 +130,15 @@ export default function MessengerChatWindow({
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { imageViewerStateRef.current = imageViewer; }, [imageViewer]);
+
+  useEffect(() => {
+    if (!jumpToMessageId) return;
+    const t = setTimeout(() => {
+      onJumpToMessage(jumpToMessageId);
+      onJumpHandled?.();
+    }, 100);
+    return () => clearTimeout(t);
+  }, [jumpToMessageId, onJumpHandled, onJumpToMessage, msgList.length]);
 
   useEffect(() => {
     if (!searchOpen) { setSearchResults([]); return; }
@@ -272,8 +298,6 @@ export default function MessengerChatWindow({
 
   const handleDelete = async (msg, scope) => {
     setContextMenu(null);
-    const title = scope === "all" ? "Удалить сообщение у всех?" : "Удалить сообщение только у себя?";
-    if (!window.confirm(title)) return;
     const ok = await deleteMsg(chat.id, msg.id, scope);
     if (!ok) setActionError("Не удалось удалить сообщение");
   };
@@ -318,7 +342,7 @@ export default function MessengerChatWindow({
     grouped.push({ type: "msg", msg });
   }
 
-  const canEdit = contextMenu?.msg && contextMenu.msg.sender_id === user.id && contextMenu.msg.msg_type === "text";
+  const canEdit = contextMenu?.msg && contextMenu.msg.sender_id === user.id && contextMenu.msg.msg_type === "text" && !contextMenu.msg.deleted_for_all;
   const canDeleteForAll = contextMenu?.msg && (contextMenu.msg.sender_id === user.id || user.role === "admin");
   const forwardChats = (chats || []).filter((c) => c.id !== chat.id);
   const meInChat = (chat.participants || []).find((p) => p.user_id === user.id) || null;
@@ -336,14 +360,12 @@ export default function MessengerChatWindow({
                   style={{ border: "none", background: "transparent", color: $.tx, fontSize: 20, cursor: "pointer" }}>←</button>
           <div style={{ flex: 1, fontWeight: 600 }}>Выбрано: {selectedIds.length}</div>
           <button type="button"
-            onClick={async () => {
+            onClick={() => {
               if (selectedIds.length === 0) return;
-              const choice = window.confirm(`Удалить ${selectedIds.length} сообщ. у всех? (Отмена = у себя)`);
-              const scope = choice ? "all" : "self";
-              const result = await bulkDelete(chat.id, selectedIds, scope);
-              if (!result.ok && result.error?.includes?.("BULK_DELETE_FORBIDDEN")) {
-                alert("Нельзя удалить чужие сообщения у всех.");
-              }
+              const list = msgList.filter((m) => selectedIds.includes(m.id));
+              const onlyMine = list.length > 0 && list.every((m) => m.sender_id === user.id);
+              const canForAll = onlyMine || user.role === "admin";
+              setDeleteSheet({ ids: [...selectedIds], canForAll });
             }}
             style={{ height: 36, padding: "0 12px", borderRadius: 8, border: `1px solid ${$.brd}`, background: $.bgC, color: $.tx, cursor: "pointer" }}>
             Удалить
@@ -407,7 +429,11 @@ export default function MessengerChatWindow({
             if (target) onJumpToMessage(target.id);
             setPinCycleIndex((i) => (i + 1) % chatPins.length);
           }}
-          onUnpin={(id) => unpinForAll(chat.id, id)}
+          onUnpin={(item) => {
+            if (!item) return;
+            if (item._personal) unpinForMe(chat.id, item.id);
+            else unpinForAll(chat.id, item.id);
+          }}
           canUnpin={true}
         />
       )}
@@ -544,8 +570,18 @@ export default function MessengerChatWindow({
           onDeleteAll={() => handleDelete(contextMenu.msg, "all")}
           onPinForAll={() => { pinForAll(chat.id, contextMenu.msg.id); setContextMenu(null); }}
           onUnpinForAll={() => { unpinForAll(chat.id, contextMenu.msg.id); setContextMenu(null); }}
-          onPinForMe={() => { pinForMe(chat.id, contextMenu.msg.id); setContextMenu(null); }}
-          onUnpinForMe={() => { unpinForMe(chat.id, contextMenu.msg.id); setContextMenu(null); }}
+          onPinForMe={async () => {
+            const id = contextMenu.msg.id;
+            setContextMenu(null);
+            const r = await pinForMe(chat.id, id);
+            if (r && r.ok === false) setActionError(r.error || "Не удалось закрепить");
+          }}
+          onUnpinForMe={async () => {
+            const id = contextMenu.msg.id;
+            setContextMenu(null);
+            const r = await unpinForMe(chat.id, id);
+            if (r && r.ok === false) setActionError(r.error || "Не удалось открепить");
+          }}
           isPinnedForAll={!!contextMenu.msg?.pinned_at}
           isPinnedForMe={(pinnedForMe[chat?.id] || []).some((m) => m.id === contextMenu.msg?.id)}
           canPinForAll={chatPins.length < 5}
@@ -569,6 +605,60 @@ export default function MessengerChatWindow({
           onClose={closeImageViewer}
           onNavigate={navigateImageViewer}
         />
+      )}
+
+      {/* Delete confirmation modal — Telegram-style */}
+      {deleteSheet && (
+        <>
+          <div onClick={() => setDeleteSheet(null)}
+               style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 9998 }} />
+          <div role="dialog" aria-label="Удалить сообщения"
+               style={{
+                 position: "fixed", top: "50%", left: "50%", transform: "translate(-50%, -50%)",
+                 width: "min(360px, 92vw)", background: $.bgC, color: $.tx,
+                 border: `1px solid ${$.brd}`, borderRadius: 12, padding: 18, zIndex: 9999,
+                 boxShadow: $.sh, display: "grid", gap: 10,
+               }}>
+            <div style={{ fontWeight: 700, fontSize: 16 }}>Удалить {deleteSheet.ids.length} сообщ.?</div>
+            <div style={{ fontSize: 13, color: $.txS }}>
+              {deleteSheet.canForAll
+                ? "Можно удалить только у себя или у всех участников чата."
+                : "В выделении есть чужие сообщения — у всех удалить нельзя, только у себя."}
+            </div>
+            <div style={{ display: "grid", gap: 8, marginTop: 4 }}>
+              {deleteSheet.canForAll && (
+                <button type="button"
+                  onClick={async () => {
+                    const ids = deleteSheet.ids;
+                    setDeleteSheet(null);
+                    const r = await bulkDelete(chat.id, ids, "all");
+                    if (r && r.ok === false) setActionError(r.error || "Не удалось удалить");
+                  }}
+                  style={{ height: 40, borderRadius: 8, border: "none", background: $.dn, color: "#fff",
+                           fontWeight: 600, fontSize: 14, cursor: "pointer", fontFamily: "inherit" }}>
+                  Удалить у всех
+                </button>
+              )}
+              <button type="button"
+                onClick={async () => {
+                  const ids = deleteSheet.ids;
+                  setDeleteSheet(null);
+                  const r = await bulkDelete(chat.id, ids, "self");
+                  if (r && r.ok === false) setActionError(r.error || "Не удалось удалить");
+                }}
+                style={{ height: 40, borderRadius: 8, border: `1px solid ${$.brd}`, background: $.bg, color: $.tx,
+                         fontWeight: 500, fontSize: 14, cursor: "pointer", fontFamily: "inherit" }}>
+                Удалить у меня
+              </button>
+              <button type="button"
+                onClick={() => setDeleteSheet(null)}
+                style={{ height: 40, borderRadius: 8, border: "none", background: "transparent", color: $.tx,
+                         fontWeight: 500, fontSize: 14, cursor: "pointer", fontFamily: "inherit" }}>
+                Отмена
+              </button>
+            </div>
+          </div>
+        </>
       )}
     </div>
   );
