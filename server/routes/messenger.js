@@ -5,21 +5,27 @@ const fs       = require("fs");
 const { v4: uuidv4 } = require("uuid");
 const { requireAuth } = require("../middleware/auth");
 const { encryptText, decryptText, encryptJson, decryptJson, encryptBuffer, decryptBuffer } = require("../services/messengerCrypto");
-const { createSyncEvent, listSyncEventsForUser, upsertMessengerDevice, removeMessengerDevice } = require("../services/messengerStore");
+const { createSyncEvent, listSyncEventsForUser, upsertMessengerDevice, removeMessengerDevice, listMessengerDevicesForUser } = require("../services/messengerStore");
 const { pool, hasAllClientsAccess, getAssignmentsByUser,
   createChat, getChatById, getChatsByUser, updateChatMeta, setChatPinned,
   addChatParticipant, removeChatParticipant, getChatParticipants, getChatParticipantsForChats,
   isParticipant, getParticipantRole,
   insertMessage, getMessageById, updateMessageContent, deleteMessageForAll, hideMessageForUser, getMessages,
+  getMessagesByIds, deleteMessagesForAllBulk, hideMessagesForUserBulk,
   upsertReceipt, getReceiptsByChat, getReceiptsForChats,
   insertChatFile, getChatFile,
   listUsers,
+  PIN_FOR_ALL_LIMIT, PIN_FOR_ME_LIMIT,
+  countPinnedForAll, pinMessageForAll, unpinMessageForAll, listPinnedForAll,
+  countPinnedForUser, pinMessageForUser, unpinMessageForUser, listPinnedForUser,
+  fetchMessagesForSearchInChat, fetchMessagesForSearchGlobal,
 } = require("../services/db");
 const {
   syncUserChatAccessByClientPermissions,
   syncChatParticipantsByClientAccess,
   userHasClientAccess,
 } = require("../services/chatAccessSync");
+const { matchAndSnippet } = require("../services/messengerSearch");
 const { sendPrivateMessagePush } = require("../services/messengerPush");
 const { broadcastToChat, sendTo } = require("../services/ws");
 const { ensureDir } = require("../services/storage");
@@ -91,6 +97,8 @@ const serializeMessage = (row) => {
     client_message_id: row.client_message_id,
     deleted_for_all: !!row.deleted_for_all,
     created_at: row.created_at,
+    reply_to_message_id: row.reply_to_message_id || null,
+    pinned_at: row.pinned_at || null,
     edited_at: row.edited_at || null,
   };
 };
@@ -392,17 +400,53 @@ router.post("/chats/:chatId/messages", requireAuth(), async (req, res) => {
     const chatId = Number(req.params.chatId);
     if (!(await requireParticipant(req, res, chatId))) return;
 
-    const { text = "", meta = {}, msgType = "text", fileId = null, clientMessageId = "", deviceId = "" } = req.body || {};
+    const {
+      text = "",
+      meta = {},
+      msgType = "text",
+      fileId = null,
+      clientMessageId = "",
+      deviceId = "",
+      replyToMessageId = null,
+      mentionedUserIds = [],
+    } = req.body || {};
     if (!String(text).trim() && msgType === "text") return res.status(400).json({ error: "Сообщение пустое" });
+
+    let replyParentId = null;
+    if (replyToMessageId != null) {
+      const replyId = Number(replyToMessageId);
+      if (!Number.isInteger(replyId) || replyId <= 0) {
+        return res.status(400).json({ error: "Некорректный replyToMessageId" });
+      }
+      const parent = await getMessageById(chatId, replyId);
+      if (!parent) return res.status(400).json({ error: "Сообщение-оригинал не найдено в этом чате" });
+      replyParentId = replyId;
+    }
+
+    const safeMentions = Array.isArray(mentionedUserIds)
+      ? Array.from(new Set(mentionedUserIds.map(Number).filter((id) => Number.isInteger(id) && id > 0)))
+      : [];
+    if (safeMentions.length > 0) {
+      const participants = await getChatParticipants(chatId);
+      const participantIds = new Set(participants.map((p) => Number(p.user_id)));
+      for (const id of safeMentions) {
+        if (!participantIds.has(id)) {
+          return res.status(400).json({ error: "Упоминаемый пользователь не участник чата", userId: id });
+        }
+      }
+    }
+    const mergedMeta = { ...(meta && typeof meta === "object" ? meta : {}) };
+    if (safeMentions.length > 0) mergedMeta.mentionedUserIds = safeMentions;
 
     const saved = await insertMessage(
       chatId,
       req.user.id,
       encryptText(text),
-      encryptJson(meta),
+      encryptJson(mergedMeta),
       msgType,
       fileId || null,
-      String(clientMessageId || "")
+      String(clientMessageId || ""),
+      replyParentId,
     );
     const message = serializeMessage({
       ...saved,
@@ -511,6 +555,322 @@ router.delete("/chats/:chatId/messages/:messageId", requireAuth(), async (req, r
   }
 });
 
+// POST /api/chats/:chatId/messages/:messageId/pin — pin for all in chat
+router.post("/chats/:chatId/messages/:messageId/pin", requireAuth(), async (req, res) => {
+  try {
+    const chatId = Number(req.params.chatId);
+    const messageId = Number(req.params.messageId);
+    if (!(await requireParticipant(req, res, chatId))) return;
+
+    const existing = await getMessageById(chatId, messageId);
+    if (!existing) return res.status(404).json({ error: "Сообщение не найдено" });
+    if (existing.deleted_for_all) return res.status(400).json({ error: "Сообщение удалено" });
+    if (existing.pinned_at) return res.json({ ok: true, alreadyPinned: true });
+
+    const count = await countPinnedForAll(chatId);
+    if (count >= PIN_FOR_ALL_LIMIT) {
+      return res.status(409).json({ error: "PIN_LIMIT_REACHED", limit: PIN_FOR_ALL_LIMIT });
+    }
+
+    const pinned = await pinMessageForAll(chatId, messageId);
+    if (!pinned) return res.status(404).json({ error: "Не удалось закрепить" });
+
+    const payload = { type: "message_pinned", chatId, messageId, pinnedAt: pinned.pinned_at };
+    await createSyncEvent(pool, { chatId, eventType: "message_pinned", payload: { messageId } });
+    await broadcastToChat(chatId, payload, null);
+    sendTo(req.user.id, payload);
+
+    res.json({ ok: true, messageId, pinnedAt: pinned.pinned_at });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// DELETE /api/chats/:chatId/messages/:messageId/pin — unpin for all
+router.delete("/chats/:chatId/messages/:messageId/pin", requireAuth(), async (req, res) => {
+  try {
+    const chatId = Number(req.params.chatId);
+    const messageId = Number(req.params.messageId);
+    if (!(await requireParticipant(req, res, chatId))) return;
+
+    const ok = await unpinMessageForAll(chatId, messageId);
+    if (!ok) return res.json({ ok: true, wasPinned: false });
+
+    const payload = { type: "message_unpinned", chatId, messageId };
+    await createSyncEvent(pool, { chatId, eventType: "message_unpinned", payload: { messageId } });
+    await broadcastToChat(chatId, payload, null);
+    sendTo(req.user.id, payload);
+
+    res.json({ ok: true, wasPinned: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/chats/:chatId/messages/:messageId/pin-for-me — personal pin
+router.post("/chats/:chatId/messages/:messageId/pin-for-me", requireAuth(), async (req, res) => {
+  try {
+    const chatId = Number(req.params.chatId);
+    const messageId = Number(req.params.messageId);
+    if (!(await requireParticipant(req, res, chatId))) return;
+
+    const existing = await getMessageById(chatId, messageId);
+    if (!existing) return res.status(404).json({ error: "Сообщение не найдено" });
+    if (existing.deleted_for_all) return res.status(400).json({ error: "Сообщение удалено" });
+
+    const count = await countPinnedForUser(chatId, req.user.id);
+    if (count >= PIN_FOR_ME_LIMIT) {
+      return res.status(409).json({ error: "PERSONAL_PIN_LIMIT_REACHED", limit: PIN_FOR_ME_LIMIT });
+    }
+
+    const pinned = await pinMessageForUser(req.user.id, messageId);
+    await createSyncEvent(pool, {
+      chatId, userId: req.user.id,
+      eventType: "personal_pin_added",
+      payload: { messageId, userId: req.user.id }
+    });
+    sendTo(req.user.id, { type: "personal_pin_added", chatId, messageId });
+    res.json({ ok: true, messageId, pinnedAt: pinned?.pinned_at ?? null });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// DELETE /api/chats/:chatId/messages/:messageId/pin-for-me
+router.delete("/chats/:chatId/messages/:messageId/pin-for-me", requireAuth(), async (req, res) => {
+  try {
+    const chatId = Number(req.params.chatId);
+    const messageId = Number(req.params.messageId);
+    if (!(await requireParticipant(req, res, chatId))) return;
+
+    const ok = await unpinMessageForUser(req.user.id, messageId);
+    await createSyncEvent(pool, {
+      chatId, userId: req.user.id,
+      eventType: "personal_pin_removed",
+      payload: { messageId, userId: req.user.id }
+    });
+    sendTo(req.user.id, { type: "personal_pin_removed", chatId, messageId });
+    res.json({ ok: true, wasPinned: ok });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/chats/:chatId/messages/bulk-delete
+// body: { ids: number[], scope: "self" | "all" }
+router.post("/chats/:chatId/messages/bulk-delete", requireAuth(), async (req, res) => {
+  try {
+    const chatId = Number(req.params.chatId);
+    if (!(await requireParticipant(req, res, chatId))) return;
+
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(Number).filter((n) => Number.isInteger(n) && n > 0) : [];
+    const scope = String(req.body?.scope || "all");
+    if (ids.length === 0) return res.status(400).json({ error: "Передайте ids" });
+    if (ids.length > 100) return res.status(400).json({ error: "Слишком много сообщений (max 100)" });
+
+    if (scope === "self") {
+      const hidden = await hideMessagesForUserBulk(req.user.id, ids);
+      sendTo(req.user.id, { type: "messages_deleted_self_bulk", chatId, messageIds: ids });
+      return res.json({ ok: true, scope: "self", hidden });
+    }
+
+    if (scope === "all") {
+      const rows = await getMessagesByIds(chatId, ids);
+      if (rows.length !== ids.length) {
+        return res.status(404).json({ error: "Некоторые сообщения не найдены", missingIds: ids.filter((id) => !rows.find((r) => r.id === id)) });
+      }
+      const denied = rows.filter((r) => r.sender_id !== req.user.id && req.user.role !== "admin").map((r) => r.id);
+      if (denied.length > 0 && req.user.role !== "admin") {
+        return res.status(403).json({ error: "BULK_DELETE_FORBIDDEN", deniedIds: denied });
+      }
+      const deletedIds = await deleteMessagesForAllBulk(chatId, ids, req.user.id);
+      for (const id of deletedIds) {
+        const payload = { type: "message_deleted_all", chatId, messageId: id, userId: req.user.id };
+        await createSyncEvent(pool, { chatId, eventType: "message_deleted_all", payload: { messageId: id, userId: req.user.id } });
+        await broadcastToChat(chatId, payload, null);
+        sendTo(req.user.id, payload);
+      }
+      return res.json({ ok: true, scope: "all", deletedIds });
+    }
+
+    return res.status(400).json({ error: "Недопустимый scope" });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/chats/:chatId/messages/bulk-forward
+// body: { ids: number[], targetChatId: number }
+router.post("/chats/:chatId/messages/bulk-forward", requireAuth(), async (req, res) => {
+  try {
+    const chatId = Number(req.params.chatId);
+    const targetChatId = Number(req.body?.targetChatId);
+    if (!(await requireParticipant(req, res, chatId))) return;
+    if (!Number.isInteger(targetChatId) || targetChatId <= 0) {
+      return res.status(400).json({ error: "Некорректный targetChatId" });
+    }
+    const targetParticipant = await isParticipant(targetChatId, req.user.id);
+    if (!targetParticipant) return res.status(403).json({ error: "Нет доступа к целевому чату" });
+
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(Number).filter((n) => Number.isInteger(n) && n > 0) : [];
+    if (ids.length === 0) return res.status(400).json({ error: "Передайте ids" });
+    if (ids.length > 50) return res.status(400).json({ error: "Слишком много (max 50)" });
+
+    const rows = await getMessagesByIds(chatId, ids);
+    if (rows.length === 0) return res.status(404).json({ error: "Сообщения не найдены" });
+
+    const forwarded = [];
+    for (const id of ids) {
+      const full = await getMessageById(chatId, id);
+      if (!full || full.deleted_for_all) continue;
+      const serializedSource = serializeMessage({
+        ...full,
+        sender_username: full.sender_username,
+        sender_display_name: full.sender_display_name,
+      });
+      const forwardedText = `[Переслано от ${serializedSource.sender_display_name || serializedSource.sender_username}]\n${serializedSource.text || ""}`;
+      const saved = await insertMessage(
+        targetChatId,
+        req.user.id,
+        encryptText(forwardedText),
+        encryptJson({ forwardedFrom: { chatId, messageId: id, senderId: full.sender_id } }),
+        "text",
+        null,
+        `fwd-${chatId}-${id}-${Date.now()}`,
+        null,
+      );
+      const message = serializeMessage({
+        ...saved,
+        sender_username: req.user.username,
+        sender_display_name: req.user.display_name || "",
+      });
+      const payload = { type: "new_message", message };
+      await createSyncEvent(pool, { chatId: targetChatId, eventType: "new_message", payload: { messageId: saved.id } });
+      await broadcastToChat(targetChatId, payload, null);
+      forwarded.push(message.id);
+    }
+
+    res.json({ ok: true, forwarded: forwarded.length, ids: forwarded });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/chats/:chatId/messages/search?q=...&limit=50&before=...
+router.get("/chats/:chatId/messages/search", requireAuth(), async (req, res) => {
+  try {
+    const chatId = Number(req.params.chatId);
+    if (!(await requireParticipant(req, res, chatId))) return;
+    const q = String(req.query.q || "").trim();
+    const limit = Math.min(Number(req.query.limit) || 50, 100);
+    const before = req.query.before ? Number(req.query.before) : null;
+    if (q.length < 2) return res.json({ matches: [], done: true });
+
+    const matches = [];
+    let nextBefore = before;
+    const HARD_CAP_BATCHES = 10;
+    for (let batch = 0; batch < HARD_CAP_BATCHES; batch++) {
+      const rows = await fetchMessagesForSearchInChat(chatId, req.user.id, nextBefore, 200);
+      if (rows.length === 0) {
+        return res.json({ matches, done: true });
+      }
+      for (const row of rows) {
+        let text = "";
+        try { text = row.encrypted_text ? decryptText(row.encrypted_text) : ""; } catch (_) { text = ""; }
+        const snip = matchAndSnippet(text, q);
+        if (snip) {
+          matches.push({
+            messageId: row.id,
+            chatId: row.chat_id,
+            senderId: row.sender_id,
+            senderDisplayName: row.sender_display_name || row.sender_username,
+            createdAt: row.created_at,
+            ...snip,
+          });
+          if (matches.length >= limit) {
+            return res.json({ matches, done: false, nextBefore: row.id });
+          }
+        }
+        nextBefore = row.id;
+      }
+    }
+    res.json({ matches, done: false, nextBefore });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/messenger/search?q=...&limit=50&before=...
+router.get("/messenger/search", requireAuth(), async (req, res) => {
+  try {
+    const q = String(req.query.q || "").trim();
+    const limit = Math.min(Number(req.query.limit) || 50, 100);
+    const before = req.query.before ? Number(req.query.before) : null;
+    if (q.length < 2) return res.json({ groups: [], done: true });
+
+    const groupsMap = new Map(); // chatId -> { chatId, chatTitle, matches: [] }
+    let nextBefore = before;
+    let totalMatches = 0;
+    const HARD_CAP_BATCHES = 10;
+
+    for (let batch = 0; batch < HARD_CAP_BATCHES; batch++) {
+      const rows = await fetchMessagesForSearchGlobal(req.user.id, nextBefore, 300);
+      if (rows.length === 0) {
+        return res.json({ groups: Array.from(groupsMap.values()), done: true });
+      }
+      for (const row of rows) {
+        let text = "";
+        try { text = row.encrypted_text ? decryptText(row.encrypted_text) : ""; } catch (_) { text = ""; }
+        const snip = matchAndSnippet(text, q);
+        if (snip) {
+          if (!groupsMap.has(row.chat_id)) {
+            groupsMap.set(row.chat_id, { chatId: row.chat_id, chatTitle: row.chat_title || "Чат", matches: [] });
+          }
+          groupsMap.get(row.chat_id).matches.push({
+            messageId: row.id,
+            senderId: row.sender_id,
+            senderDisplayName: row.sender_display_name || row.sender_username,
+            createdAt: row.created_at,
+            ...snip,
+          });
+          totalMatches++;
+          if (totalMatches >= limit) {
+            return res.json({ groups: Array.from(groupsMap.values()), done: false, nextBefore: row.id });
+          }
+        }
+        nextBefore = row.id;
+      }
+    }
+    res.json({ groups: Array.from(groupsMap.values()), done: false, nextBefore });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/chats/:chatId/pinned — top-5 for-all pins (newest first)
+router.get("/chats/:chatId/pinned", requireAuth(), async (req, res) => {
+  try {
+    const chatId = Number(req.params.chatId);
+    if (!(await requireParticipant(req, res, chatId))) return;
+    const rows = await listPinnedForAll(chatId, PIN_FOR_ALL_LIMIT);
+    res.json({ messages: rows.map(serializeMessage) });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/chats/:chatId/pinned-for-me — personal pins for this user
+router.get("/chats/:chatId/pinned-for-me", requireAuth(), async (req, res) => {
+  try {
+    const chatId = Number(req.params.chatId);
+    if (!(await requireParticipant(req, res, chatId))) return;
+    const rows = await listPinnedForUser(chatId, req.user.id, PIN_FOR_ME_LIMIT);
+    res.json({ messages: rows.map(serializeMessage) });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // POST /api/chats/:chatId/read  — mark messages read
 router.post("/chats/:chatId/read", requireAuth(), async (req, res) => {
   try {
@@ -567,6 +927,16 @@ router.post("/messenger/devices", requireAuth(), async (req, res) => {
       endpointPrefix: device.endpoint.slice(0, 48),
     });
     res.json({ ok: true, deviceId: device.device_id });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/messenger/devices — list my push-enabled devices
+router.get("/messenger/devices", requireAuth(), async (req, res) => {
+  try {
+    const devices = await listMessengerDevicesForUser(pool, req.user.id);
+    res.json({ devices });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

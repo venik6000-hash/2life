@@ -103,6 +103,12 @@ export function MessengerProvider({ children }) {
   const [notificationStatus, setNotificationStatus] = useState(() => (
     typeof Notification === "undefined" ? "unsupported" : Notification.permission
   ));
+  const [pinnedForAll, setPinnedForAll] = useState({}); // { [chatId]: Message[] }
+  const [pinnedForMe, setPinnedForMe] = useState({});   // { [chatId]: Message[] }
+  const [replyTargets, setReplyTargets] = useState({}); // { [chatId]: Message | null }
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState([]);    // message ids (current active chat)
+  const [fontSize, setFontSizeState] = useState(() => localStorage.getItem("messenger_font_size") || "M");
   const wsRef = useRef(null);
   const flushInFlightRef = useRef(false);
   const retryTimersRef = useRef(new Map());
@@ -463,10 +469,18 @@ export function MessengerProvider({ children }) {
           )));
         }
         break;
+      case "message_pinned":
+      case "message_unpinned":
+        loadPinnedForAll(event.chatId).catch(() => {});
+        break;
+      case "personal_pin_added":
+      case "personal_pin_removed":
+        loadPinnedForMe(event.chatId).catch(() => {});
+        break;
       default:
         break;
     }
-  }, [clearRemovedChatLocalState, clearRetryTimer, persistPendingQueue, removeMessage, upsertMessage, user?.id]);
+  }, [clearRemovedChatLocalState, clearRetryTimer, loadPinnedForAll, loadPinnedForMe, persistPendingQueue, removeMessage, upsertMessage, user?.id]);
 
   useEffect(() => {
     if (!token || !user) return undefined;
@@ -488,11 +502,62 @@ export function MessengerProvider({ children }) {
     };
   }, [getTicket, handleWsEvent, token, user]);
 
-  const sendMsg = useCallback(async (chatId, text) => {
+  const setReplyTarget = useCallback((chatId, message) => {
+    setReplyTargets((prev) => ({ ...prev, [chatId]: message || null }));
+  }, []);
+
+  const clearReplyTarget = useCallback((chatId) => {
+    setReplyTargets((prev) => ({ ...prev, [chatId]: null }));
+  }, []);
+
+  const sendMsg = useCallback(async (chatId, text, options = {}) => {
     const trimmed = String(text || "").trim();
     if (!trimmed) return false;
-    return sendPayload(chatId, { text: trimmed, meta: {}, msgType: "text" });
-  }, [sendPayload]);
+    const payload = { text: trimmed, meta: {}, msgType: "text" };
+    if (options.replyToMessageId) payload.replyToMessageId = options.replyToMessageId;
+    if (options.mentionedUserIds?.length) payload.mentionedUserIds = options.mentionedUserIds;
+    const result = await sendPayload(chatId, payload);
+    if (options.replyToMessageId) clearReplyTarget(chatId);
+    return result;
+  }, [sendPayload, clearReplyTarget]);
+
+  const enterSelectionMode = useCallback((initialId = null) => {
+    setSelectionMode(true);
+    setSelectedIds(initialId ? [initialId] : []);
+  }, []);
+
+  const exitSelectionMode = useCallback(() => {
+    setSelectionMode(false);
+    setSelectedIds([]);
+  }, []);
+
+  const toggleSelection = useCallback((messageId) => {
+    setSelectedIds((prev) => (
+      prev.includes(messageId)
+        ? prev.filter((id) => id !== messageId)
+        : [...prev, messageId]
+    ));
+  }, []);
+
+  const bulkDelete = useCallback(async (chatId, ids, scope) => {
+    try {
+      const result = await MessengerApi.bulkDelete(authFetch, chatId, ids, scope);
+      exitSelectionMode();
+      return { ok: true, ...result };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  }, [authFetch, exitSelectionMode]);
+
+  const bulkForward = useCallback(async (chatId, ids, targetChatId) => {
+    try {
+      const result = await MessengerApi.bulkForward(authFetch, chatId, ids, targetChatId);
+      exitSelectionMode();
+      return { ok: true, ...result };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  }, [authFetch, exitSelectionMode]);
 
   const uploadFile = useCallback(async (chatId, file) => {
     const form = new FormData();
@@ -647,6 +712,54 @@ export function MessengerProvider({ children }) {
     }));
   }, [authFetch, user?.id]);
 
+  const loadPinnedForAll = useCallback(async (chatId) => {
+    try {
+      const { messages: pinned } = await MessengerApi.listPinnedForAll(authFetch, chatId);
+      setPinnedForAll((prev) => ({ ...prev, [chatId]: pinned.map((m) => normalizeMessage(m, chatId)) }));
+    } catch {}
+  }, [authFetch]);
+
+  const loadPinnedForMe = useCallback(async (chatId) => {
+    try {
+      const { messages: pinned } = await MessengerApi.listPinnedForMe(authFetch, chatId);
+      setPinnedForMe((prev) => ({ ...prev, [chatId]: pinned.map((m) => normalizeMessage(m, chatId)) }));
+    } catch {}
+  }, [authFetch]);
+
+  const pinForAll = useCallback(async (chatId, messageId) => {
+    try {
+      await MessengerApi.pinForAll(authFetch, chatId, messageId);
+      await loadPinnedForAll(chatId);
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  }, [authFetch, loadPinnedForAll]);
+
+  const unpinForAll = useCallback(async (chatId, messageId) => {
+    try {
+      await MessengerApi.unpinForAll(authFetch, chatId, messageId);
+      await loadPinnedForAll(chatId);
+      return { ok: true };
+    } catch (e) { return { ok: false, error: e.message }; }
+  }, [authFetch, loadPinnedForAll]);
+
+  const pinForMe = useCallback(async (chatId, messageId) => {
+    try {
+      await MessengerApi.pinForMe(authFetch, chatId, messageId);
+      await loadPinnedForMe(chatId);
+      return { ok: true };
+    } catch (e) { return { ok: false, error: e.message }; }
+  }, [authFetch, loadPinnedForMe]);
+
+  const unpinForMe = useCallback(async (chatId, messageId) => {
+    try {
+      await MessengerApi.unpinForMe(authFetch, chatId, messageId);
+      await loadPinnedForMe(chatId);
+      return { ok: true };
+    } catch (e) { return { ok: false, error: e.message }; }
+  }, [authFetch, loadPinnedForMe]);
+
   const createNewChat = useCallback(async (payload, legacyTitle, legacyParticipantUserIds) => {
     const normalized = payload && typeof payload === "object" && !Array.isArray(payload)
       ? payload
@@ -782,6 +895,12 @@ export function MessengerProvider({ children }) {
     syncMessengerRef.current = syncMessenger;
   }, [syncMessenger]);
 
+  useEffect(() => {
+    if (!activeChatId) return;
+    loadPinnedForAll(activeChatId);
+    loadPinnedForMe(activeChatId);
+  }, [activeChatId, loadPinnedForAll, loadPinnedForMe]);
+
   const registerDevice = useCallback(async (payload) => {
     const data = await MessengerApi.registerDevice(authFetch, payload);
     return data?.deviceId || null;
@@ -851,6 +970,41 @@ export function MessengerProvider({ children }) {
     }
   }, [authFetch]);
 
+  const searchInChat = useCallback(async (chatId, q, before = null) => {
+    try { return await MessengerApi.searchInChat(authFetch, chatId, q, before); }
+    catch (e) { return { matches: [], done: true, error: e.message }; }
+  }, [authFetch]);
+
+  const searchGlobal = useCallback(async (q, before = null) => {
+    try { return await MessengerApi.searchGlobal(authFetch, q, before); }
+    catch (e) { return { groups: [], done: true, error: e.message }; }
+  }, [authFetch]);
+
+  const updateDisplayName = useCallback(async (displayName) => {
+    try {
+      const result = await MessengerApi.updateDisplayName(authFetch, displayName);
+      return { ok: true, ...result };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  }, [authFetch]);
+
+  const setFontSize = useCallback((size) => {
+    const safe = ["S", "M", "L"].includes(size) ? size : "M";
+    setFontSizeState(safe);
+    localStorage.setItem("messenger_font_size", safe);
+  }, []);
+
+  const listDevices = useCallback(async () => {
+    try { return (await MessengerApi.listDevices(authFetch))?.devices || []; }
+    catch { return []; }
+  }, [authFetch]);
+
+  const revokeDevice = useCallback(async (deviceId) => {
+    try { return await MessengerApi.removeDevice(authFetch, deviceId); }
+    catch (e) { return { ok: false, error: e.message }; }
+  }, [authFetch]);
+
   const clearLocalCache = useCallback(async () => {
     cacheResetVersionRef.current += 1;
     for (const entry of retryTimersRef.current.values()) window.clearTimeout(entry?.timer || entry);
@@ -916,13 +1070,30 @@ export function MessengerProvider({ children }) {
     unregisterDevice,
     enableNotifications,
     clearLocalCache,
+    pinnedForAll,
+    pinnedForMe,
+    replyTargets,
+    selectionMode,
+    selectedIds,
+    fontSize,
+    pinForAll, unpinForAll, pinForMe, unpinForMe,
+    loadPinnedForAll, loadPinnedForMe,
+    setReplyTarget, clearReplyTarget,
+    enterSelectionMode, exitSelectionMode, toggleSelection,
+    bulkDelete, bulkForward,
+    searchInChat, searchGlobal,
+    updateDisplayName, setFontSize,
+    listDevices, revokeDevice,
   }), [
     activeChatId,
     addParticipant,
     buildMessengerKeysForPassword,
+    bulkDelete,
+    bulkForward,
     chats,
     chatsLoaded,
     clearLocalCache,
+    clearReplyTarget,
     createNewChat,
     cryptoError,
     deleteMsg,
@@ -930,29 +1101,51 @@ export function MessengerProvider({ children }) {
     downloadFiles,
     editMsg,
     enableNotifications,
+    enterSelectionMode,
+    exitSelectionMode,
     fetchChatById,
     flushPendingQueue,
+    fontSize,
     forwardMsg,
     getFileUrl,
+    listDevices,
     loadChats,
     loadMessages,
+    loadPinnedForAll,
+    loadPinnedForMe,
     markRead,
     messages,
     notificationStatus,
     pendingQueue,
+    pinForAll,
+    pinForMe,
+    pinnedForAll,
+    pinnedForMe,
     queuePendingMessage,
     ready,
     registerDevice,
     removeParticipant,
+    replyTargets,
+    revokeDevice,
+    searchGlobal,
+    searchInChat,
+    selectedIds,
+    selectionMode,
     sendFile,
     sendFiles,
     sendMsg,
     sendTyping,
+    setFontSize,
+    setReplyTarget,
     syncCursor,
     syncMessenger,
+    toggleSelection,
     unlockCrypto,
+    unpinForAll,
+    unpinForMe,
     unregisterDevice,
     updateChatSettings,
+    updateDisplayName,
     wsConnected,
   ]);
 

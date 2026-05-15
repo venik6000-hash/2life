@@ -55,6 +55,32 @@ const normalizeMeta = (value) => (
   value && typeof value === "object" && !Array.isArray(value) ? value : {}
 );
 
+const validateReplyAndMentions = async (chatId, replyToMessageId, mentionedUserIds, meta) => {
+  let replyParentId = null;
+  if (replyToMessageId != null) {
+    const replyId = Number(replyToMessageId);
+    if (!Number.isInteger(replyId) || replyId <= 0) {
+      throw new Error("Некорректный replyToMessageId");
+    }
+    const parent = await getMessageById(chatId, replyId);
+    if (!parent) throw new Error("Сообщение-оригинал не найдено в этом чате");
+    replyParentId = replyId;
+  }
+  const safeMentions = Array.isArray(mentionedUserIds)
+    ? Array.from(new Set(mentionedUserIds.map(Number).filter((id) => Number.isInteger(id) && id > 0)))
+    : [];
+  if (safeMentions.length > 0) {
+    const participants = await getChatParticipants(chatId);
+    const participantIds = new Set(participants.map((p) => Number(p.user_id)));
+    for (const id of safeMentions) {
+      if (!participantIds.has(id)) throw new Error("Упоминаемый пользователь не участник чата");
+    }
+  }
+  const mergedMeta = { ...(meta && typeof meta === "object" ? meta : {}) };
+  if (safeMentions.length > 0) mergedMeta.mentionedUserIds = safeMentions;
+  return { replyParentId, mergedMeta };
+};
+
 const messagePayload = (row, user, { text = "", meta = {} } = {}) => ({
   id: row.id,
   chat_id: row.chat_id,
@@ -127,38 +153,51 @@ const handleMessage = async (ws, user, raw) => {
     const allowed = await isParticipant(chatId, user.id);
     if (!allowed) return;
 
-    const saved = await insertMessage(
-      chatId,
-      user.id,
-      encryptText(text),
-      encryptJson(meta),
-      msgType,
-      fileId,
-      String(clientMessageId || "")
-    );
-    const payload = {
-      type: "new_message",
-      message: messagePayload(saved, user, { text, meta }),
-    };
-
-    // Deliver to all participants including sender (for multi-device)
-    if (!saved.__existing) {
-      await createSyncEvent(pool, {
+    try {
+      const { replyParentId, mergedMeta } = await validateReplyAndMentions(
         chatId,
-        eventType: "new_message",
-        payload: { messageId: saved.id },
-      });
-      await broadcastToChat(chatId, payload, null);
-      const [participants, chat] = await Promise.all([getChatParticipants(chatId), getChatById(chatId)]);
-      const targetUserIds = participants.map((p) => p.user_id).filter((id) => id !== user.id);
-      sendPrivateMessagePush({
-        userIds: targetUserIds,
-        chatTitle: chat?.title || "Чат",
-        url: `/app/messenger?chat=${chatId}`,
-        exceptDeviceId: deviceId,
-      }).catch(() => {});
-    } else if (ws.readyState === 1 /* OPEN */) {
-      ws.send(JSON.stringify(payload));
+        msg.replyToMessageId,
+        msg.mentionedUserIds,
+        meta,
+      );
+
+      const saved = await insertMessage(
+        chatId,
+        user.id,
+        encryptText(text),
+        encryptJson(mergedMeta),
+        msgType,
+        fileId,
+        String(clientMessageId || ""),
+        replyParentId,
+      );
+      const payload = {
+        type: "new_message",
+        message: messagePayload(saved, user, { text, meta: mergedMeta }),
+      };
+
+      // Deliver to all participants including sender (for multi-device)
+      if (!saved.__existing) {
+        await createSyncEvent(pool, {
+          chatId,
+          eventType: "new_message",
+          payload: { messageId: saved.id },
+        });
+        await broadcastToChat(chatId, payload, null);
+        const [participants, chat] = await Promise.all([getChatParticipants(chatId), getChatById(chatId)]);
+        const targetUserIds = participants.map((p) => p.user_id).filter((id) => id !== user.id);
+        sendPrivateMessagePush({
+          userIds: targetUserIds,
+          chatTitle: chat?.title || "Чат",
+          url: `/app/messenger?chat=${chatId}`,
+          exceptDeviceId: deviceId,
+        }).catch(() => {});
+      } else if (ws.readyState === 1 /* OPEN */) {
+        ws.send(JSON.stringify(payload));
+      }
+    } catch (e) {
+      ws.send(JSON.stringify({ type: "send_error", error: e.message, clientMessageId }));
+      return;
     }
   }
 

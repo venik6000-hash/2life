@@ -29,6 +29,7 @@ export const MessengerApi = {
     authFetch,
     `/api/chats/${chatId}/messages${before ? `?before=${encodeURIComponent(before)}` : ""}`
   ),
+  // sendMessage payload: { text, meta?, msgType?, fileId?, clientMessageId?, deviceId?, replyToMessageId?, mentionedUserIds? }
   sendMessage: (authFetch, chatId, payload) => apiJson(authFetch, `/api/chats/${chatId}/messages`, {
     method: "POST",
     body: JSON.stringify(payload),
@@ -71,6 +72,53 @@ export const MessengerApi = {
   unregisterDevice: (authFetch, deviceId) => apiJson(
     authFetch,
     `/api/messenger/devices/${encodeURIComponent(deviceId)}`,
+    { method: "DELETE" }
+  ),
+  pinForAll: (authFetch, chatId, messageId) => apiJson(
+    authFetch, `/api/chats/${chatId}/messages/${messageId}/pin`,
+    { method: "POST" }
+  ),
+  unpinForAll: (authFetch, chatId, messageId) => apiJson(
+    authFetch, `/api/chats/${chatId}/messages/${messageId}/pin`,
+    { method: "DELETE" }
+  ),
+  pinForMe: (authFetch, chatId, messageId) => apiJson(
+    authFetch, `/api/chats/${chatId}/messages/${messageId}/pin-for-me`,
+    { method: "POST" }
+  ),
+  unpinForMe: (authFetch, chatId, messageId) => apiJson(
+    authFetch, `/api/chats/${chatId}/messages/${messageId}/pin-for-me`,
+    { method: "DELETE" }
+  ),
+  listPinnedForAll: (authFetch, chatId) => apiJson(
+    authFetch, `/api/chats/${chatId}/pinned`
+  ),
+  listPinnedForMe: (authFetch, chatId) => apiJson(
+    authFetch, `/api/chats/${chatId}/pinned-for-me`
+  ),
+  bulkDelete: (authFetch, chatId, ids, scope) => apiJson(
+    authFetch, `/api/chats/${chatId}/messages/bulk-delete`,
+    { method: "POST", body: JSON.stringify({ ids, scope }) }
+  ),
+  bulkForward: (authFetch, chatId, ids, targetChatId) => apiJson(
+    authFetch, `/api/chats/${chatId}/messages/bulk-forward`,
+    { method: "POST", body: JSON.stringify({ ids, targetChatId }) }
+  ),
+  searchInChat: (authFetch, chatId, q, before) => apiJson(
+    authFetch,
+    `/api/chats/${chatId}/messages/search?q=${encodeURIComponent(q)}${before ? `&before=${before}` : ""}`
+  ),
+  searchGlobal: (authFetch, q, before) => apiJson(
+    authFetch,
+    `/api/messenger/search?q=${encodeURIComponent(q)}${before ? `&before=${before}` : ""}`
+  ),
+  updateDisplayName: (authFetch, displayName) => apiJson(
+    authFetch, `/api/auth/me`,
+    { method: "PATCH", body: JSON.stringify({ displayName }) }
+  ),
+  listDevices: (authFetch) => apiJson(authFetch, `/api/messenger/devices`),
+  removeDevice: (authFetch, deviceId) => apiJson(
+    authFetch, `/api/messenger/devices/${encodeURIComponent(deviceId)}`,
     { method: "DELETE" }
   ),
 };

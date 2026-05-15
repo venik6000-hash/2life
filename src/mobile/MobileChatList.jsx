@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { useAuth } from "../context/AuthContext";
 import { useTheme } from "../context/ThemeContext";
 import { useMessenger } from "../context/MessengerContext";
@@ -22,11 +22,38 @@ function lastMessagePreview(message) {
   return text.length > 70 ? `${text.slice(0, 70)}...` : text;
 }
 
-export default function MobileChatList({ onOpenChat, onOpenSettings }) {
+const LONG_PRESS_MS = 400;
+const MOVE_TOLERANCE = 8;
+
+export default function MobileChatList({ onOpenChat, onOpenSettings, onOpenSearch, onOpenBookmarks }) {
   const { $ } = useTheme();
   const { user } = useAuth();
   const { chats, activeChatId, setActiveChatId, messages, wsConnected, chatsLoaded } = useMessenger();
   const [query, setQuery] = useState("");
+  const [chatAction, setChatAction] = useState(null); // { x, y, chatId } | null
+  const lpTimer = useRef(null);
+  const lpStartX = useRef(0);
+  const lpStartY = useRef(0);
+
+  const makeHandlers = useCallback((chat) => ({
+    onPointerDown: (e) => {
+      lpStartX.current = e.clientX;
+      lpStartY.current = e.clientY;
+      lpTimer.current = window.setTimeout(() => {
+        if (navigator.vibrate) navigator.vibrate(10);
+        setChatAction({ x: lpStartX.current, y: lpStartY.current, chatId: chat.id });
+      }, LONG_PRESS_MS);
+    },
+    onPointerMove: (e) => {
+      if (Math.abs(e.clientX - lpStartX.current) > MOVE_TOLERANCE ||
+          Math.abs(e.clientY - lpStartY.current) > MOVE_TOLERANCE) {
+        window.clearTimeout(lpTimer.current);
+      }
+    },
+    onPointerUp: () => window.clearTimeout(lpTimer.current),
+    onPointerCancel: () => window.clearTimeout(lpTimer.current),
+    onContextMenu: (e) => e.preventDefault(),
+  }), []);
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -61,14 +88,24 @@ export default function MobileChatList({ onOpenChat, onOpenSettings }) {
               {wsConnected ? "online" : "offline"}
             </div>
           </div>
-          <button
-            type="button"
-            onClick={onOpenSettings}
-            aria-label="Настройки"
-            style={{ minWidth: 44, height: 44, borderRadius: 12, border: `1px solid ${$.brd}`, background: $.bgC, color: $.tx, fontSize: 20 }}
-          >
-            ⚙
-          </button>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              type="button"
+              onClick={onOpenSearch}
+              aria-label="Поиск"
+              style={{ minWidth: 44, height: 44, borderRadius: 12, border: `1px solid ${$.brd}`, background: $.bgC, color: $.tx, fontSize: 20 }}
+            >
+              🔍
+            </button>
+            <button
+              type="button"
+              onClick={onOpenSettings}
+              aria-label="Настройки"
+              style={{ minWidth: 44, height: 44, borderRadius: 12, border: `1px solid ${$.brd}`, background: $.bgC, color: $.tx, fontSize: 20 }}
+            >
+              ⚙
+            </button>
+          </div>
         </div>
         <input
           value={query}
@@ -87,11 +124,16 @@ export default function MobileChatList({ onOpenChat, onOpenSettings }) {
         )}
         {filtered.map(({ chat, last }) => {
           const unread = getUnreadCount(chat, messages, user);
+          const hasUnreadMention = ((messages[chat.id] || [])).some((m) => {
+            const lastRead = (chat.receipts || []).find((r) => r.user_id === user?.id)?.last_read_message_id || 0;
+            return m.id > lastRead && m.sender_id !== user?.id && Array.isArray(m.meta?.mentionedUserIds) && m.meta.mentionedUserIds.includes(user?.id);
+          });
           return (
             <button
               key={chat.id}
               type="button"
               onClick={() => { setActiveChatId(chat.id); onOpenChat(); }}
+              {...makeHandlers(chat)}
               style={{
                 width: "100%",
                 minHeight: 74,
@@ -114,6 +156,9 @@ export default function MobileChatList({ onOpenChat, onOpenSettings }) {
                   <strong style={{ fontSize: 16, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", letterSpacing: 0, fontWeight: unread > 0 ? 800 : 700 }}>{chat.title || "Чат"}</strong>
                   <span style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
                     {last && <span style={{ color: unread > 0 ? $.ac : $.txS, fontSize: 11 }}>{fmtTime(last.created_at)}</span>}
+                    {hasUnreadMention && (
+                      <span style={{ minWidth: 18, height: 18, borderRadius: 9, background: $.ac, color: "#fff", fontSize: 11, fontWeight: 700, display: "grid", placeItems: "center", padding: "0 5px" }}>@</span>
+                    )}
                     {unread > 0 && (
                       <span style={{ minWidth: 22, height: 22, padding: "0 7px", borderRadius: 999, background: $.ac, color: "#fff", display: "grid", placeItems: "center", fontSize: 12, fontWeight: 800, lineHeight: 1 }}>
                         {unread > 99 ? "99+" : unread}
@@ -129,6 +174,18 @@ export default function MobileChatList({ onOpenChat, onOpenSettings }) {
           );
         })}
       </section>
+
+      {chatAction && (
+        <>
+          <div onClick={() => setChatAction(null)} style={{ position: "fixed", inset: 0, zIndex: 9998 }} />
+          <div style={{ position: "fixed", top: chatAction.y, left: chatAction.x, width: 180, background: $.bgC, border: `1px solid ${$.brd}`, borderRadius: 10, padding: 6, zIndex: 9999 }}>
+            <button type="button" onClick={() => { onOpenBookmarks?.(chatAction.chatId); setChatAction(null); }}
+                    style={{ width: "100%", textAlign: "left", padding: "9px 12px", background: "none", border: "none", color: $.tx, borderRadius: 6, fontSize: 13, cursor: "pointer" }}>
+              Закладки
+            </button>
+          </div>
+        </>
+      )}
     </main>
   );
 }

@@ -562,6 +562,23 @@ const initSchema = async () => {
     await pool.query("UPDATE messages SET deleted_for_all = false WHERE deleted_for_all IS NULL");
   } catch (_) {}
 
+  // ─── Sub-project A: messenger telegram-parity ───────────────────────────────
+  try { await pool.query("ALTER TABLE messages ADD COLUMN pinned_at TIMESTAMPTZ"); } catch (_) {}
+  try { await pool.query("ALTER TABLE messages ADD COLUMN reply_to_message_id INTEGER REFERENCES messages(id) ON DELETE SET NULL"); } catch (_) {}
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS message_pinned_for_users (
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+        pinned_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (user_id, message_id)
+      )
+    `);
+  } catch (_) {}
+  try { await pool.query("CREATE INDEX IF NOT EXISTS idx_msg_chat_pinned ON messages(chat_id, pinned_at) WHERE pinned_at IS NOT NULL"); } catch (_) {}
+  try { await pool.query("CREATE INDEX IF NOT EXISTS idx_msg_reply_to ON messages(reply_to_message_id) WHERE reply_to_message_id IS NOT NULL"); } catch (_) {}
+  try { await pool.query("CREATE INDEX IF NOT EXISTS idx_mpf_user ON message_pinned_for_users(user_id)"); } catch (_) {}
+
 };
 
 // ─── Users ──────────────────────────────────────────────────────────────────
@@ -1125,7 +1142,7 @@ const getParticipantRole = async (chatId, userId) => {
 
 // ─── Messenger: messages ─────────────────────────────────────────────────────
 
-const insertMessage = async (chatId, senderId, encryptedText, encryptedMeta, msgType, fileId, clientMessageId = "") => {
+const insertMessage = async (chatId, senderId, encryptedText, encryptedMeta, msgType, fileId, clientMessageId = "", replyToMessageId = null) => {
   const safeClientMessageId = String(clientMessageId || "");
   if (safeClientMessageId) {
     const client = await pool.connect();
@@ -1148,10 +1165,10 @@ const insertMessage = async (chatId, senderId, encryptedText, encryptedMeta, msg
         return { ...existing.rows[0], __existing: true };
       }
       const inserted = await client.query(
-        `INSERT INTO messages (chat_id, sender_id, encrypted_text, encrypted_meta, msg_type, file_id, client_message_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
+        `INSERT INTO messages (chat_id, sender_id, encrypted_text, encrypted_meta, msg_type, file_id, client_message_id, reply_to_message_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
          RETURNING *, encrypted_text AS ciphertext, encrypted_meta AS iv`,
-        [chatId, senderId, encryptedText, encryptedMeta, msgType, fileId || null, safeClientMessageId]
+        [chatId, senderId, encryptedText, encryptedMeta, msgType, fileId || null, safeClientMessageId, replyToMessageId || null]
       );
       await client.query("COMMIT");
       return { ...inserted.rows[0], __existing: false };
@@ -1164,10 +1181,10 @@ const insertMessage = async (chatId, senderId, encryptedText, encryptedMeta, msg
   }
 
   const r = await pool.query(
-    `INSERT INTO messages (chat_id, sender_id, encrypted_text, encrypted_meta, msg_type, file_id, client_message_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
+    `INSERT INTO messages (chat_id, sender_id, encrypted_text, encrypted_meta, msg_type, file_id, client_message_id, reply_to_message_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
      RETURNING *, encrypted_text AS ciphertext, encrypted_meta AS iv`,
-    [chatId, senderId, encryptedText, encryptedMeta, msgType, fileId || null, safeClientMessageId]
+    [chatId, senderId, encryptedText, encryptedMeta, msgType, fileId || null, safeClientMessageId, replyToMessageId || null]
   );
   return { ...r.rows[0], __existing: false };
 };
@@ -1218,6 +1235,137 @@ const hideMessageForUser = async (messageId, userId) => {
   );
 };
 
+const getMessagesByIds = async (chatId, ids) => {
+  if (!ids || ids.length === 0) return [];
+  const r = await pool.query(
+    `SELECT id, sender_id, deleted_for_all FROM messages WHERE chat_id = $1 AND id = ANY($2::int[])`,
+    [chatId, ids]
+  );
+  return r.rows;
+};
+
+const deleteMessagesForAllBulk = async (chatId, ids, deletedBy) => {
+  const r = await pool.query(
+    `UPDATE messages
+       SET deleted_for_all = true,
+           deleted_for_all_at = NOW(),
+           deleted_by = $3
+     WHERE chat_id = $1 AND id = ANY($2::int[]) AND deleted_for_all = false
+     RETURNING id`,
+    [chatId, ids, deletedBy]
+  );
+  return r.rows.map((row) => row.id);
+};
+
+const hideMessagesForUserBulk = async (userId, ids) => {
+  if (!ids || ids.length === 0) return 0;
+  const r = await pool.query(
+    `INSERT INTO message_hidden_for_users (message_id, user_id)
+     SELECT id, $1 FROM unnest($2::int[]) AS id
+     ON CONFLICT (message_id, user_id) DO NOTHING
+     RETURNING message_id`,
+    [userId, ids]
+  );
+  return r.rows.length;
+};
+
+// ─── Sub-project A: pin helpers ──────────────────────────────────────────────
+
+const PIN_FOR_ALL_LIMIT = 5;
+const PIN_FOR_ME_LIMIT = 5;
+
+const countPinnedForAll = async (chatId) => {
+  const r = await pool.query(
+    "SELECT COUNT(*)::int AS c FROM messages WHERE chat_id = $1 AND pinned_at IS NOT NULL AND deleted_for_all = false",
+    [chatId]
+  );
+  return r.rows[0]?.c || 0;
+};
+
+const pinMessageForAll = async (chatId, messageId) => {
+  const r = await pool.query(
+    `UPDATE messages
+       SET pinned_at = NOW()
+     WHERE chat_id = $1 AND id = $2 AND deleted_for_all = false AND pinned_at IS NULL
+     RETURNING *, encrypted_text AS ciphertext, encrypted_meta AS iv`,
+    [chatId, messageId]
+  );
+  return r.rows[0] ?? null;
+};
+
+const unpinMessageForAll = async (chatId, messageId) => {
+  const r = await pool.query(
+    `UPDATE messages
+       SET pinned_at = NULL
+     WHERE chat_id = $1 AND id = $2 AND pinned_at IS NOT NULL
+     RETURNING id`,
+    [chatId, messageId]
+  );
+  return !!r.rows[0];
+};
+
+const listPinnedForAll = async (chatId, limit = PIN_FOR_ALL_LIMIT) => {
+  const r = await pool.query(
+    `SELECT m.*, m.encrypted_text AS ciphertext, m.encrypted_meta AS iv,
+            u.username AS sender_username, u.display_name AS sender_display_name
+       FROM messages m
+       JOIN users u ON u.id = m.sender_id
+      WHERE m.chat_id = $1 AND m.pinned_at IS NOT NULL AND m.deleted_for_all = false
+      ORDER BY m.pinned_at DESC
+      LIMIT $2`,
+    [chatId, limit]
+  );
+  return r.rows;
+};
+
+const countPinnedForUser = async (chatId, userId) => {
+  const r = await pool.query(
+    `SELECT COUNT(*)::int AS c
+       FROM message_pinned_for_users mpu
+       JOIN messages m ON m.id = mpu.message_id
+      WHERE mpu.user_id = $1 AND m.chat_id = $2 AND m.deleted_for_all = false`,
+    [userId, chatId]
+  );
+  return r.rows[0]?.c || 0;
+};
+
+const pinMessageForUser = async (userId, messageId) => {
+  const r = await pool.query(
+    `INSERT INTO message_pinned_for_users (user_id, message_id)
+     VALUES ($1, $2)
+     ON CONFLICT (user_id, message_id) DO NOTHING
+     RETURNING pinned_at`,
+    [userId, messageId]
+  );
+  return r.rows[0] ?? null;
+};
+
+const unpinMessageForUser = async (userId, messageId) => {
+  const r = await pool.query(
+    `DELETE FROM message_pinned_for_users
+      WHERE user_id = $1 AND message_id = $2
+      RETURNING message_id`,
+    [userId, messageId]
+  );
+  return !!r.rows[0];
+};
+
+const listPinnedForUser = async (chatId, userId, limit = PIN_FOR_ME_LIMIT) => {
+  const r = await pool.query(
+    `SELECT m.*, m.encrypted_text AS ciphertext, m.encrypted_meta AS iv,
+            u.username AS sender_username, u.display_name AS sender_display_name,
+            mpu.pinned_at AS personal_pinned_at
+       FROM message_pinned_for_users mpu
+       JOIN messages m ON m.id = mpu.message_id
+       JOIN users u ON u.id = m.sender_id
+      WHERE mpu.user_id = $1 AND m.chat_id = $2 AND m.deleted_for_all = false
+      ORDER BY mpu.pinned_at DESC
+      LIMIT $3`,
+    [userId, chatId, limit]
+  );
+  return r.rows;
+};
+
 const getMessages = async (chatId, userId, beforeId, limit) => {
   const lim = Math.min(limit || 50, 100);
   let query, params;
@@ -1257,6 +1405,76 @@ const getMessages = async (chatId, userId, beforeId, limit) => {
   }
   const r = await pool.query(query, params);
   return r.rows.reverse();
+};
+
+const fetchMessagesForSearchInChat = async (chatId, userId, beforeId, batchSize) => {
+  const lim = Math.min(batchSize || 200, 500);
+  if (beforeId) {
+    const r = await pool.query(
+      `SELECT m.id, m.chat_id, m.sender_id, m.encrypted_text, m.encrypted_meta, m.msg_type,
+              m.created_at, u.username AS sender_username, u.display_name AS sender_display_name
+         FROM messages m
+         JOIN users u ON u.id = m.sender_id
+        WHERE m.chat_id = $1
+          AND m.deleted_for_all = false
+          AND m.id < $3
+          AND NOT EXISTS (SELECT 1 FROM message_hidden_for_users mh WHERE mh.message_id = m.id AND mh.user_id = $2)
+        ORDER BY m.id DESC
+        LIMIT $4`,
+      [chatId, userId, beforeId, lim]
+    );
+    return r.rows;
+  }
+  const r = await pool.query(
+    `SELECT m.id, m.chat_id, m.sender_id, m.encrypted_text, m.encrypted_meta, m.msg_type,
+            m.created_at, u.username AS sender_username, u.display_name AS sender_display_name
+       FROM messages m
+       JOIN users u ON u.id = m.sender_id
+      WHERE m.chat_id = $1
+        AND m.deleted_for_all = false
+        AND NOT EXISTS (SELECT 1 FROM message_hidden_for_users mh WHERE mh.message_id = m.id AND mh.user_id = $2)
+      ORDER BY m.id DESC
+      LIMIT $3`,
+    [chatId, userId, lim]
+  );
+  return r.rows;
+};
+
+const fetchMessagesForSearchGlobal = async (userId, beforeId, batchSize) => {
+  const lim = Math.min(batchSize || 300, 500);
+  if (beforeId) {
+    const r = await pool.query(
+      `SELECT m.id, m.chat_id, m.sender_id, m.encrypted_text, m.encrypted_meta, m.msg_type,
+              m.created_at, u.username AS sender_username, u.display_name AS sender_display_name,
+              c.title AS chat_title
+         FROM messages m
+         JOIN chat_participants cp ON cp.chat_id = m.chat_id AND cp.user_id = $1
+         JOIN chats c ON c.id = m.chat_id
+         JOIN users u ON u.id = m.sender_id
+        WHERE m.deleted_for_all = false
+          AND m.id < $2
+          AND NOT EXISTS (SELECT 1 FROM message_hidden_for_users mh WHERE mh.message_id = m.id AND mh.user_id = $1)
+        ORDER BY m.id DESC
+        LIMIT $3`,
+      [userId, beforeId, lim]
+    );
+    return r.rows;
+  }
+  const r = await pool.query(
+    `SELECT m.id, m.chat_id, m.sender_id, m.encrypted_text, m.encrypted_meta, m.msg_type,
+            m.created_at, u.username AS sender_username, u.display_name AS sender_display_name,
+            c.title AS chat_title
+       FROM messages m
+       JOIN chat_participants cp ON cp.chat_id = m.chat_id AND cp.user_id = $1
+       JOIN chats c ON c.id = m.chat_id
+       JOIN users u ON u.id = m.sender_id
+      WHERE m.deleted_for_all = false
+        AND NOT EXISTS (SELECT 1 FROM message_hidden_for_users mh WHERE mh.message_id = m.id AND mh.user_id = $1)
+      ORDER BY m.id DESC
+      LIMIT $2`,
+    [userId, lim]
+  );
+  return r.rows;
 };
 
 // ─── Messenger: read receipts ─────────────────────────────────────────────────
@@ -1372,6 +1590,11 @@ module.exports = {
   addChatParticipant, removeChatParticipant, getChatParticipants, getChatParticipantsForChats, isParticipant, getParticipantRole,
   // messenger: messages
   insertMessage, getMessageById, updateMessageContent, deleteMessageForAll, hideMessageForUser, getMessages,
+  getMessagesByIds, deleteMessagesForAllBulk, hideMessagesForUserBulk,
+  PIN_FOR_ALL_LIMIT, PIN_FOR_ME_LIMIT,
+  countPinnedForAll, pinMessageForAll, unpinMessageForAll, listPinnedForAll,
+  countPinnedForUser, pinMessageForUser, unpinMessageForUser, listPinnedForUser,
+  fetchMessagesForSearchInChat, fetchMessagesForSearchGlobal,
   // messenger: receipts
   upsertReceipt, getReceiptsByChat, getReceiptsForChats,
   // messenger: files
