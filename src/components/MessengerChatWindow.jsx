@@ -5,10 +5,12 @@ import Button from "./Button";
 import EmojiPicker from "./EmojiPicker";
 import MessageBubble from "./MessageBubble";
 import MessengerContextMenu from "./MessengerContextMenu";
+import MessengerReadersPopover from "./MessengerReadersPopover";
 import MessengerForwardModal from "./MessengerForwardModal";
 import MessengerImageViewer from "./MessengerImageViewer";
 import MessengerMentionPicker from "./MessengerMentionPicker";
 import MessengerPinBar from "./MessengerPinBar";
+import MessengerVoiceRecorder from "./MessengerVoiceRecorder";
 import TextArea from "./TextArea";
 import { fmtDate, parseBundleFiles, isImageLike } from "../utils/messengerUiUtils";
 
@@ -28,6 +30,8 @@ export default function MessengerChatWindow({
     enterSelectionMode, exitSelectionMode, toggleSelection,
     bulkDelete,
     searchInChat,
+    sendVoiceMessage,
+    cryptoReady,
   } = useMessenger();
 
   const [text, setText] = useState("");
@@ -35,6 +39,7 @@ export default function MessengerChatWindow({
   const [sending, setSending] = useState(false);
   const [editTarget, setEditTarget] = useState(null);
   const [contextMenu, setContextMenu] = useState(null);
+  const [readersPopover, setReadersPopover] = useState(null);
   const [deleteSheet, setDeleteSheet] = useState(null); // { ids: number[], canForAll: boolean }
   const [forwardTarget, setForwardTarget] = useState(null);
   const [actionError, setActionError] = useState("");
@@ -46,6 +51,7 @@ export default function MessengerChatWindow({
   const [searchResults, setSearchResults] = useState([]);
   const [searchIndex, setSearchIndex] = useState(0);
   const [mentionQuery, setMentionQuery] = useState(null);
+  const [voiceActive, setVoiceActive] = useState(false);
 
   const bottomRef = useRef(null);
   const fileRef = useRef(null);
@@ -120,9 +126,9 @@ export default function MessengerChatWindow({
   }, [msgList.length, chat.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    const close = () => setContextMenu(null);
+    const close = () => { setContextMenu(null); setReadersPopover(null); };
     const closeOnEsc = (e) => {
-      if (e.key === "Escape") { setContextMenu(null); setForwardTarget(null); closeImageViewer(); }
+      if (e.key === "Escape") { setContextMenu(null); setReadersPopover(null); setForwardTarget(null); closeImageViewer(); }
     };
     window.addEventListener("click", close);
     window.addEventListener("keydown", closeOnEsc);
@@ -514,55 +520,81 @@ export default function MessengerChatWindow({
         )}
 
         <div style={{ display: "flex", gap: 8, alignItems: "flex-end", position: "relative" }}>
-          {showEmoji && <EmojiPicker onPick={(em) => { setText((t) => t + em); setShowEmoji(false); }} />}
-          <Button variant="bare" tone="neutral" size="icon" onClick={() => setShowEmoji(!showEmoji)}>😊</Button>
-          <Button variant="bare" tone="neutral" size="icon" onClick={() => fileRef.current?.click()} title="Прикрепить файлы">📎</Button>
-          <input ref={fileRef} type="file" multiple style={{ display: "none" }} onChange={handleFile} />
-          <div style={{ flex: 1, position: "relative" }}>
-            {mentionQuery !== null && (
-              <MessengerMentionPicker
-                participants={chat?.participants || []}
-                query={mentionQuery}
-                onPick={pickMention}
-                currentUserId={user?.id}
-              />
-            )}
-            <TextArea
-              inputRef={textareaRef}
-              value={text}
-              onChange={handleInputChange}
-              onKeyDown={handleKey}
-              placeholder={editTarget ? "Измените сообщение..." : "Сообщение... (Enter — отправить, Shift+Enter — новая строка)"}
-              rows={1}
-              resize="none"
-              minHeight={40}
-              maxHeight={120}
-              lineHeight={1.5}
+          {showEmoji && !voiceActive && <EmojiPicker onPick={(em) => { setText((t) => t + em); setShowEmoji(false); }} />}
+          {!voiceActive && (
+            <>
+              <Button variant="bare" tone="neutral" size="icon" onClick={() => setShowEmoji(!showEmoji)}>😊</Button>
+              <Button variant="bare" tone="neutral" size="icon" onClick={() => fileRef.current?.click()} title="Прикрепить файлы">📎</Button>
+              <input ref={fileRef} type="file" multiple style={{ display: "none" }} onChange={handleFile} />
+              <div style={{ flex: 1, position: "relative" }}>
+                {mentionQuery !== null && (
+                  <MessengerMentionPicker
+                    participants={chat?.participants || []}
+                    query={mentionQuery}
+                    onPick={pickMention}
+                    currentUserId={user?.id}
+                  />
+                )}
+                <TextArea
+                  inputRef={textareaRef}
+                  value={text}
+                  onChange={handleInputChange}
+                  onKeyDown={handleKey}
+                  placeholder={editTarget ? "Измените сообщение..." : "Сообщение... (Enter — отправить, Shift+Enter — новая строка)"}
+                  rows={1}
+                  resize="none"
+                  minHeight={40}
+                  maxHeight={120}
+                  lineHeight={1.5}
+                />
+              </div>
+            </>
+          )}
+          {!editTarget && (
+            <MessengerVoiceRecorder
+              disabled={!chat || cryptoReady === false}
+              onActiveChange={setVoiceActive}
+              onSend={(payload) => sendVoiceMessage(chat.id, payload)}
             />
-          </div>
-          <button
-            onClick={handleSend}
-            disabled={!text.trim() || sending}
-            style={{
-              background: $.ac, color: "#fff", border: "none", borderRadius: 10,
-              width: 40, height: 40, cursor: text.trim() ? "pointer" : "default",
-              fontSize: 18, flexShrink: 0, opacity: text.trim() ? 1 : .4,
-              display: "flex", alignItems: "center", justifyContent: "center",
-              fontFamily: "inherit",
-            }}
-          >{editTarget ? "✓" : "➤"}</button>
+          )}
+          {!voiceActive && (
+            <button
+              onClick={handleSend}
+              disabled={!text.trim() || sending}
+              style={{
+                background: $.ac, color: "#fff", border: "none", borderRadius: 10,
+                width: 40, height: 40, cursor: text.trim() ? "pointer" : "default",
+                fontSize: 18, flexShrink: 0, opacity: text.trim() ? 1 : .4,
+                display: "flex", alignItems: "center", justifyContent: "center",
+                fontFamily: "inherit",
+              }}
+            >{editTarget ? "✓" : "➤"}</button>
+          )}
         </div>
         {actionError && <div style={{ fontSize: 11, color: $.dn, marginTop: 6, paddingLeft: 4 }}>{actionError}</div>}
         <div style={{ fontSize: 10, color: $.txM, marginTop: 4, paddingLeft: 4 }}>🔒 Сообщения зашифрованы</div>
       </div>
 
-      {contextMenu && (
+      {contextMenu && (() => {
+        const msg = contextMenu.msg || {};
+        const isOwn = Number(msg.sender_id) === Number(user.id);
+        const readersForMsg = (chat.receipts || [])
+          .filter((rc) => rc.last_read_message_id >= msg.id && rc.user_id !== msg.sender_id)
+          .map((rc) => {
+            const p = (chat.participants || []).find((x) => x.user_id === rc.user_id);
+            return { userId: rc.user_id, name: p?.username || `#${rc.user_id}`, avatar: p?.avatar_url || null };
+          });
+        return (
         <MessengerContextMenu
           x={contextMenu.x}
           y={contextMenu.y}
           canEdit={canEdit}
           canDeleteForAll={canDeleteForAll}
           msgType={contextMenu.msg?.msg_type}
+          isOwnMessage={isOwn}
+          readersPreview={readersForMsg}
+          readersCount={readersForMsg.length}
+          onShowReaders={(rect) => setReadersPopover({ messageId: msg.id, anchorRect: rect })}
           onReply={() => { setReplyTarget(chat.id, contextMenu.msg); setContextMenu(null); }}
           onForward={() => { setContextMenu(null); setForwardTarget(contextMenu.msg); }}
           onEdit={() => handleStartEdit(contextMenu.msg)}
@@ -588,6 +620,16 @@ export default function MessengerChatWindow({
           canPinForMe={(pinnedForMe[chat?.id] || []).length < 5}
           onCopy={() => { navigator.clipboard?.writeText(contextMenu.msg?.text || ""); setContextMenu(null); }}
           onEnterSelection={() => { enterSelectionMode(contextMenu.msg?.id); setContextMenu(null); }}
+        />
+        );
+      })()}
+
+      {readersPopover && (
+        <MessengerReadersPopover
+          chatId={chat.id}
+          messageId={readersPopover.messageId}
+          anchorRect={readersPopover.anchorRect}
+          onClose={() => setReadersPopover(null)}
         />
       )}
 

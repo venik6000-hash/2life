@@ -5,8 +5,10 @@ import { useTheme } from "../context/ThemeContext";
 import EmojiPicker from "../components/EmojiPicker";
 import MessageBubble from "../components/MessageBubble";
 import MessengerContextMenu from "../components/MessengerContextMenu";
+import MessengerReadersPopover from "../components/MessengerReadersPopover";
 import MessengerPinBar from "../components/MessengerPinBar";
 import MessengerMentionPicker from "../components/MessengerMentionPicker";
+import MessengerVoiceRecorder from "../components/MessengerVoiceRecorder";
 import MobileChatSearchOverlay from "./MobileChatSearchOverlay";
 import { fmtDate } from "../utils/messengerUiUtils";
 
@@ -47,6 +49,8 @@ export default function MobileChatThread({ onBack, pendingScrollId }) {
     exitSelectionMode,
     toggleSelection,
     bulkDelete,
+    sendVoiceMessage,
+    cryptoReady,
   } = useMessenger();
 
   const [text, setText] = useState("");
@@ -55,10 +59,12 @@ export default function MobileChatThread({ onBack, pendingScrollId }) {
   const [error, setError] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
   const [ctx, setCtx] = useState(null); // { x, y, msg } | null
+  const [readersSheet, setReadersSheet] = useState(null); // { messageId } | null
   const [pinCycleIndex, setPinCycleIndex] = useState(0);
   const [mentionQuery, setMentionQuery] = useState(null);
   const [editTarget, setEditTarget] = useState(null);
   const [deleteSheet, setDeleteSheet] = useState(null); // { ids: number[], canForAll: boolean } | null
+  const [voiceActive, setVoiceActive] = useState(false);
 
   const fileRef = useRef(null);
   const bottomRef = useRef(null);
@@ -314,14 +320,27 @@ export default function MobileChatThread({ onBack, pendingScrollId }) {
         touchAction: "pan-y",
       }}>
       {/* Context menu overlay */}
-      {ctx && (
+      {ctx && (() => {
+        const msg = ctx.msg || {};
+        const isOwn = Number(msg.sender_id) === Number(user?.id);
+        const readersForMsg = (activeChat?.receipts || [])
+          .filter((rc) => rc.last_read_message_id >= msg.id && rc.user_id !== msg.sender_id)
+          .map((rc) => {
+            const p = (activeChat?.participants || []).find((x) => x.user_id === rc.user_id);
+            return { userId: rc.user_id, name: p?.username || `#${rc.user_id}`, avatar: p?.avatar_url || null };
+          });
+        return (
         <>
-          <div onClick={() => setCtx(null)} style={{ position: "fixed", inset: 0, zIndex: 9998 }} />
+          <div onClick={() => { setCtx(null); setReadersSheet(null); }} style={{ position: "fixed", inset: 0, zIndex: 9998 }} />
           <MessengerContextMenu
             x={ctx.x} y={ctx.y}
             msgType={ctx.msg.msg_type}
             canEdit={ctx.msg.sender_id === user?.id && !ctx.msg.deleted_for_all && ctx.msg.msg_type === "text" && !ctx.msg.deleted_for_all}
             canDeleteForAll={ctx.msg.sender_id === user?.id || user?.role === "admin"}
+            isOwnMessage={isOwn}
+            readersPreview={readersForMsg}
+            readersCount={readersForMsg.length}
+            onShowReaders={() => { setReadersSheet({ messageId: msg.id }); setCtx(null); }}
             isPinnedForAll={!!ctx.msg.pinned_at}
             isPinnedForMe={(pinnedForMe[activeChat?.id] || []).some((m) => m.id === ctx.msg.id)}
             canPinForAll={(pinnedForAll[activeChat?.id] || []).length < 5}
@@ -346,6 +365,19 @@ export default function MobileChatThread({ onBack, pendingScrollId }) {
             onDeleteSelf={() => handleDelete(ctx.msg, "self")}
             onDeleteAll={() => handleDelete(ctx.msg, "all")}
             onEnterSelection={() => { enterSelectionMode(ctx.msg.id); setCtx(null); }}
+          />
+        </>
+        );
+      })()}
+
+      {readersSheet && (
+        <>
+          <div onClick={() => setReadersSheet(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", zIndex: 9999 }} />
+          <MessengerReadersPopover
+            chatId={activeChat.id}
+            messageId={readersSheet.messageId}
+            variant="sheet"
+            onClose={() => setReadersSheet(null)}
           />
         </>
       )}
@@ -486,10 +518,15 @@ export default function MobileChatThread({ onBack, pendingScrollId }) {
         )}
 
         <div style={{ position: "relative", display: "flex", alignItems: "flex-end", gap: 8 }}>
-          {showEmoji && <EmojiPicker onPick={(emoji) => { setText((value) => value + emoji); setShowEmoji(false); }} />}
-          <button type="button" onClick={() => setShowEmoji((value) => !value)} style={{ width: 40, height: 40, borderRadius: 12, border: `1px solid ${$.brd}`, background: $.bgC, color: $.tx, flexShrink: 0 }}>😊</button>
-          <button type="button" onClick={() => fileRef.current?.click()} style={{ width: 40, height: 40, borderRadius: 12, border: `1px solid ${$.brd}`, background: $.bgC, color: $.tx, flexShrink: 0 }}>📎</button>
-          <input ref={fileRef} type="file" multiple style={{ display: "none" }} onChange={handleFile} />
+          {showEmoji && !voiceActive && <EmojiPicker onPick={(emoji) => { setText((value) => value + emoji); setShowEmoji(false); }} />}
+          {!voiceActive && (
+            <>
+              <button type="button" onClick={() => setShowEmoji((value) => !value)} style={{ width: 40, height: 40, borderRadius: 12, border: `1px solid ${$.brd}`, background: $.bgC, color: $.tx, flexShrink: 0 }}>😊</button>
+              <button type="button" onClick={() => fileRef.current?.click()} style={{ width: 40, height: 40, borderRadius: 12, border: `1px solid ${$.brd}`, background: $.bgC, color: $.tx, flexShrink: 0 }}>📎</button>
+              <input ref={fileRef} type="file" multiple style={{ display: "none" }} onChange={handleFile} />
+            </>
+          )}
+          {!voiceActive && (
           <div style={{ flex: 1, position: "relative" }}>
             {mentionQuery !== null && (
               <MessengerMentionPicker
@@ -532,14 +569,24 @@ export default function MobileChatThread({ onBack, pendingScrollId }) {
               }}
             />
           </div>
-          <button
-            type="button"
-            onClick={handleSend}
-            disabled={!text.trim() || sending}
-            style={{ width: 42, height: 40, borderRadius: 12, border: 0, background: $.ac, color: "#fff", opacity: !text.trim() || sending ? 0.45 : 1, flexShrink: 0, fontSize: 18 }}
-          >
-            ➤
-          </button>
+          )}
+          {!editTarget && (
+            <MessengerVoiceRecorder
+              disabled={!activeChat || cryptoReady === false}
+              onActiveChange={setVoiceActive}
+              onSend={(payload) => sendVoiceMessage(activeChat.id, payload)}
+            />
+          )}
+          {!voiceActive && (
+            <button
+              type="button"
+              onClick={handleSend}
+              disabled={!text.trim() || sending}
+              style={{ width: 42, height: 40, borderRadius: 12, border: 0, background: $.ac, color: "#fff", opacity: !text.trim() || sending ? 0.45 : 1, flexShrink: 0, fontSize: 18 }}
+            >
+              ➤
+            </button>
+          )}
         </div>
       </footer>
 

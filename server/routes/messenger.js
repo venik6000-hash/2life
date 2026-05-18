@@ -7,12 +7,12 @@ const { requireAuth } = require("../middleware/auth");
 const { encryptText, decryptText, encryptJson, decryptJson, encryptBuffer, decryptBuffer } = require("../services/messengerCrypto");
 const { createSyncEvent, listSyncEventsForUser, upsertMessengerDevice, removeMessengerDevice, listMessengerDevicesForUser } = require("../services/messengerStore");
 const { pool, hasAllClientsAccess, getAssignmentsByUser,
-  createChat, getChatById, getChatsByUser, updateChatMeta, setChatPinned,
+  createChat, getChatById, getChatsByUser, getLastMessageForChat, updateChatMeta, setChatPinned,
   addChatParticipant, removeChatParticipant, getChatParticipants, getChatParticipantsForChats,
   isParticipant, getParticipantRole,
   insertMessage, getMessageById, updateMessageContent, deleteMessageForAll, hideMessageForUser, getMessages,
   getMessagesByIds, deleteMessagesForAllBulk, hideMessagesForUserBulk,
-  upsertReceipt, getReceiptsByChat, getReceiptsForChats,
+  upsertReceipt, getReceiptsByChat, getReceiptsForChats, getReadersForMessage,
   insertChatFile, getChatFile,
   listUsers,
   PIN_FOR_ALL_LIMIT, PIN_FOR_ME_LIMIT,
@@ -414,6 +414,16 @@ router.post("/chats/:chatId/messages", requireAuth(), async (req, res) => {
     } = req.body || {};
     if (!String(text).trim() && msgType === "text") return res.status(400).json({ error: "Сообщение пустое" });
 
+    const ALLOWED_MSG_TYPES = new Set(["text", "image", "file", "files_bundle", "voice", "system"]);
+    if (!ALLOWED_MSG_TYPES.has(String(msgType))) {
+      return res.status(400).json({ error: "Неподдерживаемый тип сообщения" });
+    }
+    if (msgType === "voice") {
+      if (typeof text !== "string" || text.length > 4096) {
+        return res.status(400).json({ error: "voice payload too large" });
+      }
+    }
+
     let replyParentId = null;
     if (replyToMessageId != null) {
       const replyId = Number(replyToMessageId);
@@ -470,6 +480,7 @@ router.post("/chats/:chatId/messages", requireAuth(), async (req, res) => {
         chatTitle: chat?.title || "Чат",
         url: `/app/messenger?chat=${chatId}`,
         exceptDeviceId: String(deviceId || ""),
+        msgType,
       }).catch(() => {});
     }
 
@@ -533,7 +544,8 @@ router.delete("/chats/:chatId/messages/:messageId", requireAuth(), async (req, r
 
     if (scope === "self") {
       await hideMessageForUser(messageId, req.user.id);
-      sendTo(req.user.id, { type: "message_deleted_self", chatId, messageId, userId: req.user.id });
+      const lastMessage = await getLastMessageForChat(chatId, req.user.id);
+      sendTo(req.user.id, { type: "message_deleted_self", chatId, messageId, userId: req.user.id, lastMessage });
       return res.json({ ok: true, scope: "self" });
     }
 
@@ -545,7 +557,8 @@ router.delete("/chats/:chatId/messages/:messageId", requireAuth(), async (req, r
       if (!deleted) return res.status(404).json({ error: "Сообщение не найдено" });
       await createSyncEvent(pool, { chatId, eventType: "message_deleted_all", payload: { messageId, userId: req.user.id } });
 
-      const payload = { type: "message_deleted_all", chatId, messageId, userId: req.user.id };
+      const lastMessage = await getLastMessageForChat(chatId, null);
+      const payload = { type: "message_deleted_all", chatId, messageId, userId: req.user.id, lastMessage };
       await broadcastToChat(chatId, payload, null);
       sendTo(req.user.id, payload);
       return res.json({ ok: true, scope: "all" });
@@ -688,7 +701,8 @@ router.post("/chats/:chatId/messages/bulk-delete", requireAuth(), async (req, re
         return res.status(404).json({ error: "Некоторые сообщения не найдены", missingIds: ids.filter((id) => !rows.find((r) => r.id === id)) });
       }
       const hidden = await hideMessagesForUserBulk(chatId, req.user.id, ids);
-      sendTo(req.user.id, { type: "messages_deleted_self_bulk", chatId, messageIds: ids });
+      const lastMessage = await getLastMessageForChat(chatId, req.user.id);
+      sendTo(req.user.id, { type: "messages_deleted_self_bulk", chatId, messageIds: ids, lastMessage });
       return res.json({ ok: true, scope: "self", hidden });
     }
 
@@ -702,8 +716,14 @@ router.post("/chats/:chatId/messages/bulk-delete", requireAuth(), async (req, re
         return res.status(403).json({ error: "BULK_DELETE_FORBIDDEN", deniedIds: denied });
       }
       const deletedIds = await deleteMessagesForAllBulk(chatId, ids, req.user.id);
-      for (const id of deletedIds) {
+      for (let i = 0; i < deletedIds.length; i++) {
+        const id = deletedIds[i];
+        // Compute lastMessage on the final iteration so we broadcast the freshest preview.
+        const lastMessage = (i === deletedIds.length - 1)
+          ? await getLastMessageForChat(chatId, null)
+          : undefined;
         const payload = { type: "message_deleted_all", chatId, messageId: id, userId: req.user.id };
+        if (lastMessage !== undefined) payload.lastMessage = lastMessage;
         await createSyncEvent(pool, { chatId, eventType: "message_deleted_all", payload: { messageId: id, userId: req.user.id } });
         await broadcastToChat(chatId, payload, null);
         sendTo(req.user.id, payload);
@@ -885,6 +905,30 @@ router.get("/chats/:chatId/pinned-for-me", requireAuth(), async (req, res) => {
     if (!(await requireParticipant(req, res, chatId))) return;
     const rows = await listPinnedForUser(chatId, req.user.id, PIN_FOR_ME_LIMIT);
     res.json({ messages: rows.map(serializeMessage) });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.get("/chats/:chatId/messages/:messageId/readers", requireAuth(), async (req, res) => {
+  try {
+    const chatId = Number(req.params.chatId);
+    const messageId = Number(req.params.messageId);
+    if (!Number.isInteger(chatId) || !Number.isInteger(messageId)) {
+      return res.status(400).json({ error: "Некорректный id" });
+    }
+    if (!(await requireParticipant(req, res, chatId))) return;
+
+    const msg = await getMessageById(messageId);
+    if (!msg || Number(msg.chat_id) !== chatId) {
+      return res.status(404).json({ error: "Сообщение не найдено" });
+    }
+    if (Number(msg.sender_id) !== Number(req.user.id)) {
+      return res.status(403).json({ error: "Можно смотреть только свои сообщения" });
+    }
+
+    const readers = await getReadersForMessage(chatId, messageId);
+    res.json({ readers });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

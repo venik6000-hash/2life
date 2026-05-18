@@ -321,6 +321,7 @@ const initSchema = async () => {
     );
 
     CREATE INDEX IF NOT EXISTS idx_mr_chat ON message_receipts(chat_id);
+    CREATE INDEX IF NOT EXISTS idx_messages_chat_id_id_desc ON messages(chat_id, id DESC);
 
     CREATE TABLE IF NOT EXISTS chat_files (
       id            TEXT PRIMARY KEY,
@@ -1004,13 +1005,63 @@ const getChatById = async (chatId) => {
 
 const getChatsByUser = async (userId) => {
   const r = await pool.query(
-    `SELECT c.*, cp.role_in_chat, cp.encrypted_chat_key, cp.is_pinned
+    `SELECT c.*, cp.role_in_chat, cp.encrypted_chat_key, cp.is_pinned,
+            lm.id          AS last_message_id,
+            lm.sender_id   AS last_message_sender_id,
+            lm.msg_type    AS last_message_type,
+            lm.text        AS last_message_text,
+            lm.created_at  AS last_message_at
      FROM chats c
      JOIN chat_participants cp ON cp.chat_id = c.id AND cp.user_id = $1
-     ORDER BY cp.is_pinned DESC, c.id DESC`,
+     LEFT JOIN LATERAL (
+       SELECT m.id, m.sender_id, m.msg_type, m.text, m.created_at
+       FROM messages m
+       WHERE m.chat_id = c.id
+         AND m.msg_type <> 'system'
+         AND NOT EXISTS (
+           SELECT 1 FROM message_hidden_for_users h
+           WHERE h.message_id = m.id AND h.user_id = $1
+         )
+       ORDER BY m.id DESC
+       LIMIT 1
+     ) lm ON TRUE
+     ORDER BY cp.is_pinned DESC,
+              COALESCE(lm.created_at, c.created_at) DESC`,
     [userId]
   );
-  return r.rows;
+  return r.rows.map((row) => {
+    const { last_message_id, last_message_sender_id, last_message_type,
+            last_message_text, last_message_at, ...rest } = row;
+    return {
+      ...rest,
+      last_message: last_message_id
+        ? {
+            id: last_message_id,
+            senderId: last_message_sender_id,
+            type: last_message_type,
+            text: last_message_text,
+            createdAt: last_message_at,
+          }
+        : null,
+    };
+  });
+};
+
+const getLastMessageForChat = async (chatId, userId) => {
+  const r = await pool.query(
+    `SELECT m.id, m.sender_id AS "senderId", m.msg_type AS type, m.text, m.created_at AS "createdAt"
+     FROM messages m
+     WHERE m.chat_id = $1
+       AND m.msg_type <> 'system'
+       AND NOT EXISTS (
+         SELECT 1 FROM message_hidden_for_users h
+         WHERE h.message_id = m.id AND h.user_id = $2
+       )
+     ORDER BY m.id DESC
+     LIMIT 1`,
+    [chatId, userId]
+  );
+  return r.rows[0] ?? null;
 };
 
 const updateChatMeta = async (chatId, patch = {}) => {
@@ -1517,6 +1568,23 @@ const getReceiptsByChat = async (chatId) => {
   return r.rows;
 };
 
+const getReadersForMessage = async (chatId, messageId) => {
+  const r = await pool.query(
+    `SELECT mr.user_id        AS "userId",
+            u.username        AS name,
+            u.avatar_url      AS avatar,
+            mr.read_at        AS "readAt"
+     FROM message_receipts mr
+     JOIN users u ON u.id = mr.user_id
+     WHERE mr.chat_id = $1
+       AND mr.last_read_message_id >= $2
+       AND mr.user_id <> (SELECT sender_id FROM messages WHERE id = $2)
+     ORDER BY mr.read_at ASC`,
+    [chatId, messageId]
+  );
+  return r.rows;
+};
+
 // ─── Analytics files ─────────────────────────────────────────────────────────
 
 const insertAnalyticsFile = async (clientId, displayName, analysisDate, comment, originalName, mimeType, sizeBytes, storagePath, uploadedBy) => {
@@ -1604,7 +1672,7 @@ module.exports = {
   // messenger: public keys
   upsertPublicKey, getPublicKey,
   // messenger: chats
-  createChat, getChatById, getChatsByUser, updateChatMeta, setChatPinned,
+  createChat, getChatById, getChatsByUser, getLastMessageForChat, updateChatMeta, setChatPinned,
   // messenger: participants
   addChatParticipant, removeChatParticipant, getChatParticipants, getChatParticipantsForChats, isParticipant, getParticipantRole,
   // messenger: messages
@@ -1615,7 +1683,7 @@ module.exports = {
   countPinnedForUser, pinMessageForUser, unpinMessageForUser, listPinnedForUser,
   fetchMessagesForSearchInChat, fetchMessagesForSearchGlobal,
   // messenger: receipts
-  upsertReceipt, getReceiptsByChat, getReceiptsForChats,
+  upsertReceipt, getReceiptsByChat, getReceiptsForChats, getReadersForMessage,
   // messenger: files
   insertChatFile, getChatFile,
   // analytics files

@@ -60,7 +60,7 @@
 - Create: `src/utils/chatTimeFormat.js`
 - Create: `scripts/verifyChatTimeFormat.mjs`
 
-- [ ] **Step 1: Write the failing verify script**
+- [x] **Step 1: Write the failing verify script**
 
 `scripts/verifyChatTimeFormat.mjs`:
 ```js
@@ -93,12 +93,12 @@ assert.equal(formatChatListTime("", now), "");
 console.log("chatTimeFormat ok");
 ```
 
-- [ ] **Step 2: Run it; expect failure**
+- [x] **Step 2: Run it; expect failure**
 
 Run: `node scripts/verifyChatTimeFormat.mjs`
 Expected: `Cannot find module .../src/utils/chatTimeFormat.js`
 
-- [ ] **Step 3: Implement the util**
+- [x] **Step 3: Implement the util**
 
 `src/utils/chatTimeFormat.js`:
 ```js
@@ -128,12 +128,12 @@ export function formatChatListTime(iso, now = new Date()) {
 }
 ```
 
-- [ ] **Step 4: Run; expect pass**
+- [x] **Step 4: Run; expect pass**
 
 Run: `node scripts/verifyChatTimeFormat.mjs`
 Expected: `chatTimeFormat ok`
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/utils/chatTimeFormat.js scripts/verifyChatTimeFormat.mjs
@@ -148,14 +148,14 @@ git commit -m "feat(messenger): chatTimeFormat util for chat list timestamps"
 - Modify: `server/services/db.js:1005-1014` (function `getChatsByUser`)
 - Modify: `server/services/db.js` (add index inside DDL block — find `idx_mr_chat` near line 323 and add new index next to it)
 
-- [ ] **Step 1: Add the index inside the schema init**
+- [x] **Step 1: Add the index inside the schema init**
 
 Find the line `CREATE INDEX IF NOT EXISTS idx_mr_chat ON message_receipts(chat_id);` in `server/services/db.js` (around line 323) and **add immediately after it**:
 ```sql
     CREATE INDEX IF NOT EXISTS idx_messages_chat_id_id_desc ON messages(chat_id, id DESC);
 ```
 
-- [ ] **Step 2: Rewrite `getChatsByUser` to include `last_message`**
+- [x] **Step 2: Rewrite `getChatsByUser` to include `last_message`**
 
 Replace the body at `server/services/db.js:1005-1014`:
 ```js
@@ -204,13 +204,13 @@ const getChatsByUser = async (userId) => {
 };
 ```
 
-- [ ] **Step 3: Restart server, exercise it**
+- [x] **Step 3: Restart server, exercise it**
 
 Run: `npm run dev:server` in one terminal.
 Then in another: `curl -s -H "Authorization: Bearer $MESSENGER_TEST_TOKEN" http://localhost:3001/api/chats | jq '.chats[0] | {id, last_message}'`.
 Expected: each chat has a `last_message` object (or `null` for empty chats), no SQL errors.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add server/services/db.js
@@ -225,7 +225,7 @@ git commit -m "feat(messenger/db): getChatsByUser returns last_message via LATER
 - Create: `scripts/verifyMessengerChatPreview.mjs`
 - Modify: `package.json` (add `verify:messenger-chat-preview` script and append to `verify:messenger-all`)
 
-- [ ] **Step 1: Write the smoke script**
+- [x] **Step 1: Write the smoke script**
 
 `scripts/verifyMessengerChatPreview.mjs`:
 ```js
@@ -266,18 +266,18 @@ if (target.last_message) {
 console.log("messenger chat preview ok");
 ```
 
-- [ ] **Step 2: Wire into npm**
+- [x] **Step 2: Wire into npm**
 
 Edit `package.json` — inside `"scripts"`:
 - add `"verify:messenger-chat-preview": "node scripts/verifyMessengerChatPreview.mjs",`
 - in `"verify:messenger-all"`, append ` && npm run verify:messenger-chat-preview`.
 
-- [ ] **Step 3: Run**
+- [x] **Step 3: Run**
 
 Run: `npm run verify:messenger-chat-preview`
 Expected: `messenger chat preview ok` (requires dev server + env).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add scripts/verifyMessengerChatPreview.mjs package.json
@@ -291,11 +291,11 @@ git commit -m "test(messenger): verify GET /chats returns last_message"
 **Files:**
 - Modify: `src/components/MessengerChatList.jsx:55-72, 198-239`
 
-- [ ] **Step 1: Read the current preview helpers**
+- [x] **Step 1: Read the current preview helpers**
 
 Read `src/components/MessengerChatList.jsx:50-80` and the render block at `:198-240` so the replacement matches surrounding style and imports.
 
-- [ ] **Step 2: Replace the preview source**
+- [x] **Step 2: Replace the preview source**
 
 In `src/components/MessengerChatList.jsx`:
 1. Add at the top of the file (with other imports):
@@ -345,11 +345,11 @@ In `src/components/MessengerChatList.jsx`:
    ```
 4. Replace the timestamp render (around `:229`) — change `fmtTime(lastMessage.created_at)` to `formatChatListTime(source)`.
 
-- [ ] **Step 3: Manual smoke**
+- [x] **Step 3: Manual smoke**
 
 Run: `npm run dev` and open the messenger. Expected: chat rows show real previews (no "Нет сообщений" on chats that actually have messages), and the timestamp uses `HH:MM` / weekday / date depending on age.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/components/MessengerChatList.jsx
@@ -363,11 +363,11 @@ git commit -m "feat(messenger): render last_message in desktop chat list with sm
 **Files:**
 - Modify: `src/mobile/MobileChatList.jsx:8, 175`
 
-- [ ] **Step 1: Read current logic**
+- [x] **Step 1: Read current logic**
 
 Read `src/mobile/MobileChatList.jsx:1-30` and `:160-200`.
 
-- [ ] **Step 2: Apply the same swap**
+- [x] **Step 2: Apply the same swap**
 
 In `src/mobile/MobileChatList.jsx`:
 1. Add import: `import { formatChatListTime } from "../utils/chatTimeFormat";`
@@ -375,11 +375,11 @@ In `src/mobile/MobileChatList.jsx`:
 3. Replace the source: `const last = chat.last_message;` (instead of the previous derivation from `chatMessages`).
 4. Replace timestamp render → `formatChatListTime(last?.createdAt || chat._lastMsgAt || chat.created_at)`.
 
-- [ ] **Step 3: Smoke on mobile shell**
+- [x] **Step 3: Smoke on mobile shell**
 
 Run: `npm run dev` and open `/app/messenger` from a phone-sized viewport. Expected: previews and timestamps match desktop.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/mobile/MobileChatList.jsx
@@ -395,7 +395,7 @@ git commit -m "feat(messenger/mobile): render last_message in MobileChatList"
 - Modify: `server/routes/messenger.js` (DELETE `/chats/:chatId/messages/:messageId` and bulk-delete — emit refreshed `last_message`)
 - Modify: `server/services/db.js` (export a helper `getLastMessageForChat(chatId, userId)` reused by routes)
 
-- [ ] **Step 1: Add the helper**
+- [x] **Step 1: Add the helper**
 
 In `server/services/db.js`, near `getChatsByUser`, add:
 ```js
@@ -418,7 +418,7 @@ const getLastMessageForChat = async (chatId, userId) => {
 ```
 Export it in the module exports block (`module.exports = { ... }`) near `getChatsByUser`.
 
-- [ ] **Step 2: Server emits refreshed `last_message` on delete**
+- [x] **Step 2: Server emits refreshed `last_message` on delete**
 
 In `server/routes/messenger.js`, locate the `DELETE /chats/:chatId/messages/:messageId` handler (~line 524) and the bulk-delete handler (~line 675). After the existing `broadcastToChat(... { type: "message_deleted_all", ... })`, **for each unique target user**, compute a per-user `last_message` and **include it in the payload**.
 
@@ -445,7 +445,7 @@ sendTo(userId, { type: "message_deleted_self", chatId, messageId, lastMessage })
 
 Repeat the same change inside the bulk-delete handler (`/chats/:chatId/messages/bulk-delete`).
 
-- [ ] **Step 3: Client applies updates**
+- [x] **Step 3: Client applies updates**
 
 In `src/context/MessengerContext.jsx` at the WS handler block (~line 471), patch the cases:
 
@@ -488,11 +488,11 @@ case "message_deleted_self": {
 ```
 (Match the exact `setChats` / state variable name used in the file — read `src/context/MessengerContext.jsx:100-150` first to confirm.)
 
-- [ ] **Step 4: Manual round-trip**
+- [x] **Step 4: Manual round-trip**
 
 Run dev, send a message in chat A from user X → user Y's chat list updates without refresh. Delete the last message → preview falls back to the previous message.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add server/services/db.js server/routes/messenger.js src/context/MessengerContext.jsx
@@ -509,7 +509,7 @@ git commit -m "feat(messenger): update chat.last_message in realtime via WS"
 - Create: `src/utils/formatReadAt.js`
 - Create: `scripts/verifyFormatReadAt.mjs`
 
-- [ ] **Step 1: Write failing verify**
+- [x] **Step 1: Write failing verify**
 
 `scripts/verifyFormatReadAt.mjs`:
 ```js
@@ -526,11 +526,11 @@ assert.equal(formatReadAt(null, now), "");
 console.log("formatReadAt ok");
 ```
 
-- [ ] **Step 2: Run; expect fail**
+- [x] **Step 2: Run; expect fail**
 
 Run: `node scripts/verifyFormatReadAt.mjs` → `Cannot find module ...`
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `src/utils/formatReadAt.js`:
 ```js
@@ -558,11 +558,11 @@ export function formatReadAt(iso, now = new Date()) {
 }
 ```
 
-- [ ] **Step 4: Run; expect pass**
+- [x] **Step 4: Run; expect pass**
 
 `node scripts/verifyFormatReadAt.mjs` → `formatReadAt ok`
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/utils/formatReadAt.js scripts/verifyFormatReadAt.mjs
@@ -577,7 +577,7 @@ git commit -m "feat(messenger): formatReadAt util for read-receipt timestamps"
 - Modify: `server/services/db.js` (add function, export it)
 - Modify: `server/routes/messenger.js` (add GET endpoint between existing routes around line 870)
 
-- [ ] **Step 1: Add the DB function**
+- [x] **Step 1: Add the DB function**
 
 In `server/services/db.js`, near the existing `getReceiptsByChat` (~line 1499), add:
 ```js
@@ -600,7 +600,7 @@ const getReadersForMessage = async (chatId, messageId) => {
 ```
 Add `getReadersForMessage` to the `module.exports` block.
 
-- [ ] **Step 2: Add the route**
+- [x] **Step 2: Add the route**
 
 In `server/routes/messenger.js`, right after the existing `GET /chats/:chatId/pinned-for-me` (line ~882), add:
 ```js
@@ -630,7 +630,7 @@ router.get("/chats/:chatId/messages/:messageId/readers", requireAuth(), async (r
 ```
 (`getMessageById` is already imported from `db.js` for other routes — verify the import at the top of the file and add it to the import list if missing. Same for `getReadersForMessage`.)
 
-- [ ] **Step 3: Smoke**
+- [x] **Step 3: Smoke**
 
 Run: dev server + a chat with at least 2 readers on one of your messages. Then:
 ```bash
@@ -639,7 +639,7 @@ curl -s -H "Authorization: Bearer $TOKEN" \
 ```
 Expected: `{ "readers": [ { "userId": ..., "name": "...", "avatar": "...", "readAt": "..." } ] }`. 403 if you query someone else's message; 404 for a message from another chat.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add server/services/db.js server/routes/messenger.js
@@ -654,7 +654,7 @@ git commit -m "feat(messenger): GET /chats/:id/messages/:id/readers (own-message
 - Create: `scripts/verifyMessengerReaders.mjs`
 - Modify: `package.json`
 
-- [ ] **Step 1: Write the script**
+- [x] **Step 1: Write the script**
 
 `scripts/verifyMessengerReaders.mjs`:
 ```js
@@ -692,15 +692,15 @@ assert.equal(badRes.status, 400);
 console.log("messenger readers ok");
 ```
 
-- [ ] **Step 2: Wire into npm**
+- [x] **Step 2: Wire into npm**
 
 Add `"verify:messenger-readers": "node scripts/verifyMessengerReaders.mjs",` to `package.json` and append to `verify:messenger-all`.
 
-- [ ] **Step 3: Run**
+- [x] **Step 3: Run**
 
 `npm run verify:messenger-readers` → `messenger readers ok`.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add scripts/verifyMessengerReaders.mjs package.json
@@ -714,7 +714,7 @@ git commit -m "test(messenger): verify readers endpoint auth + payload"
 **Files:**
 - Create: `src/components/MessengerReadersPopover.jsx`
 
-- [ ] **Step 1: Implement**
+- [x] **Step 1: Implement**
 
 `src/components/MessengerReadersPopover.jsx`:
 ```jsx
@@ -790,7 +790,7 @@ function Avatar({ src, name, bg, fg }) {
 }
 ```
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add src/components/MessengerReadersPopover.jsx
@@ -805,7 +805,7 @@ git commit -m "feat(messenger): MessengerReadersPopover (popover + bottom-sheet 
 - Modify: `src/components/MessengerContextMenu.jsx`
 - Modify: `src/components/MessengerChatWindow.jsx` (pass new props when opening the menu)
 
-- [ ] **Step 1: Extend the menu's API**
+- [x] **Step 1: Extend the menu's API**
 
 Replace `src/components/MessengerContextMenu.jsx` so it accepts `views`, `readers` preview, and a `onShowReaders` callback. Full file:
 
@@ -896,7 +896,7 @@ function MiniAvatar({ reader, offset, bg, fg, brd }) {
 }
 ```
 
-- [ ] **Step 2: Wire props from `MessengerChatWindow`**
+- [x] **Step 2: Wire props from `MessengerChatWindow`**
 
 In `src/components/MessengerChatWindow.jsx`, find the place where `MessengerContextMenu` is rendered. Compute and pass:
 ```jsx
@@ -929,11 +929,11 @@ And render the popover when `readersPopover` is set:
 ```
 Add a click-outside handler that clears both `contextMenu` and `readersPopover`.
 
-- [ ] **Step 3: Smoke**
+- [x] **Step 3: Smoke**
 
 Right-click your own message in a group chat where someone has read it → menu shows "N просмотров" + mini-avatars; hovering it reveals the popover with names and times.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/components/MessengerContextMenu.jsx src/components/MessengerChatWindow.jsx
@@ -947,11 +947,11 @@ git commit -m "feat(messenger): N просмотров row in desktop context me
 **Files:**
 - Modify: `src/mobile/MobileChatThread.jsx`
 
-- [ ] **Step 1: Read the existing long-press menu**
+- [x] **Step 1: Read the existing long-press menu**
 
 Search for the long-press / action sheet block in `src/mobile/MobileChatThread.jsx` (look for `onLongPress`, `setActionSheet`, or similar).
 
-- [ ] **Step 2: Add views row at the bottom of the action sheet**
+- [x] **Step 2: Add views row at the bottom of the action sheet**
 
 Inside the long-press sheet JSX, append (only when `isOwnMessage && readersCount > 0`):
 ```jsx
@@ -970,11 +970,11 @@ Inside the long-press sheet JSX, append (only when `isOwnMessage && readersCount
 
 Render `MessengerReadersPopover` with `variant="sheet"` when `readersSheet` is set.
 
-- [ ] **Step 3: Smoke (mobile shell)**
+- [x] **Step 3: Smoke (mobile shell)**
 
 Long-press your own message → action sheet ends with "N просмотров"; tap → second sheet slides up with the list.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/mobile/MobileChatThread.jsx
@@ -991,7 +991,7 @@ git commit -m "feat(messenger/mobile): N просмотров row in long-press 
 - Create: `src/utils/voiceWaveform.js`
 - Create: `scripts/verifyVoiceWaveform.mjs`
 
-- [ ] **Step 1: Write failing verify**
+- [x] **Step 1: Write failing verify**
 
 `scripts/verifyVoiceWaveform.mjs`:
 ```js
@@ -1026,11 +1026,11 @@ for (let i = 0; i < 32; i++) assert.equal(unpacked[i], u8[i]);
 console.log("voiceWaveform ok");
 ```
 
-- [ ] **Step 2: Run; expect fail**
+- [x] **Step 2: Run; expect fail**
 
 `node scripts/verifyVoiceWaveform.mjs` → module not found.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `src/utils/voiceWaveform.js`:
 ```js
@@ -1088,11 +1088,11 @@ export function unpackWaveform(b64) {
 }
 ```
 
-- [ ] **Step 4: Run; expect pass**
+- [x] **Step 4: Run; expect pass**
 
 `node scripts/verifyVoiceWaveform.mjs` → `voiceWaveform ok`.
 
-- [ ] **Step 5: Wire into npm + commit**
+- [x] **Step 5: Wire into npm + commit**
 
 Add `"verify:voice-waveform": "node scripts/verifyVoiceWaveform.mjs",` to `package.json` and append to `verify:messenger-all`.
 
@@ -1120,7 +1120,7 @@ idle → (pointerdown on mic) → recording
                                   preview → sent
 ```
 
-- [ ] **Step 1: Create the component**
+- [x] **Step 1: Create the component**
 
 `src/components/MessengerVoiceRecorder.jsx`:
 ```jsx
@@ -1370,7 +1370,7 @@ function iconBtn($, disabled = false) {
 }
 ```
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add src/components/MessengerVoiceRecorder.jsx
@@ -1384,7 +1384,7 @@ git commit -m "feat(messenger): MessengerVoiceRecorder (hold/lock/cancel)"
 **Files:**
 - Create: `src/components/MessengerVoiceBubble.jsx`
 
-- [ ] **Step 1: Implement**
+- [x] **Step 1: Implement**
 
 `src/components/MessengerVoiceBubble.jsx`:
 ```jsx
@@ -1522,11 +1522,11 @@ function fmt(sec) {
 }
 ```
 
-- [ ] **Step 2: Confirm `decryptForChat` exists**
+- [x] **Step 2: Confirm `decryptForChat` exists**
 
 Read `src/context/MessengerContext.jsx` to find the actual decrypt API exposed by the context (search for `decrypt`, `decryptForChat`, or `decryptMessage`). If the exposed name differs, rename the call in this component to match. If a binary decrypt for files doesn't exist yet, follow the same path the existing image viewer uses (`MessengerImageViewer.jsx`) — copy that decrypt pattern for the audio blob.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add src/components/MessengerVoiceBubble.jsx
@@ -1540,11 +1540,11 @@ git commit -m "feat(messenger): MessengerVoiceBubble (waveform player + speed)"
 **Files:**
 - Modify: `server/routes/messenger.js` (POST `/chats/:chatId/messages` at line ~400)
 
-- [ ] **Step 1: Read the existing handler**
+- [x] **Step 1: Read the existing handler**
 
 Read `server/routes/messenger.js:400-480` to see the existing `msg_type` whitelist and validation.
 
-- [ ] **Step 2: Add `voice` to allowed types**
+- [x] **Step 2: Add `voice` to allowed types**
 
 In the handler:
 1. Add `"voice"` to the allowed `msg_type` set.
@@ -1559,11 +1559,11 @@ In the handler:
    ```
 3. The `fileId → mime startsWith "audio/"` check is **left to the client** because the file row is referenced **inside** the encrypted payload (`text`). The server cannot inspect the fileId without decrypting. This is fine: a malicious client can already construct any encrypted payload it wants. Real protection is the chat-key gate.
 
-- [ ] **Step 3: Same change for the WS `send` path**
+- [x] **Step 3: Same change for the WS `send` path**
 
 In `server/services/ws.js`, locate the `case "send_message"` (around line 195) and apply the same type whitelist if it duplicates the validation.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add server/routes/messenger.js server/services/ws.js
@@ -1577,7 +1577,7 @@ git commit -m "feat(messenger): accept msg_type=voice on POST and WS send"
 **Files:**
 - Modify: `src/components/MessageBubble.jsx`
 
-- [ ] **Step 1: Branch on type**
+- [x] **Step 1: Branch on type**
 
 Inside the body of `MessageBubble`, near the existing `isFile`/`isBundle` checks:
 ```jsx
@@ -1589,11 +1589,11 @@ if (isVoice) return <MessengerVoiceBubble chatId={chatId} message={msg} />;
 ```
 Match the existing surrounding bubble wrapper / reply-citation chrome — wrap the voice content the same way other media types are wrapped (read the file to see how `isFile` / `isBundle` flow into JSX).
 
-- [ ] **Step 2: Smoke**
+- [x] **Step 2: Smoke**
 
 Hard to fully smoke yet without the recorder hooked up. We'll smoke E2E in Task 3.7.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add src/components/MessageBubble.jsx
@@ -1608,7 +1608,7 @@ git commit -m "feat(messenger): render voice messages via MessengerVoiceBubble"
 - Modify: `src/components/MessengerChatWindow.jsx`
 - Modify: `src/mobile/MobileChatThread.jsx`
 
-- [ ] **Step 1: Add `handleSendVoice` to context surface**
+- [x] **Step 1: Add `handleSendVoice` to context surface**
 
 In `src/context/MessengerContext.jsx`, alongside the existing `sendMessage`/`sendFile`, expose:
 ```js
@@ -1622,7 +1622,7 @@ const sendVoiceMessage = useCallback(async (chatId, { blob, mime, duration, wave
 ```
 Add `sendVoiceMessage` to the context value. **Verify** the names of the internal helpers (`uploadEncryptedFile`, `sendEncryptedMessage`) by grepping the file for the equivalents used by image/file sending; rename your call sites to match.
 
-- [ ] **Step 2: Wire into desktop input bar**
+- [x] **Step 2: Wire into desktop input bar**
 
 In `src/components/MessengerChatWindow.jsx`, find the input bar (where the existing 📎 attach button lives). Add:
 ```jsx
@@ -1635,11 +1635,11 @@ import MessengerVoiceRecorder from "./MessengerVoiceRecorder";
 ```
 When the recorder is in `recording`/`locked`/`preview` state it expands to fill the input row; for that, the recorder already returns full-flex JSX in those states. Hide or grey-out the text input and attach button while `recorder.state !== "idle"`. Simplest: lift recorder state up via a callback `onActiveChange(isActive)` and conditionally render the rest of the bar.
 
-- [ ] **Step 3: Wire into mobile**
+- [x] **Step 3: Wire into mobile**
 
 Same in `src/mobile/MobileChatThread.jsx`. Use pointer events (already normalized).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/context/MessengerContext.jsx src/components/MessengerChatWindow.jsx src/mobile/MobileChatThread.jsx
@@ -1654,7 +1654,7 @@ git commit -m "feat(messenger): mount voice recorder in desktop + mobile compose
 - Create: `scripts/verifyMessengerVoice.mjs`
 - Modify: `package.json`
 
-- [ ] **Step 1: Write the script**
+- [x] **Step 1: Write the script**
 
 This one is the trickiest because real audio capture isn't possible from a Node smoke. We verify the **server-side accept path**: upload a tiny fake encrypted "audio" blob, then post a `voice` message that references it, then fetch back and validate the chat list preview.
 
@@ -1710,15 +1710,15 @@ assert.equal(target.last_message.id, message.id);
 console.log("messenger voice ok");
 ```
 
-- [ ] **Step 2: Wire into npm**
+- [x] **Step 2: Wire into npm**
 
 Add `"verify:messenger-voice": "node scripts/verifyMessengerVoice.mjs",` and append to `verify:messenger-all`.
 
-- [ ] **Step 3: Run**
+- [x] **Step 3: Run**
 
 `npm run verify:messenger-voice` → `messenger voice ok`.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add scripts/verifyMessengerVoice.mjs package.json
@@ -1732,17 +1732,17 @@ git commit -m "test(messenger): voice round-trip smoke verify"
 **Files:**
 - Modify: `server/services/messengerPush.js`
 
-- [ ] **Step 1: Find the body-building function**
+- [x] **Step 1: Find the body-building function**
 
 Open `server/services/messengerPush.js`, search for the function that picks the push body based on `msg_type` (likely a switch with `"image" → "🖼 Фото"`, etc.).
 
-- [ ] **Step 2: Add the branch**
+- [x] **Step 2: Add the branch**
 
 ```js
 if (msgType === "voice") return "🎤 Голосовое сообщение";
 ```
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add server/services/messengerPush.js
@@ -1755,7 +1755,7 @@ git commit -m "feat(messenger/push): voice body copy"
 
 ### Task W.1: Run the full verify suite
 
-- [ ] **Step 1: Run**
+- [x] **Step 1: Run**
 
 ```bash
 npm run verify:messenger-all
@@ -1763,7 +1763,7 @@ npm run verify:messenger-all
 
 Expected: every step in the chain prints its `... ok` line and exits 0. If any step fails, fix the actual bug — do not weaken the assertion.
 
-- [ ] **Step 2: Manual matrix**
+- [x] **Step 2: Manual matrix**
 
 Open the messenger in Chrome desktop, Safari iOS (or iOS Simulator), and Firefox desktop. Walk through:
 1. Chat list shows real previews and timestamps in all three time buckets (today / weekday / date).
@@ -1772,7 +1772,7 @@ Open the messenger in Chrome desktop, Safari iOS (or iOS Simulator), and Firefox
 4. Hold-to-record on desktop → drag up → lock → preview → send. Bubble shows waveform; play, scrub, change speed to 2x.
 5. Send a voice from desktop → mobile shows it correctly without refresh.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 If any small fixes fell out of manual smoke, commit them as `fix(messenger): ...` per area.
 

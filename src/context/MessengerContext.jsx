@@ -476,14 +476,41 @@ export function MessengerProvider({ children }) {
           clearRetryTimer(message.client_message_id);
           persistPendingQueue((prev) => prev.filter((item) => item.id !== message.client_message_id));
         }
+        if (message && message.msg_type !== "system" && message.chat_id) {
+          setChats((prev) => prev.map((chat) => (
+            chat.id === message.chat_id
+              ? {
+                  ...chat,
+                  _lastMsgAt: message.created_at,
+                  last_message: {
+                    id: message.id,
+                    senderId: message.sender_id,
+                    type: message.msg_type,
+                    text: message.text,
+                    createdAt: message.created_at,
+                  },
+                }
+              : chat
+          )));
+        }
         break;
       }
       case "message_deleted_all":
       case "message_deleted_self":
         removeMessage(event.chatId, event.messageId);
+        if ("lastMessage" in event) {
+          setChats((prev) => prev.map((chat) => (
+            chat.id === event.chatId ? { ...chat, last_message: event.lastMessage } : chat
+          )));
+        }
         break;
       case "messages_deleted_self_bulk":
         for (const id of event.messageIds || []) removeMessage(event.chatId, id);
+        if ("lastMessage" in event) {
+          setChats((prev) => prev.map((chat) => (
+            chat.id === event.chatId ? { ...chat, last_message: event.lastMessage } : chat
+          )));
+        }
         break;
       case "receipts_update":
         setChats((prev) => prev.map((chat) => (
@@ -684,6 +711,35 @@ export function MessengerProvider({ children }) {
       text: safeJsonString(meta),
       meta,
       msgType,
+      fileId: uploaded.id,
+    });
+  }, [sendPayload, uploadFile]);
+
+  const sendVoiceMessage = useCallback(async (chatId, { blob, mime, duration, waveformB64 }) => {
+    if (!chatId || !blob) return false;
+    // Wrap blob as a File so the existing uploader provides a name/type.
+    const fileName = `voice_${Date.now()}.${(mime || "audio/webm").includes("ogg") ? "ogg" : (mime || "audio/webm").includes("mp4") ? "m4a" : "webm"}`;
+    const file = (typeof File === "function")
+      ? new File([blob], fileName, { type: mime || "audio/webm" })
+      : Object.assign(blob, { name: fileName });
+    const uploaded = await uploadFile(chatId, file);
+    if (!uploaded?.id) return false;
+    const payload = JSON.stringify({
+      fileId: uploaded.id,
+      duration: Number(duration) || 0,
+      waveform: waveformB64 || "",
+    });
+    const meta = {
+      name: uploaded.original_name || file.name,
+      type: uploaded.mime_type || mime || "audio/webm",
+      size: Number(uploaded.size_bytes || blob.size || 0),
+      iv: FILE_IV_PLACEHOLDER,
+      duration: Number(duration) || 0,
+    };
+    return sendPayload(chatId, {
+      text: payload,
+      meta,
+      msgType: "voice",
       fileId: uploaded.id,
     });
   }, [sendPayload, uploadFile]);
@@ -1183,6 +1239,7 @@ export function MessengerProvider({ children }) {
     sendMsg,
     sendFile,
     sendFiles,
+    sendVoiceMessage,
     forwardMsg,
     editMsg,
     deleteMsg,
@@ -1265,6 +1322,7 @@ export function MessengerProvider({ children }) {
     selectionMode,
     sendFile,
     sendFiles,
+    sendVoiceMessage,
     sendMsg,
     sendTyping,
     setFontSize,

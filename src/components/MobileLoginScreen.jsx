@@ -18,7 +18,7 @@ export default function MobileLoginScreen() {
     try {
       await login(username.trim(), password);
       window.history.replaceState(null, "", "/app/messenger");
-      window.dispatchEvent(new PopStateEvent("popstate"));
+      dispatchPopState();
     } catch (err) {
       setError(err.message || "Не удалось войти");
     } finally {
@@ -142,4 +142,14 @@ export default function MobileLoginScreen() {
       </form>
     </main>
   );
+}
+
+function dispatchPopState() {
+  try {
+    window.dispatchEvent(new Event("popstate"));
+  } catch {
+    const event = document.createEvent("Event");
+    event.initEvent("popstate", true, true);
+    window.dispatchEvent(event);
+  }
 }

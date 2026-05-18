@@ -3,6 +3,7 @@ import { useMessenger } from "../context/MessengerContext";
 import ReadReceipt from "./ReadReceipt";
 import FileMessageBubble from "./FileMessageBubble";
 import FileBundleBubble from "./FileBundleBubble";
+import MessengerVoiceBubble from "./MessengerVoiceBubble";
 import { fmtTime } from "../utils/messengerUiUtils";
 import { getMessengerFontConfig } from "../utils/messengerFont";
 
@@ -33,6 +34,7 @@ export default function MessageBubble({
   const cfg = getMessengerFontConfig(messenger?.fontSize);
   const isFile = msg.msg_type === "file" || msg.msg_type === "image";
   const isBundle = msg.msg_type === "files_bundle";
+  const isVoice = msg.msg_type === "voice";
   const bubbleBg = isMine ? $.ac : $.bgC;
   const textColor = isMine ? "#fff" : $.tx;
   const mentionColor = isMine ? "#fff" : $.ac;
@@ -84,6 +86,7 @@ export default function MessageBubble({
               </div>
               <div style={{ fontSize: cfg.small, color: replyTextColor, overflow: "hidden", textOverflow: "ellipsis", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>
                 {replyToMessage.msg_type === "image" || replyToMessage.msg_type === "image_bundle" ? "🖼️ Фото" :
+                 replyToMessage.msg_type === "voice" ? "🎤 Голосовое сообщение" :
                  replyToMessage.msg_type === "file" || replyToMessage.msg_type === "file_bundle" ? `📎 ${replyToMessage.meta?.fileName || "Файл"}` :
                  replyToMessage.text}
               </div>
@@ -94,7 +97,9 @@ export default function MessageBubble({
               Сообщение удалено
             </div>
           )}
-          {isBundle ? (
+          {isVoice ? (
+            <MessengerVoiceBubble chatId={chatId} message={msg} />
+          ) : isBundle ? (
             <FileBundleBubble msg={msg} chatId={chatId} downloadFile={downloadFile} downloadFiles={downloadFiles} getFileUrl={getFileUrl} onOpenImage={onOpenImage} />
           ) : isFile ? (
             <FileMessageBubble msg={msg} chatId={chatId} downloadFile={downloadFile} getFileUrl={getFileUrl} onOpenImage={onOpenImage} />

@@ -4,19 +4,41 @@ import { useTheme } from "../context/ThemeContext";
 import { useMessenger } from "../context/MessengerContext";
 import { fmtTime, isImageLike, parseBundleFiles } from "../utils/messengerUiUtils";
 import { getUnreadCount } from "../utils/messengerUnread";
+import { formatChatListTime } from "../utils/chatTimeFormat";
+
+function fmtDuration(sec) {
+  const s = Math.max(0, Math.round(sec || 0));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+
+function safeParseVoiceMeta(text) {
+  try {
+    const v = JSON.parse(text || "{}");
+    return typeof v === "object" && v ? v : null;
+  } catch { return null; }
+}
 
 function lastMessagePreview(message) {
   if (!message) return "Нет сообщений";
   if (message.pending) return "Отправляется...";
-  if (message.msg_type === "files_bundle") {
+  const type = message.type || message.msg_type;
+  if (type === "files_bundle") {
     const files = parseBundleFiles(message.text);
     if (files.length === 0) return "Файлы";
+    if (files.length === 1) {
+      const f = files[0];
+      return isImageLike(f.type, f.name, f.thumb) ? "Фото" : (f.name || "Файл");
+    }
     return files.every((file) => isImageLike(file.type, file.name, file.thumb))
       ? `Фото (${files.length})`
-      : `Файлы (${files.length})`;
+      : `${files.length} файлов`;
   }
-  if (message.msg_type === "image") return "Фото";
-  if (message.msg_type === "file") return "Файл";
+  if (type === "image") return "Фото";
+  if (type === "file") return "Файл";
+  if (type === "voice") {
+    const meta = safeParseVoiceMeta(message.text);
+    return meta?.duration ? `🎤 Голосовое ${fmtDuration(meta.duration)}` : "🎤 Голосовое";
+  }
   const text = String(message.text || "").replace(/\s+/g, " ").trim();
   if (!text) return "Нет сообщений";
   return text.length > 70 ? `${text.slice(0, 70)}...` : text;
@@ -59,9 +81,9 @@ export default function MobileChatList({ onOpenChat, onOpenSettings, onOpenSearc
     const needle = query.trim().toLowerCase();
     const items = Array.isArray(chats) ? [...chats] : [];
     const withActivity = items.map((chat) => {
-      const chatMessages = messages[chat.id] || [];
-      const last = chatMessages[chatMessages.length - 1] || null;
-      return { chat, last, timestamp: Date.parse(last?.created_at || chat.created_at || "") || 0 };
+      const last = chat.last_message || null;
+      const ts = last?.createdAt || chat._lastMsgAt || chat.created_at || "";
+      return { chat, last, timestamp: Date.parse(ts) || 0 };
     });
     withActivity.sort((a, b) => {
       if (!!a.chat.is_pinned !== !!b.chat.is_pinned) return a.chat.is_pinned ? -1 : 1;
@@ -160,7 +182,7 @@ export default function MobileChatList({ onOpenChat, onOpenSettings, onOpenSearc
                 <span style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
                   <strong style={{ fontSize: 16, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", letterSpacing: 0, fontWeight: unread > 0 ? 800 : 700 }}>{chat.title || "Чат"}</strong>
                   <span style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
-                    {last && <span style={{ color: unread > 0 ? $.ac : $.txS, fontSize: 11 }}>{fmtTime(last.created_at)}</span>}
+                    {(last || chat._lastMsgAt) && <span style={{ color: unread > 0 ? $.ac : $.txS, fontSize: 11 }}>{formatChatListTime(last?.createdAt || chat._lastMsgAt || chat.created_at)}</span>}
                     {hasUnreadMention && (
                       <span style={{ minWidth: 18, height: 18, borderRadius: 9, background: $.ac, color: "#fff", fontSize: 11, fontWeight: 700, display: "grid", placeItems: "center", padding: "0 5px" }}>@</span>
                     )}

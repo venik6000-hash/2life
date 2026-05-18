@@ -14,6 +14,7 @@ const ws = read("server/services/ws.js");
 const routes = read("server/routes/messenger.js");
 const db = read("server/services/db.js");
 const mobileThread = read("src/mobile/MobileChatThread.jsx");
+const voiceRecorder = read("src/components/MessengerVoiceRecorder.jsx");
 const mobileSettings = read("src/mobile/MobileMessengerSettings.jsx");
 const mobileShell = read("src/mobile/MobileMessengerShell.jsx");
 const desktopList = read("src/components/MessengerChatList.jsx");
@@ -58,6 +59,11 @@ mustContain(mobileSettings, "overflowX: \"hidden\"", "mobile settings screen mus
 mustContain(bubble, "width: \"100%\"", "message bubble row must keep a full-width layout context");
 mustContain(bubble, "overflowWrap: \"anywhere\"", "long message text must wrap inside the bubble");
 mustContain(bubble, "fontSize: cfg.message", "message text must respect messenger font size setting");
+mustContain(voiceRecorder, "WebkitUserSelect: \"none\"", "voice recorder active UI must disable iOS text selection");
+mustContain(voiceRecorder, "WebkitTouchCallout: \"none\"", "voice recorder active UI must disable iOS callout/loupe");
+mustContain(voiceRecorder, "touchAction: \"none\"", "voice recorder active UI must own touch gestures");
+mustContain(voiceRecorder, "document.body.style.webkitUserSelect", "voice recorder must suppress body text selection while recording");
+mustContain(voiceRecorder, "e.preventDefault?.();", "voice recorder drag move must prevent native selection/scroll handling");
 for (const scriptPath of envBackedVerifyScripts) {
   mustNotContain(read(scriptPath), "process.exit(0)", `${scriptPath} must fail when required env is missing`);
 }

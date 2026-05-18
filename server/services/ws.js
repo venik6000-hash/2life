@@ -167,6 +167,13 @@ const handleMessage = async (ws, user, raw) => {
     if (!chatId) return;
     if (!text.trim() && msgType === "text") return;
 
+    const ALLOWED_MSG_TYPES = new Set(["text", "image", "file", "files_bundle", "voice", "system"]);
+    if (!ALLOWED_MSG_TYPES.has(msgType)) return;
+    if (msgType === "voice" && (typeof text !== "string" || text.length > 4096)) {
+      try { ws.send(JSON.stringify({ type: "send_error", error: "voice payload too large", clientMessageId })); } catch {}
+      return;
+    }
+
     const allowed = await isParticipant(chatId, user.id);
     if (!allowed) return;
 
@@ -208,6 +215,7 @@ const handleMessage = async (ws, user, raw) => {
           chatTitle: chat?.title || "Чат",
           url: `/app/messenger?chat=${chatId}`,
           exceptDeviceId: deviceId,
+          msgType,
         }).catch(() => {});
       } else if (ws.readyState === 1 /* OPEN */) {
         ws.send(JSON.stringify(payload));

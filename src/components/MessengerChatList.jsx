@@ -3,6 +3,7 @@ import { useTheme } from "../context/ThemeContext";
 import { useMessenger } from "../context/MessengerContext";
 import { fmtTime, isImageLike, parseBundleFiles } from "../utils/messengerUiUtils";
 import { getUnreadCount } from "../utils/messengerUnread";
+import { formatChatListTime } from "../utils/chatTimeFormat";
 
 export default function MessengerChatList({
   chats,
@@ -54,18 +55,39 @@ export default function MessengerChatList({
 
   const getLastMessagePreview = (lastMessage) => {
     if (!lastMessage) return "Нет сообщений";
-    if (lastMessage.msg_type === "files_bundle") {
+    const type = lastMessage.type || lastMessage.msg_type;
+    if (type === "files_bundle") {
       const files = parseBundleFiles(lastMessage.text);
       if (files.length === 0) return "📎 Файлы";
+      if (files.length === 1) {
+        const f = files[0];
+        return isImageLike(f.type, f.name, f.thumb) ? "🖼 Фото" : `📎 ${f.name || "Файл"}`;
+      }
       const allImages = files.every((file) => isImageLike(file.type, file.name, file.thumb));
-      return allImages ? `🖼 Фото (${files.length})` : `📎 Файлы (${files.length})`;
+      return allImages ? `🖼 Фото (${files.length})` : `📎 ${files.length} файлов`;
     }
-    if (lastMessage.msg_type === "image") return "🖼 Фото";
-    if (lastMessage.msg_type === "file") return "📎 Файл";
+    if (type === "image") return "🖼 Фото";
+    if (type === "file") return "📎 Файл";
+    if (type === "voice") {
+      const meta = safeParseVoiceMeta(lastMessage.text);
+      return meta?.duration ? `🎤 Голосовое ${fmtDuration(meta.duration)}` : "🎤 Голосовое";
+    }
     const text = String(lastMessage.text || "");
     if (!text) return "Нет сообщений";
-    return text.length > 40 ? `${text.slice(0, 40)}…` : text;
+    return text.length > 60 ? `${text.slice(0, 60)}…` : text;
   };
+
+  function fmtDuration(sec) {
+    const s = Math.max(0, Math.round(sec || 0));
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+  }
+
+  function safeParseVoiceMeta(text) {
+    try {
+      const v = JSON.parse(text || "{}");
+      return typeof v === "object" && v ? v : null;
+    } catch { return null; }
+  }
 
   const getActivityTimestamp = useCallback((chat) => {
     const chatMessages = messages[chat.id] || [];
@@ -195,7 +217,8 @@ export default function MessengerChatList({
         {sortedChats.map((chat) => {
           const unread = getUnreadCount(chat, messages, user);
           const chatMessages = messages[chat.id] || [];
-          const lastMessage = chatMessages[chatMessages.length - 1];
+          const lastMessage = chat.last_message;
+          const source = chat._lastMsgAt || lastMessage?.createdAt || chat.created_at;
           const icon = chat.icon || (chat.is_internal ? "💬" : "👤");
 
           // Check for unread mention
@@ -226,7 +249,7 @@ export default function MessengerChatList({
                   {chat.is_pinned && <span style={{ fontSize: 11, color: $.ac, flexShrink: 0 }}>📌</span>}
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }}>
-                  {lastMessage && <span style={{ fontSize: 10, color: $.txM }}>{fmtTime(lastMessage.created_at)}</span>}
+                  {(lastMessage || source) && <span style={{ fontSize: 10, color: $.txM }}>{formatChatListTime(source)}</span>}
                   <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
                     {hasUnreadMention && (
                       <span style={{ minWidth: 18, height: 18, borderRadius: 9, background: $.ac, color: "#fff", fontSize: 11, fontWeight: 700, display: "grid", placeItems: "center", padding: "0 5px" }}>@</span>

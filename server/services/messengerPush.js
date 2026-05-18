@@ -27,13 +27,20 @@ function getPushConfigStatus() {
   };
 }
 
-async function sendPrivateMessagePush({ userIds, chatTitle, url = "/app/messenger", exceptDeviceId = "" }) {
+function pickPushBody(msgType, chatTitle) {
+  if (msgType === "voice") return chatTitle ? `${chatTitle}: 🎤 Голосовое сообщение` : "🎤 Голосовое сообщение";
+  if (msgType === "image") return chatTitle ? `${chatTitle}: 🖼 Фото` : "🖼 Фото";
+  if (msgType === "file" || msgType === "files_bundle") return chatTitle ? `${chatTitle}: 📎 Файл` : "📎 Файл";
+  return chatTitle ? `Чат: ${chatTitle}` : "Откройте мессенджер";
+}
+
+async function sendPrivateMessagePush({ userIds, chatTitle, url = "/app/messenger", exceptDeviceId = "", msgType = "text" }) {
   if (!configureWebPush()) return { ok: false, skipped: "missing_vapid" };
   const uniqueUserIds = Array.from(new Set(Array.from(userIds || []).map(Number).filter((id) => Number.isInteger(id) && id > 0)));
   const devices = await listPushDevicesForUsers(uniqueUserIds);
   const payload = JSON.stringify({
     title: "Новое сообщение",
-    body: chatTitle ? `Чат: ${chatTitle}` : "Откройте мессенджер",
+    body: pickPushBody(msgType, chatTitle),
     url,
   });
   const results = [];
