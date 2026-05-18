@@ -1,4 +1,5 @@
 const { Pool } = require("pg");
+const { decryptText } = require("./messengerCrypto");
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL || "postgresql://postgres:postgres@localhost:5432/2life",
@@ -984,6 +985,14 @@ const getPublicKey = async (userId) => {
   return r.rows[0] ?? null;
 };
 
+const decryptMessagePreview = (encryptedText) => {
+  try {
+    return encryptedText ? decryptText(encryptedText) : "";
+  } catch (_) {
+    return "";
+  }
+};
+
 // ─── Messenger: chats ────────────────────────────────────────────────────────
 
 const createChat = async ({ clientId = null, title, icon = "", createdBy, isInternal = false }) => {
@@ -1009,12 +1018,12 @@ const getChatsByUser = async (userId) => {
             lm.id          AS last_message_id,
             lm.sender_id   AS last_message_sender_id,
             lm.msg_type    AS last_message_type,
-            lm.text        AS last_message_text,
+            lm.encrypted_text AS last_message_encrypted_text,
             lm.created_at  AS last_message_at
      FROM chats c
      JOIN chat_participants cp ON cp.chat_id = c.id AND cp.user_id = $1
      LEFT JOIN LATERAL (
-       SELECT m.id, m.sender_id, m.msg_type, m.text, m.created_at
+       SELECT m.id, m.sender_id, m.msg_type, m.encrypted_text, m.created_at
        FROM messages m
        WHERE m.chat_id = c.id
          AND m.msg_type <> 'system'
@@ -1031,7 +1040,7 @@ const getChatsByUser = async (userId) => {
   );
   return r.rows.map((row) => {
     const { last_message_id, last_message_sender_id, last_message_type,
-            last_message_text, last_message_at, ...rest } = row;
+            last_message_encrypted_text, last_message_at, ...rest } = row;
     return {
       ...rest,
       last_message: last_message_id
@@ -1039,7 +1048,7 @@ const getChatsByUser = async (userId) => {
             id: last_message_id,
             senderId: last_message_sender_id,
             type: last_message_type,
-            text: last_message_text,
+            text: decryptMessagePreview(last_message_encrypted_text),
             createdAt: last_message_at,
           }
         : null,
@@ -1049,7 +1058,7 @@ const getChatsByUser = async (userId) => {
 
 const getLastMessageForChat = async (chatId, userId) => {
   const r = await pool.query(
-    `SELECT m.id, m.sender_id AS "senderId", m.msg_type AS type, m.text, m.created_at AS "createdAt"
+    `SELECT m.id, m.sender_id AS "senderId", m.msg_type AS type, m.encrypted_text, m.created_at AS "createdAt"
      FROM messages m
      WHERE m.chat_id = $1
        AND m.msg_type <> 'system'
@@ -1061,7 +1070,10 @@ const getLastMessageForChat = async (chatId, userId) => {
      LIMIT 1`,
     [chatId, userId]
   );
-  return r.rows[0] ?? null;
+  const row = r.rows[0] ?? null;
+  if (!row) return null;
+  const { encrypted_text, ...rest } = row;
+  return { ...rest, text: decryptMessagePreview(encrypted_text) };
 };
 
 const updateChatMeta = async (chatId, patch = {}) => {
