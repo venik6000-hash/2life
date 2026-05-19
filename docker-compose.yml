@@ -39,6 +39,7 @@ services:
       NODE_ENV: production
     volumes:
       - server_data:/app/data
+      - server_uploads:/app/uploads
 
   # ─── React фронтенд (nginx) ───────────────────────────────────────────────────
   frontend:
@@ -56,3 +57,4 @@ services:
 volumes:
   postgres_data:   # данные PostgreSQL — не теряются при перезапуске
   server_data:     # бэкапы сервера
+  server_uploads:  # загруженные файлы чата (голосовые, картинки, документы) — должны переживать пересборку контейнера
