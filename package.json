@@ -17,6 +17,8 @@
     "verify:messenger-settings": "node scripts/verifyMessengerSettings.mjs",
     "verify:messenger-static": "node scripts/verifyMessengerImplementationStatic.mjs",
     "verify:messenger-chat-preview": "node scripts/verifyMessengerChatPreview.mjs",
+    "verify:messenger-chat-list-perf": "node scripts/verifyMessengerChatListPerf.mjs",
+    "verify:messenger-chat-preview-sync": "node scripts/verifyMessengerChatPreviewSync.mjs",
     "verify:messenger-readers": "node scripts/verifyMessengerReaders.mjs",
     "verify:voice-waveform": "node scripts/verifyVoiceWaveform.mjs",
     "verify:messenger-voice": "node scripts/verifyMessengerVoice.mjs",

@@ -2,6 +2,7 @@
 
 Формат: `YYYY-MM-DD | область | изменение`
 
+2026-05-19 | Messenger | Денормализован last_message на chats; sync replay обновляет превью при reconnect (Layer 1).
 2026-04-03 | RBAC | Добавлены роли и права в БД (`roles`, `role_sections`, `role_permissions`) и выдача `permissions` через `/api/auth/me`.
 2026-04-03 | RBAC | Реализована серверная проверка прав для `PATCH /api/clients/:id` и `PUT /api/clients/:id` с atomic-отклонением при запрете.
 2026-04-03 | UI/Permissions | Реализована политика: нет `read` — раздел скрыт; есть `read` и нет `write` — раздел виден в read-only.

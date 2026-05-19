@@ -999,10 +999,32 @@ export function MessengerProvider({ children }) {
         case "new_message":
         case "message_edited":
           if (chatId) refreshMessages.add(chatId);
+          if (chatId && payload.lastMessage) {
+            setChats((prev) => prev.map((chat) => (
+              chat.id === chatId
+                ? {
+                    ...chat,
+                    _lastMsgAt: payload.lastMessage.createdAt,
+                    last_message: payload.lastMessage,
+                  }
+                : chat
+            )));
+          }
           break;
         case "message_deleted_all":
         case "message_deleted_self":
           if (chatId && payload.messageId) removeMessage(chatId, payload.messageId);
+          if (chatId && "lastMessage" in payload) {
+            setChats((prev) => prev.map((chat) => (
+              chat.id === chatId
+                ? {
+                    ...chat,
+                    _lastMsgAt: payload.lastMessage?.createdAt || null,
+                    last_message: payload.lastMessage,
+                  }
+                : chat
+            )));
+          }
           break;
         case "message_pinned":
           if (chatId && payload.messageId) {
@@ -1040,7 +1062,7 @@ export function MessengerProvider({ children }) {
 
     await Promise.all(Array.from(refreshChats).map((chatId) => fetchChatById(chatId)));
     await Promise.all(Array.from(refreshMessages).map((chatId) => loadMessages(chatId)));
-  }, [clearRemovedChatLocalState, fetchChatById, loadMessages, loadPinnedForAll, loadPinnedForMe, patchMessage, removeMessage, user?.id]);
+  }, [clearRemovedChatLocalState, fetchChatById, loadMessages, loadPinnedForAll, loadPinnedForMe, patchMessage, removeMessage, setChats, user?.id]);
 
   const syncMessenger = useCallback(async () => {
     try {

@@ -471,7 +471,8 @@ router.post("/chats/:chatId/messages", requireAuth(), async (req, res) => {
       message,
     };
     if (!saved.__existing) {
-      await createSyncEvent(pool, { chatId, eventType: "new_message", payload: { messageId: saved.id } });
+      const lastMessage = await getLastMessageForChat(chatId, null);
+      await createSyncEvent(pool, { chatId, eventType: "new_message", payload: { messageId: saved.id, lastMessage } });
       await broadcastToChat(chatId, payload, null);
       const [participants, chat] = await Promise.all([getChatParticipants(chatId), getChatById(chatId)]);
       const targetUserIds = participants.map((p) => p.user_id).filter((id) => id !== req.user.id);
@@ -510,7 +511,8 @@ router.patch("/chats/:chatId/messages/:messageId", requireAuth(), async (req, re
 
     const updated = await updateMessageContent(chatId, messageId, encryptText(text), encryptJson(meta));
     if (!updated) return res.status(404).json({ error: "Сообщение не найдено" });
-    await createSyncEvent(pool, { chatId, eventType: "message_edited", payload: { messageId } });
+    const lastMessage = await getLastMessageForChat(chatId, null);
+    await createSyncEvent(pool, { chatId, eventType: "message_edited", payload: { messageId, lastMessage } });
     const message = serializeMessage({
       ...updated,
       sender_username: existing.sender_username,
@@ -555,9 +557,9 @@ router.delete("/chats/:chatId/messages/:messageId", requireAuth(), async (req, r
       }
       const deleted = await deleteMessageForAll(chatId, messageId, req.user.id);
       if (!deleted) return res.status(404).json({ error: "Сообщение не найдено" });
-      await createSyncEvent(pool, { chatId, eventType: "message_deleted_all", payload: { messageId, userId: req.user.id } });
-
       const lastMessage = await getLastMessageForChat(chatId, null);
+      await createSyncEvent(pool, { chatId, eventType: "message_deleted_all", payload: { messageId, userId: req.user.id, lastMessage } });
+
       const payload = { type: "message_deleted_all", chatId, messageId, userId: req.user.id, lastMessage };
       await broadcastToChat(chatId, payload, null);
       sendTo(req.user.id, payload);
@@ -718,13 +720,14 @@ router.post("/chats/:chatId/messages/bulk-delete", requireAuth(), async (req, re
       const deletedIds = await deleteMessagesForAllBulk(chatId, ids, req.user.id);
       for (let i = 0; i < deletedIds.length; i++) {
         const id = deletedIds[i];
-        // Compute lastMessage on the final iteration so we broadcast the freshest preview.
         const lastMessage = (i === deletedIds.length - 1)
           ? await getLastMessageForChat(chatId, null)
           : undefined;
         const payload = { type: "message_deleted_all", chatId, messageId: id, userId: req.user.id };
         if (lastMessage !== undefined) payload.lastMessage = lastMessage;
-        await createSyncEvent(pool, { chatId, eventType: "message_deleted_all", payload: { messageId: id, userId: req.user.id } });
+        const syncPayload = { messageId: id, userId: req.user.id };
+        if (lastMessage !== undefined) syncPayload.lastMessage = lastMessage;
+        await createSyncEvent(pool, { chatId, eventType: "message_deleted_all", payload: syncPayload });
         await broadcastToChat(chatId, payload, null);
         sendTo(req.user.id, payload);
       }
@@ -783,7 +786,8 @@ router.post("/chats/:chatId/messages/bulk-forward", requireAuth(), async (req, r
         sender_display_name: req.user.display_name || "",
       });
       const payload = { type: "new_message", message };
-      await createSyncEvent(pool, { chatId: targetChatId, eventType: "new_message", payload: { messageId: saved.id } });
+      const lastMessage = await getLastMessageForChat(targetChatId, null);
+      await createSyncEvent(pool, { chatId: targetChatId, eventType: "new_message", payload: { messageId: saved.id, lastMessage } });
       await broadcastToChat(targetChatId, payload, null);
       forwarded.push(message.id);
     }

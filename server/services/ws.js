@@ -5,6 +5,7 @@ const {
   pool,
   insertMessage, getMessageById, updateMessageContent, deleteMessageForAll, hideMessageForUser,
   getChatById, getChatParticipants, isParticipant, upsertReceipt, getReceiptsByChat,
+  getLastMessageForChat,
 } = require("./db");
 const { encryptText, encryptJson } = require("./messengerCrypto");
 const { createSyncEvent } = require("./messengerStore");
@@ -202,10 +203,11 @@ const handleMessage = async (ws, user, raw) => {
 
       // Deliver to all participants including sender (for multi-device)
       if (!saved.__existing) {
+        const lastMessage = await getLastMessageForChat(chatId, null);
         await createSyncEvent(pool, {
           chatId,
           eventType: "new_message",
-          payload: { messageId: saved.id },
+          payload: { messageId: saved.id, lastMessage },
         });
         await broadcastToChat(chatId, payload, null);
         const [participants, chat] = await Promise.all([getChatParticipants(chatId), getChatById(chatId)]);
@@ -244,10 +246,11 @@ const handleMessage = async (ws, user, raw) => {
 
     const updated = await updateMessageContent(chatId, messageId, encryptText(text), encryptJson(meta));
     if (!updated) return;
+    const lastMessage = await getLastMessageForChat(chatId, null);
     await createSyncEvent(pool, {
       chatId,
       eventType: "message_edited",
-      payload: { messageId },
+      payload: { messageId, lastMessage },
     });
 
     const payload = {
@@ -285,12 +288,13 @@ const handleMessage = async (ws, user, raw) => {
       if (existing.sender_id !== user.id && user.role !== "admin") return;
       const deleted = await deleteMessageForAll(chatId, messageId, user.id);
       if (!deleted) return;
+      const lastMessage = await getLastMessageForChat(chatId, null);
       await createSyncEvent(pool, {
         chatId,
         eventType: "message_deleted_all",
-        payload: { messageId, userId: user.id },
+        payload: { messageId, userId: user.id, lastMessage },
       });
-      const payload = { type: "message_deleted_all", chatId, messageId, userId: user.id };
+      const payload = { type: "message_deleted_all", chatId, messageId, userId: user.id, lastMessage };
       await broadcastToChat(chatId, payload, null);
     }
   }
