@@ -1583,8 +1583,8 @@ const getReceiptsByChat = async (chatId) => {
 const getReadersForMessage = async (chatId, messageId) => {
   const r = await pool.query(
     `SELECT mr.user_id        AS "userId",
-            u.username        AS name,
-            u.avatar_url      AS avatar,
+            COALESCE(NULLIF(u.display_name, ''), u.username) AS name,
+            NULL::text        AS avatar,
             mr.read_at        AS "readAt"
      FROM message_receipts mr
      JOIN users u ON u.id = mr.user_id

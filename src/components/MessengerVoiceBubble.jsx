@@ -4,7 +4,7 @@ import { useMessenger } from "../context/MessengerContext";
 import { unpackWaveform } from "../utils/voiceWaveform";
 
 const BARS = 32;
-const SPEEDS = [1, 1.5, 2];
+const SPEEDS = [1, 1.2, 1.5, 2];
 
 // NOTE: This messenger stores message `text` as server-side-encrypted-at-rest plaintext on the wire
 // (no client-side E2E). The plan assumed an `decryptForChat(chatId, text)` helper exists, but the
@@ -61,6 +61,11 @@ export default function MessengerVoiceBubble({ chatId, message }) {
   };
 
   useEffect(() => () => { if (audioUrl) URL.revokeObjectURL(audioUrl); }, [audioUrl]);
+
+  useEffect(() => {
+    const el = audioRef.current;
+    if (el) el.playbackRate = SPEEDS[speedIdx];
+  }, [speedIdx, audioUrl]);
 
   const togglePlay = async () => {
     await ensureAudio();
@@ -120,7 +125,12 @@ export default function MessengerVoiceBubble({ chatId, message }) {
       <span style={{ color: $.txM, fontSize: 11, minWidth: 34, textAlign: "right" }}>
         {fmt(meta.duration * (1 - progress))}
       </span>
-      <button onClick={() => setSpeedIdx((i) => (i + 1) % SPEEDS.length)}
+      <button onClick={() => {
+                const next = (speedIdx + 1) % SPEEDS.length;
+                setSpeedIdx(next);
+                const el = audioRef.current;
+                if (el) el.playbackRate = SPEEDS[next];
+              }}
               style={{ fontSize: 11, color: $.txS, background: "none", border: `1px solid ${$.brd}`, borderRadius: 6, padding: "2px 6px", cursor: "pointer", fontFamily: "inherit" }}>
         {SPEEDS[speedIdx]}x
       </button>

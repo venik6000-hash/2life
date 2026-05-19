@@ -919,7 +919,7 @@ router.get("/chats/:chatId/messages/:messageId/readers", requireAuth(), async (r
     }
     if (!(await requireParticipant(req, res, chatId))) return;
 
-    const msg = await getMessageById(messageId);
+    const msg = await getMessageById(chatId, messageId);
     if (!msg || Number(msg.chat_id) !== chatId) {
       return res.status(404).json({ error: "Сообщение не найдено" });
     }

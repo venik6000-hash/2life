@@ -53,6 +53,8 @@ mustContain(desktopList, "width: 300", "desktop chat list must keep enough width
 mustContain(desktopList, "height: \"100%\"", "desktop chat list must fill the shell instead of being clipped");
 mustNotContain(db, "m.text", "messenger DB queries must not read legacy messages.text");
 mustContain(db, "m.encrypted_text", "messenger DB queries must use encrypted_text for stored message content");
+mustNotContain(routes, "getMessageById(messageId)", "readers endpoint must scope message lookup by chat id");
+mustNotContain(db, "u.avatar_url", "readers query must not select a non-existent users.avatar_url column");
 mustContain(shell, "cloneElement(chatList", "settings action must be injected into the chat-list header, not overlaying the list");
 mustContain(shell, "width: \"min(380px, 100%)\"", "desktop settings drawer must fit narrow messenger containers");
 mustContain(settings, "gridTemplateColumns: \"repeat(auto-fit, minmax(104px, 1fr))\"", "settings theme buttons must wrap on narrow screens");
