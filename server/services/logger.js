@@ -1,5 +1,5 @@
 const { sameJson } = require("./storage");
-const { pool } = require("./db");
+const { withTransaction } = require("./db");
 
 const toMapById = (list = []) => {
   const map = new Map();
@@ -99,31 +99,27 @@ const buildActionLogs = (prevClients = [], nextClients = [], req) => {
 
 const appendActivityLog = async (entries = []) => {
   if (!entries.length) return;
-  const pgClient = await pool.connect();
   try {
-    await pgClient.query("BEGIN");
-    for (const e of entries) {
-      await pgClient.query(
-        `INSERT INTO activity_log (ts, action, actor, client_id, client_name, stage_id, stage_title, details_json)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-        [
-          e.ts || new Date().toISOString(),
-          e.action || "",
-          e.actor || "",
-          e.clientId || null,
-          e.clientName || "",
-          e.stageId != null ? String(e.stageId) : null,
-          e.stageTitle || "",
-          e.details ? JSON.stringify(e.details) : null
-        ]
-      );
-    }
-    await pgClient.query("COMMIT");
+    await withTransaction(async (pgClient) => {
+      for (const e of entries) {
+        await pgClient.query(
+          `INSERT INTO activity_log (ts, action, actor, client_id, client_name, stage_id, stage_title, details_json)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+          [
+            e.ts || new Date().toISOString(),
+            e.action || "",
+            e.actor || "",
+            e.clientId || null,
+            e.clientName || "",
+            e.stageId != null ? String(e.stageId) : null,
+            e.stageTitle || "",
+            e.details ? JSON.stringify(e.details) : null
+          ]
+        );
+      }
+    });
   } catch (err) {
-    await pgClient.query("ROLLBACK");
     console.error("appendActivityLog error:", err.message);
-  } finally {
-    pgClient.release();
   }
 };
 

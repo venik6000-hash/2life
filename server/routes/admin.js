@@ -2,7 +2,7 @@ const express = require("express");
 const router = express.Router();
 const { requireAuth } = require("../middleware/auth");
 const { pool, listRoles, insertRole, updateRoleDisplayName, deleteRole,
-        getRoleSections, upsertRoleSection, deleteRoleSections,
+        getRoleSections, upsertRoleSection,
         getRolePermissions, upsertRolePermission,
         listRefData, insertRefData, updateRefData, deleteRefData, listDistinctAnalyticsMarkers,
         insertDoctor, listDoctors, listClientIdsByDoctorName, upsertClientAssignment } = require("../services/db");
@@ -20,9 +20,9 @@ const syncDoctorUserAssignments = async ({ doctorName, userId, assignedBy }) => 
   const safeUserId = toSafeInt(userId);
   if (!safeName || !safeUserId) return;
   const clientIds = await listClientIdsByDoctorName(safeName);
-  for (const clientId of clientIds) {
-    await upsertClientAssignment(safeUserId, clientId, toSafeInt(assignedBy));
-  }
+  await Promise.all(clientIds.map((clientId) =>
+    upsertClientAssignment(safeUserId, clientId, toSafeInt(assignedBy))
+  ));
   const syncResult = await syncUserChatAccessByClientPermissions(pool, safeUserId);
   await notifyUserChatAccessChanges(pool, safeUserId, syncResult);
 };
@@ -33,16 +33,17 @@ const syncDoctorUserAssignments = async ({ doctorName, userId, assignedBy }) => 
 router.get("/admin/roles", requireAuth("admin"), async (req, res) => {
   try {
     const roles = await listRoles();
-    const result = [];
-    for (const r of roles) {
-      const sections = await getRoleSections(r.id);
-      const permissions = await getRolePermissions(r.id);
+    const result = await Promise.all(roles.map(async (r) => {
+      const [sections, permissions] = await Promise.all([
+        getRoleSections(r.id),
+        getRolePermissions(r.id),
+      ]);
       const sectionsObj = {};
       for (const s of sections) sectionsObj[s.section_id] = { read: s.can_read, write: s.can_write };
       const permsObj = {};
       for (const p of permissions) permsObj[p.permission] = p.granted;
-      result.push({ id: r.id, name: r.name, displayName: r.display_name, isSystem: r.is_system, sections: sectionsObj, permissions: permsObj });
-    }
+      return { id: r.id, name: r.name, displayName: r.display_name, isSystem: r.is_system, sections: sectionsObj, permissions: permsObj };
+    }));
     res.json({ ok: true, roles: result });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -59,8 +60,10 @@ router.post("/admin/roles", requireAuth("admin"), async (req, res) => {
     const roleId = res2.id;
     const ALL_SECTIONS = ['overview','questionnaire','nutrition','menu','protocol','injections','analytics','lab','journal','messenger'];
     const ALL_PERMISSIONS = ['delete_client','create_client','import_data'];
-    for (const sec of ALL_SECTIONS) await upsertRoleSection(roleId, sec, true, false);
-    for (const perm of ALL_PERMISSIONS) await upsertRolePermission(roleId, perm, false);
+    await Promise.all([
+      ...ALL_SECTIONS.map((sec) => upsertRoleSection(roleId, sec, true, false)),
+      ...ALL_PERMISSIONS.map((perm) => upsertRolePermission(roleId, perm, false)),
+    ]);
     res.json({ ok: true, id: roleId, name: safeName, displayName });
   } catch (e) {
     if (e.code === '23505') return res.status(409).json({ error: "Роль с таким именем уже существует" });
@@ -96,24 +99,25 @@ router.put("/admin/roles/:id/sections", requireAuth("admin"), async (req, res) =
   try {
     const roleId = Number(req.params.id);
     const { sections, permissions } = req.body || {};
+    const writes = [];
     if (sections && typeof sections === "object") {
       const existingSections = await getRoleSections(roleId);
       const existingById = {};
       for (const row of existingSections) existingById[row.section_id] = row;
-
       for (const [secId, perms] of Object.entries(sections)) {
         if (!perms || typeof perms !== "object") continue;
         const prev = existingById[secId];
         const canRead = perms.read === undefined ? !!prev?.can_read : !!perms.read;
         const canWrite = perms.write === undefined ? !!prev?.can_write : !!perms.write;
-        await upsertRoleSection(roleId, secId, canRead, canWrite);
+        writes.push(upsertRoleSection(roleId, secId, canRead, canWrite));
       }
     }
     if (permissions) {
       for (const [perm, granted] of Object.entries(permissions)) {
-        await upsertRolePermission(roleId, perm, granted ? true : false);
+        writes.push(upsertRolePermission(roleId, perm, granted ? true : false));
       }
     }
+    await Promise.all(writes);
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -141,8 +145,9 @@ router.get("/admin/analytics-markers", requireAuth("admin"), async (req, res) =>
   }
 });
 
-// GET /api/references?type=deficit_preset (read-only, all authenticated users)
-router.get("/references", requireAuth(), async (req, res) => {
+// GET /api/references (any authenticated user) and /api/admin/references
+// (admin-only) share the same body — both routes mount the same handler.
+const readRefHandler = async (req, res) => {
   try {
     const { type } = req.query;
     if (!type) return res.status(400).json({ error: "type обязателен" });
@@ -151,19 +156,9 @@ router.get("/references", requireAuth(), async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
-});
-
-// GET /api/admin/references?type=deficit_preset
-router.get("/admin/references", requireAuth("admin"), async (req, res) => {
-  try {
-    const { type } = req.query;
-    if (!type) return res.status(400).json({ error: "type обязателен" });
-    const items = await listRefData(type);
-    res.json({ ok: true, items });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
+};
+router.get("/references", requireAuth(), readRefHandler);
+router.get("/admin/references", requireAuth("admin"), readRefHandler);
 
 // POST /api/admin/references
 router.post("/admin/references", requireAuth("admin"), async (req, res) => {

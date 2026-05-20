@@ -3,7 +3,6 @@ import Card from "./Card";
 import QaRow from "./QaRow";
 import QCommentBlock from "./QCommentBlock";
 import PercentBar from "./PercentBar";
-import { makeFieldSaver } from "../utils/questionnaireUtils";
 
 export default function QStressCard({ data, path, uS, readOnly = false }) {
   if (!data || typeof data !== "object") return null;

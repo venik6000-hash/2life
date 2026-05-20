@@ -20,13 +20,6 @@ const QUESTIONNAIRE_SECTION_TITLES = new Set([
   "Оценка готовности"
 ]);
 
-const QUESTIONNAIRE_BANDS = [
-  { start: 1, end: 10 },
-  { start: 10, end: 20 },
-  { start: 20, end: 30 },
-  { start: 30, end: 38 }
-];
-
 const qText = (value) => {
   if (value == null) return "";
   return String(value).replace(/\r/g, "").replace(/\u00A0/g, " ").trim();
@@ -250,37 +243,6 @@ const qExtractGoals = (raw) => {
   return goals;
 };
 
-const qExtractTrueLabelsInBand = (row, band) => {
-  const labels = [];
-  for (let i = band.start; i < band.end; i++) {
-    const cell = qCell(row, i);
-    if (!qIsChecked(cell)) continue;
-    let label = "";
-    for (let j = i + 1; j < Math.min(i + 6, band.end); j++) {
-      const next = qCell(row, j);
-      if (qIsChecked(next) || typeof next === "boolean" || qIsBooleanText(next)) continue;
-      const text = qText(next);
-      if (text) {
-        label = text;
-        break;
-      }
-    }
-    if (!label) {
-      for (let j = i - 1; j >= band.start; j--) {
-        const prev = qCell(row, j);
-        if (qIsChecked(prev) || typeof prev === "boolean" || qIsBooleanText(prev)) continue;
-        const text = qText(prev);
-        if (text) {
-          label = text;
-          break;
-        }
-      }
-    }
-    if (label && !labels.includes(label)) labels.push(label);
-  }
-  return labels;
-};
-
 const qEnsureSection = (questionnaire, title) => {
   let section = questionnaire.sections.find(s => s.title === title);
   if (!section) {
@@ -347,11 +309,6 @@ const qLooksLikePromptText = (value) => {
   return /^как\s/.test(t) || /^оцените/.test(t) || /^уровень/.test(t) || /^отход/.test(t) || /^проявлен/.test(t);
 };
 
-const qAssignIfEmpty = (obj, key, value) => {
-  if (value == null || value === "") return;
-  if (obj[key] == null || obj[key] === "") obj[key] = value;
-};
-
 const qAppendUnique = (obj, key, value) => {
   if (value == null || value === "") return;
   const cur = obj[key] ? String(obj[key]).split(/\s*,\s*|\n+/).map(s => s.trim()).filter(Boolean) : [];
@@ -384,7 +341,6 @@ const qSetMaxNumber = (obj, key, value) => {
 const qFmtAnswers = (answers=[]) => answers.filter(Boolean).join(", ");
 const qHasPercent = (value) => /\d+(?:[.,]\d+)?\s*%/.test(qText(value));
 const qSplitCsv = (value) => qText(value).split(/\s*,\s*/).map(s => s.trim()).filter(Boolean);
-const WELLBEING_KEYS = ["energy", "anxiety", "mood", "sleep", "focus"];
 
 const qExtractWellbeingNormalizedFromRaw = (raw) => {
   const out = { energy: {}, anxiety: {}, mood: {}, sleep: {}, focus: {} };

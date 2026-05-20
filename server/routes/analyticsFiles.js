@@ -5,7 +5,7 @@ const fs      = require("fs");
 const { v4: uuidv4 } = require("uuid");
 const { requireAuth, requireSectionRead, requireSectionWrite } = require("../middleware/auth");
 const {
-  pool, hasAllClientsAccess, getAssignmentsByUser,
+  hasAllClientsAccess, getAssignmentsByUser,
   insertAnalyticsFile, getAnalyticsFilesByClient, getAnalyticsFileById,
   updateAnalyticsFile, deleteAnalyticsFile,
 } = require("../services/db");

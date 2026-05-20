@@ -1,31 +1,29 @@
 const webpush = require("web-push");
 const { listPushDevicesForUsers } = require("./messengerStore");
 
-function configureWebPush() {
-  const status = getPushConfigStatus();
-  if (!status.ready) return false;
-  try {
-    webpush.setVapidDetails(status.subject, status.publicKey, status.privateKey);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function getPushConfigStatus() {
+const PUSH_STATUS = (() => {
   const subject = process.env.VAPID_SUBJECT || "";
   const publicKey = process.env.VAPID_PUBLIC_KEY || "";
   const privateKey = process.env.VAPID_PRIVATE_KEY || "";
   return {
-    subject,
-    publicKey,
-    privateKey,
-    hasSubject: !!subject,
-    hasPublicKey: !!publicKey,
-    hasPrivateKey: !!privateKey,
+    subject, publicKey, privateKey,
+    hasSubject: !!subject, hasPublicKey: !!publicKey, hasPrivateKey: !!privateKey,
     ready: !!subject && !!publicKey && !!privateKey,
   };
-}
+})();
+
+const PUSH_READY = (() => {
+  if (!PUSH_STATUS.ready) return false;
+  try {
+    webpush.setVapidDetails(PUSH_STATUS.subject, PUSH_STATUS.publicKey, PUSH_STATUS.privateKey);
+    return true;
+  } catch (err) {
+    console.warn("[push] failed to configure VAPID:", err?.message || err);
+    return false;
+  }
+})();
+
+function getPushConfigStatus() { return PUSH_STATUS; }
 
 function pickPushBody(msgType, chatTitle) {
   if (msgType === "voice") return chatTitle ? `${chatTitle}: 🎤 Голосовое сообщение` : "🎤 Голосовое сообщение";
@@ -35,7 +33,7 @@ function pickPushBody(msgType, chatTitle) {
 }
 
 async function sendPrivateMessagePush({ userIds, chatTitle, url = "/app/messenger", exceptDeviceId = "", msgType = "text" }) {
-  if (!configureWebPush()) return { ok: false, skipped: "missing_vapid" };
+  if (!PUSH_READY) return { ok: false, skipped: "missing_vapid" };
   const uniqueUserIds = Array.from(new Set(Array.from(userIds || []).map(Number).filter((id) => Number.isInteger(id) && id > 0)));
   const devices = await listPushDevicesForUsers(uniqueUserIds);
   const payload = JSON.stringify({

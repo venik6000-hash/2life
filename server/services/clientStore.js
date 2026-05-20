@@ -1,13 +1,12 @@
 const {
-  pool,
-  insertClient, deleteClient, getClientById,
-  insertStage, deleteStagesByClient, getStagesByClient,
-  insertAnalyticsCategory, insertAnalyticsMarker, insertAnalyticsValue,
-  deleteAnalyticsByClient, getCategoriesByClient, getMarkersByCategory, getValuesByMarker,
-  insertJournalEntry, deleteJournalByClient, getJournalByStage,
-  insertProtocolRevision, deleteProtocolByStage, getProtocolByStage,
-  insertNutritionRevision, deleteNutritionByStage, getNutritionByStage,
-  insertDoctor, listDoctors,
+  pool, withTransaction,
+  deleteClient, getClientById,
+  getStagesByClient,
+  getCategoriesByClient, getMarkersByCategory, getValuesByMarker,
+  getJournalByStage,
+  getProtocolByStage,
+  getNutritionByStage,
+  listDoctors,
   getAssignmentsByUser, hasAllClientsAccess
 } = require("./db");
 
@@ -270,84 +269,52 @@ const _writeOneClient = async (client, pgClient) => {
 
 const saveClients = async (clients) => {
   const arr = Array.isArray(clients) ? clients : [];
-  const pgClient = await pool.connect();
-  try {
-    await pgClient.query("BEGIN");
-
+  await withTransaction(async (pgClient) => {
     const existingRows = await pgClient.query("SELECT id FROM clients");
     const existingIds = new Set(existingRows.rows.map(r => r.id));
     const incomingIds = new Set(arr.map(c => c.id));
-
     for (const id of existingIds) {
       if (!incomingIds.has(id)) {
         await pgClient.query("DELETE FROM clients WHERE id = $1", [id]);
       }
     }
-
     for (const client of arr) {
       await _writeOneClient(client, pgClient);
     }
-
-    await pgClient.query("COMMIT");
-  } catch (e) {
-    await pgClient.query("ROLLBACK");
-    throw e;
-  } finally {
-    pgClient.release();
-  }
+  });
 };
 
 const saveOneClient = async (client) => {
-  const pgClient = await pool.connect();
-  try {
-    await pgClient.query("BEGIN");
+  await withTransaction(async (pgClient) => {
     // Lock existing row (if any) to serialize with concurrent PATCHes on same client
     await pgClient.query("SELECT id FROM clients WHERE id = $1 FOR UPDATE", [toStr(client.id)]);
     await _writeOneClient(client, pgClient);
-    await pgClient.query("COMMIT");
-  } catch (e) {
-    await pgClient.query("ROLLBACK");
-    throw e;
-  } finally {
-    pgClient.release();
-  }
+  });
 };
 
 // Atomically patches a client: locks the row, reads fresh state, calls applyFn,
-// then saves the result — all within a single transaction.
-// Returns { prev, next } on success, null if client not found.
+// then saves the result. Returns { prev, next }, or null if client not found
+// or applyFn declines the update.
+const PATCH_ABORT = Symbol("patch_abort");
+
 const patchClientLocked = async (clientId, applyFn) => {
-  const pgClient = await pool.connect();
   try {
-    await pgClient.query("BEGIN");
-    // Acquire row-level lock — any concurrent PATCH or PUT blocks here until we COMMIT
-    const lockResult = await pgClient.query(
-      "SELECT id FROM clients WHERE id = $1 FOR UPDATE",
-      [clientId]
-    );
-    if (!lockResult.rows.length) {
-      await pgClient.query("ROLLBACK");
-      return null;
-    }
-    // Read fresh state now that we hold the lock (no other writer can change it)
-    const prev = await getOneClient(clientId);
-    if (!prev) {
-      await pgClient.query("ROLLBACK");
-      return null;
-    }
-    const next = applyFn(prev);
-    if (!next) {
-      await pgClient.query("ROLLBACK");
-      return null;
-    }
-    await _writeOneClient(next, pgClient);
-    await pgClient.query("COMMIT");
-    return { prev, next };
+    return await withTransaction(async (pgClient) => {
+      const lockResult = await pgClient.query(
+        "SELECT id FROM clients WHERE id = $1 FOR UPDATE",
+        [clientId]
+      );
+      if (!lockResult.rows.length) throw PATCH_ABORT;
+      const prev = await getOneClient(clientId);
+      if (!prev) throw PATCH_ABORT;
+      const next = applyFn(prev);
+      if (!next) throw PATCH_ABORT;
+      await _writeOneClient(next, pgClient);
+      return { prev, next };
+    });
   } catch (e) {
-    await pgClient.query("ROLLBACK");
+    if (e === PATCH_ABORT) return null;
     throw e;
-  } finally {
-    pgClient.release();
   }
 };
 
@@ -364,9 +331,7 @@ const getDoctors = async () => {
 
 const saveDoctors = async (doctors) => {
   const arr = Array.isArray(doctors) ? doctors : [];
-  const pgClient = await pool.connect();
-  try {
-    await pgClient.query("BEGIN");
+  await withTransaction(async (pgClient) => {
     // Upsert each doctor by name (no DELETE-all: two admins saving simultaneously won't wipe each other's changes)
     const names = [];
     for (const d of arr) {
@@ -383,22 +348,12 @@ const saveDoctors = async (doctors) => {
         [name, toStr(d.role), userId]
       );
     }
-    // Remove doctors that are no longer in the list
     if (names.length > 0) {
-      await pgClient.query(
-        "DELETE FROM doctors WHERE NOT (name = ANY($1::text[]))",
-        [names]
-      );
+      await pgClient.query("DELETE FROM doctors WHERE NOT (name = ANY($1::text[]))", [names]);
     } else {
       await pgClient.query("DELETE FROM doctors");
     }
-    await pgClient.query("COMMIT");
-  } catch (e) {
-    await pgClient.query("ROLLBACK");
-    throw e;
-  } finally {
-    pgClient.release();
-  }
+  });
 };
 
 // ─── Analytics (concurrent-safe upsert) ─────────────────────────────────────
@@ -413,10 +368,7 @@ const saveDoctors = async (doctors) => {
 const saveAnalyticsForClient = async (clientId, categories) => {
   if (!Array.isArray(categories)) return;
 
-  const pgClient = await pool.connect();
-  try {
-    await pgClient.query("BEGIN");
-
+  await withTransaction(async (pgClient) => {
     const incomingCatNames = [];
 
     for (let catIdx = 0; catIdx < categories.length; catIdx++) {
@@ -503,14 +455,7 @@ const saveAnalyticsForClient = async (clientId, categories) => {
     } else {
       await pgClient.query("DELETE FROM analytics_categories WHERE client_id = $1", [clientId]);
     }
-
-    await pgClient.query("COMMIT");
-  } catch (e) {
-    await pgClient.query("ROLLBACK");
-    throw e;
-  } finally {
-    pgClient.release();
-  }
+  });
 };
 
 module.exports = { getClients, getOneClient, getClientsForUser, saveClients, saveOneClient, patchClientLocked, deleteOneClient, getDoctors, saveDoctors, saveAnalyticsForClient };

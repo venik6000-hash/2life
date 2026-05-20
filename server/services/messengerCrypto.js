@@ -4,18 +4,23 @@ const ALGORITHM = "aes-256-gcm";
 const IV_BYTES = 12;
 const TAG_BYTES = 16;
 
+// Lazy + cached: avoid per-call sha256 (chat-list decrypts dozens of previews
+// per request), but don't throw at require-time so utility scripts that import
+// other db helpers can load without the env var set.
+let _cachedKey = null;
 function getKey() {
+  if (_cachedKey) return _cachedKey;
   const secret = process.env.MESSENGER_ENCRYPTION_SECRET || "";
   if (secret.length < 32) {
     throw new Error("MESSENGER_ENCRYPTION_SECRET must be at least 32 characters");
   }
-  return crypto.createHash("sha256").update(secret).digest();
+  _cachedKey = crypto.createHash("sha256").update(secret).digest();
+  return _cachedKey;
 }
 
 function encryptBuffer(buffer) {
-  const key = getKey();
   const iv = crypto.randomBytes(IV_BYTES);
-  const cipher = crypto.createCipheriv(ALGORITHM, key, iv, { authTagLength: TAG_BYTES });
+  const cipher = crypto.createCipheriv(ALGORITHM, getKey(), iv, { authTagLength: TAG_BYTES });
   const encrypted = Buffer.concat([cipher.update(Buffer.from(buffer)), cipher.final()]);
   const tag = cipher.getAuthTag();
   return Buffer.concat([iv, tag, encrypted]).toString("base64");

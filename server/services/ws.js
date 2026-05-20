@@ -246,11 +246,16 @@ const handleMessage = async (ws, user, raw) => {
 
     const updated = await updateMessageContent(chatId, messageId, encryptText(text), encryptJson(meta));
     if (!updated) return;
-    const lastMessage = await getLastMessageForChat(chatId, null);
+    const chatRow = await getChatById(chatId);
+    const lastMessage = chatRow?.last_message_id === messageId
+      ? await getLastMessageForChat(chatId, null)
+      : undefined;
+    const syncPayload = { messageId };
+    if (lastMessage !== undefined) syncPayload.lastMessage = lastMessage;
     await createSyncEvent(pool, {
       chatId,
       eventType: "message_edited",
-      payload: { messageId, lastMessage },
+      payload: syncPayload,
     });
 
     const payload = {

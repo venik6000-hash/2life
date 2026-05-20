@@ -3,17 +3,18 @@ const crypto = require("crypto");
 const PBKDF2_ITERATIONS = 600000;
 const GCM_TAG_BYTES = 16;
 
-const getRecoverySecret = () => {
+// Cached at module load — recovery secret cannot rotate at runtime, and
+// pbkdf2 is on the cold path so the one-time cost is fine here.
+const RECOVERY_KEY = (() => {
   const secret = process.env.MESSENGER_RECOVERY_SECRET || process.env.JWT_SECRET || "";
-  if (!secret) {
-    throw new Error("Recovery secret is not configured");
-  }
-  return secret;
-};
+  if (!secret) return null;
+  return crypto.createHash("sha256").update(String(secret)).digest();
+})();
 
-const getRecoveryKey = () => (
-  crypto.createHash("sha256").update(String(getRecoverySecret())).digest()
-);
+const getRecoveryKey = () => {
+  if (!RECOVERY_KEY) throw new Error("Recovery secret is not configured");
+  return RECOVERY_KEY;
+};
 
 const encryptAesGcmToB64 = (plaintextUtf8, key, iv) => {
   const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);

@@ -11,7 +11,7 @@ if (!TOKEN) {
   process.exit(1);
 }
 
-const samples = 5;
+const samples = 20;
 const timings = [];
 
 for (let i = 0; i < samples; i++) {
@@ -27,8 +27,8 @@ for (let i = 0; i < samples; i++) {
 }
 
 timings.sort((a, b) => a - b);
-const p50 = timings[Math.floor(samples / 2)];
-const p95 = timings[Math.floor(samples * 0.95)] ?? timings[samples - 1];
+const p50 = timings[Math.floor(samples * 0.5)];
+const p95 = timings[Math.min(samples - 1, Math.floor(samples * 0.95))];
 
 console.log(`chat list: p50=${p50.toFixed(1)}ms p95=${p95.toFixed(1)}ms (n=${samples})`);
 assert.ok(p95 < MAX_MS, `p95 ${p95.toFixed(1)}ms exceeds threshold ${MAX_MS}ms`);

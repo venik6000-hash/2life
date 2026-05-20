@@ -168,7 +168,10 @@ export function MessengerProvider({ children }) {
       })
       .catch(() => {});
     return () => { cancelled = true; };
-  }, [cacheScope, cursorKey, user]);
+    // user object identity flips on display-name updates, but we only read id/username/display_name
+    // for optimistic stubs — stale name in pending preview is benign and not worth a queue reload.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cacheScope, cursorKey, user?.id]);
 
   useEffect(() => {
     if (!token || !user) {
@@ -995,36 +998,23 @@ export function MessengerProvider({ children }) {
     for (const event of events) {
       const payload = eventPayload(event);
       const chatId = Number(event?.chat_id || payload.chatId || 0);
+      const applyLastMessage = (lastMessage) => {
+        setChats((prev) => prev.map((chat) => (
+          chat.id === chatId
+            ? { ...chat, _lastMsgAt: lastMessage?.createdAt || null, last_message: lastMessage }
+            : chat
+        )));
+      };
       switch (event?.event_type) {
         case "new_message":
         case "message_edited":
           if (chatId) refreshMessages.add(chatId);
-          if (chatId && payload.lastMessage) {
-            setChats((prev) => prev.map((chat) => (
-              chat.id === chatId
-                ? {
-                    ...chat,
-                    _lastMsgAt: payload.lastMessage.createdAt,
-                    last_message: payload.lastMessage,
-                  }
-                : chat
-            )));
-          }
+          if (chatId && payload.lastMessage) applyLastMessage(payload.lastMessage);
           break;
         case "message_deleted_all":
         case "message_deleted_self":
           if (chatId && payload.messageId) removeMessage(chatId, payload.messageId);
-          if (chatId && "lastMessage" in payload) {
-            setChats((prev) => prev.map((chat) => (
-              chat.id === chatId
-                ? {
-                    ...chat,
-                    _lastMsgAt: payload.lastMessage?.createdAt || null,
-                    last_message: payload.lastMessage,
-                  }
-                : chat
-            )));
-          }
+          if (chatId && "lastMessage" in payload) applyLastMessage(payload.lastMessage);
           break;
         case "message_pinned":
           if (chatId && payload.messageId) {
@@ -1236,8 +1226,8 @@ export function MessengerProvider({ children }) {
 
   useEffect(() => {
     if (!ready) return;
-    syncMessenger();
-  }, [ready]); // eslint-disable-line react-hooks/exhaustive-deps
+    syncMessengerRef.current?.();
+  }, [ready]);
 
   const contextValue = useMemo(() => ({
     ready,

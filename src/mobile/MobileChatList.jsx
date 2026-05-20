@@ -2,7 +2,7 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import { useAuth } from "../context/AuthContext";
 import { useTheme } from "../context/ThemeContext";
 import { useMessenger } from "../context/MessengerContext";
-import { fmtTime, isImageLike, parseBundleFiles } from "../utils/messengerUiUtils";
+import { isImageLike, parseBundleFiles } from "../utils/messengerUiUtils";
 import { getUnreadCount } from "../utils/messengerUnread";
 import { formatChatListTime } from "../utils/chatTimeFormat";
 

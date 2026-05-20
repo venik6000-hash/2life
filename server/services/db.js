@@ -441,15 +441,12 @@ const initSchema = async () => {
     try { await pool.query("ALTER TABLE chats ADD COLUMN icon TEXT NOT NULL DEFAULT ''"); } catch (_) {}
   }
   try { await pool.query("CREATE INDEX IF NOT EXISTS idx_chats_internal ON chats(is_internal)"); } catch (_) {}
-  // Denormalized last message snapshot on chats (Layer 1).
-  // Maintained transactionally by applyChatLastMessage in insert/edit/delete/hide paths.
   try { await pool.query("ALTER TABLE chats ADD COLUMN last_message_id INTEGER"); } catch (_) {}
   try { await pool.query("ALTER TABLE chats ADD COLUMN last_message_at TIMESTAMPTZ"); } catch (_) {}
   try { await pool.query("ALTER TABLE chats ADD COLUMN last_message_sender_id INTEGER"); } catch (_) {}
   try { await pool.query("ALTER TABLE chats ADD COLUMN last_message_type TEXT"); } catch (_) {}
   try { await pool.query("ALTER TABLE chats ADD COLUMN last_message_encrypted_text TEXT"); } catch (_) {}
   try { await pool.query("CREATE INDEX IF NOT EXISTS idx_chats_last_message_at ON chats(last_message_at DESC NULLS LAST)"); } catch (_) {}
-  // One-time backfill for last_message_* (idempotent: only fills NULL rows).
   try {
     await pool.query(`
       UPDATE chats c
@@ -677,11 +674,6 @@ const getClientById = async (id) => {
   return r.rows[0] ?? null;
 };
 
-const listClientIds = async () => {
-  const r = await pool.query("SELECT id FROM clients");
-  return r.rows;
-};
-
 // ─── Stages ─────────────────────────────────────────────────────────────────
 
 const insertStage = async (clientId, stageNum, title, subtitle, doctor, doctorRole, dateStart, dateEnd, status, email, phone, city, height, weightCurrent, weightGoal, bmi, waist, tasksJson, syndromesJson, diagnosesJson, deficitsJson, autoDeficitSelectionJson, labOrderSelectedJson, labOrderGroupOrderJson, nutritionJson, injectionsJson, injectionScheduleJson, questionnaireJson) => {
@@ -699,11 +691,6 @@ const deleteStagesByClient = async (clientId) => {
 const getStagesByClient = async (clientId) => {
   const r = await pool.query("SELECT * FROM stages WHERE client_id = $1 ORDER BY stage_num", [clientId]);
   return r.rows;
-};
-
-const getStageDbId = async (clientId, stageNum) => {
-  const r = await pool.query("SELECT id FROM stages WHERE client_id = $1 AND stage_num = $2", [clientId, stageNum]);
-  return r.rows[0] ?? null;
 };
 
 const listClientIdsByDoctorName = async (doctorName) => {
@@ -886,10 +873,6 @@ const upsertRoleSection = async (roleId, sectionId, canRead, canWrite) => {
   );
 };
 
-const deleteRoleSections = async (roleId) => {
-  await pool.query("DELETE FROM role_sections WHERE role_id = $1", [roleId]);
-};
-
 // ─── Role permissions ───────────────────────────────────────────────────────
 
 const getRolePermissions = async (roleId) => {
@@ -968,10 +951,6 @@ const getAssignmentsByClient = async (clientId) => {
   return r.rows;
 };
 
-const deleteAssignmentsByClient = async (clientId) => {
-  await pool.query("DELETE FROM client_assignments WHERE client_id = $1", [clientId]);
-};
-
 // ─── Messenger: public keys ──────────────────────────────────────────────────
 
 const upsertPublicKey = async (
@@ -1039,9 +1018,8 @@ const getChatById = async (chatId) => {
 };
 
 const getChatsByUser = async (userId) => {
-  // Primary read uses denormalized columns. If user has hidden the chat's
-  // last_message via message_hidden_for_users, lm.* comes back NULL and we
-  // do a per-chat fallback below.
+  // If the user hid the chat's last_message (message_hidden_for_users),
+  // lm.* comes back NULL and we do a per-chat fallback below.
   const r = await pool.query(
     `SELECT c.id, c.client_id, c.title, c.icon, c.created_at, c.updated_at, c.is_internal,
             cp.role_in_chat, cp.encrypted_chat_key, cp.is_pinned,
@@ -1305,8 +1283,10 @@ const getParticipantRole = async (chatId, userId) => {
 
 // ─── Messenger: messages ─────────────────────────────────────────────────────
 
-// Recomputes the latest visible-to-everyone message for the chat
-// and writes it to chats.last_message_*. Pass `client` to participate in caller's tx.
+// Atomically syncs chats.last_message_* with the latest visible-to-everyone
+// message (or NULL when the chat is empty). LEFT JOIN LATERAL handles both
+// cases in one statement — empty subquery yields NULLs that null out the row.
+// Pass `client` to participate in caller's tx.
 const applyChatLastMessage = async (executor, chatId) => {
   await executor.query(
     `UPDATE chats c
@@ -1315,7 +1295,8 @@ const applyChatLastMessage = async (executor, chatId) => {
          last_message_sender_id   = lm.sender_id,
          last_message_type        = lm.msg_type,
          last_message_encrypted_text = lm.encrypted_text
-     FROM (
+     FROM (SELECT 1) _
+     LEFT JOIN LATERAL (
        SELECT id, created_at, sender_id, msg_type, encrypted_text
        FROM messages
        WHERE chat_id = $1
@@ -1323,34 +1304,31 @@ const applyChatLastMessage = async (executor, chatId) => {
          AND deleted_for_all = false
        ORDER BY id DESC
        LIMIT 1
-     ) lm
+     ) lm ON true
      WHERE c.id = $1`,
-    [chatId]
-  );
-  await executor.query(
-    `UPDATE chats
-     SET last_message_id = NULL,
-         last_message_at = NULL,
-         last_message_sender_id = NULL,
-         last_message_type = NULL,
-         last_message_encrypted_text = NULL
-     WHERE id = $1
-       AND NOT EXISTS (
-         SELECT 1 FROM messages
-         WHERE chat_id = $1
-           AND msg_type <> 'system'
-           AND deleted_for_all = false
-       )`,
     [chatId]
   );
 };
 
+const withTransaction = async (fn) => {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const result = await fn(client);
+    await client.query("COMMIT");
+    return result;
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+};
+
 const insertMessage = async (chatId, senderId, encryptedText, encryptedMeta, msgType, fileId, clientMessageId = "", replyToMessageId = null) => {
   const safeClientMessageId = String(clientMessageId || "");
-  if (safeClientMessageId) {
-    const client = await pool.connect();
-    try {
-      await client.query("BEGIN");
+  return withTransaction(async (client) => {
+    if (safeClientMessageId) {
       await client.query(
         "SELECT pg_advisory_xact_lock(hashtext($1)::bigint)",
         [`message:${chatId}:${senderId}:${safeClientMessageId}`]
@@ -1363,39 +1341,19 @@ const insertMessage = async (chatId, senderId, encryptedText, encryptedMeta, msg
          LIMIT 1`,
         [chatId, senderId, safeClientMessageId]
       );
-      if (existing.rows[0]) {
-        await client.query("COMMIT");
-        return { ...existing.rows[0], __existing: true };
-      }
-      const inserted = await client.query(
-        `INSERT INTO messages (chat_id, sender_id, encrypted_text, encrypted_meta, msg_type, file_id, client_message_id, reply_to_message_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-         RETURNING *, encrypted_text AS ciphertext, encrypted_meta AS iv`,
-        [chatId, senderId, encryptedText, encryptedMeta, msgType, fileId || null, safeClientMessageId, replyToMessageId || null]
-      );
-      if (msgType !== "system") {
-        await applyChatLastMessage(client, chatId);
-      }
-      await client.query("COMMIT");
-      return { ...inserted.rows[0], __existing: false };
-    } catch (error) {
-      await client.query("ROLLBACK").catch(() => {});
-      throw error;
-    } finally {
-      client.release();
+      if (existing.rows[0]) return { ...existing.rows[0], __existing: true };
     }
-  }
-
-  const r = await pool.query(
-    `INSERT INTO messages (chat_id, sender_id, encrypted_text, encrypted_meta, msg_type, file_id, client_message_id, reply_to_message_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-     RETURNING *, encrypted_text AS ciphertext, encrypted_meta AS iv`,
-    [chatId, senderId, encryptedText, encryptedMeta, msgType, fileId || null, safeClientMessageId, replyToMessageId || null]
-  );
-  if (msgType !== "system") {
-    await applyChatLastMessage(pool, chatId);
-  }
-  return { ...r.rows[0], __existing: false };
+    const inserted = await client.query(
+      `INSERT INTO messages (chat_id, sender_id, encrypted_text, encrypted_meta, msg_type, file_id, client_message_id, reply_to_message_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       RETURNING *, encrypted_text AS ciphertext, encrypted_meta AS iv`,
+      [chatId, senderId, encryptedText, encryptedMeta, msgType, fileId || null, safeClientMessageId, replyToMessageId || null]
+    );
+    if (msgType !== "system") {
+      await applyChatLastMessage(client, chatId);
+    }
+    return { ...inserted.rows[0], __existing: false };
+  });
 };
 
 const getMessageById = async (chatId, messageId) => {
@@ -1412,39 +1370,43 @@ const getMessageById = async (chatId, messageId) => {
 };
 
 const updateMessageContent = async (chatId, messageId, encryptedText, encryptedMeta = "") => {
-  const r = await pool.query(
-    `UPDATE messages
-     SET encrypted_text = $3, encrypted_meta = $4, edited_at = NOW()
-     WHERE chat_id = $1 AND id = $2 AND deleted_for_all = false
-     RETURNING *, encrypted_text AS ciphertext, encrypted_meta AS iv`,
-    [chatId, messageId, encryptedText, encryptedMeta]
-  );
-  const row = r.rows[0] ?? null;
-  if (row) {
-    await pool.query(
-      `UPDATE chats SET last_message_encrypted_text = $2
-       WHERE id = $1 AND last_message_id = $3`,
-      [chatId, encryptedText, messageId]
+  return withTransaction(async (client) => {
+    const r = await client.query(
+      `UPDATE messages
+       SET encrypted_text = $3, encrypted_meta = $4, edited_at = NOW()
+       WHERE chat_id = $1 AND id = $2 AND deleted_for_all = false
+       RETURNING *, encrypted_text AS ciphertext, encrypted_meta AS iv`,
+      [chatId, messageId, encryptedText, encryptedMeta]
     );
-  }
-  return row;
+    const row = r.rows[0] ?? null;
+    if (row) {
+      await client.query(
+        `UPDATE chats SET last_message_encrypted_text = $2
+         WHERE id = $1 AND last_message_id = $3`,
+        [chatId, encryptedText, messageId]
+      );
+    }
+    return row;
+  });
 };
 
 const deleteMessageForAll = async (chatId, messageId, deletedBy) => {
-  const r = await pool.query(
-    `UPDATE messages
-     SET deleted_for_all = true,
-         deleted_for_all_at = NOW(),
-         deleted_by = $3
-     WHERE chat_id = $1 AND id = $2 AND deleted_for_all = false
-     RETURNING *`,
-    [chatId, messageId, deletedBy]
-  );
-  const row = r.rows[0] ?? null;
-  if (row) {
-    await applyChatLastMessage(pool, chatId);
-  }
-  return row;
+  return withTransaction(async (client) => {
+    const r = await client.query(
+      `UPDATE messages
+       SET deleted_for_all = true,
+           deleted_for_all_at = NOW(),
+           deleted_by = $3
+       WHERE chat_id = $1 AND id = $2 AND deleted_for_all = false
+       RETURNING *`,
+      [chatId, messageId, deletedBy]
+    );
+    const row = r.rows[0] ?? null;
+    if (row) {
+      await applyChatLastMessage(client, chatId);
+    }
+    return row;
+  });
 };
 
 const hideMessageForUser = async (messageId, userId) => {
@@ -1466,20 +1428,22 @@ const getMessagesByIds = async (chatId, ids) => {
 };
 
 const deleteMessagesForAllBulk = async (chatId, ids, deletedBy) => {
-  const r = await pool.query(
-    `UPDATE messages
-       SET deleted_for_all = true,
-           deleted_for_all_at = NOW(),
-           deleted_by = $3
-     WHERE chat_id = $1 AND id = ANY($2::int[]) AND deleted_for_all = false
-     RETURNING id`,
-    [chatId, ids, deletedBy]
-  );
-  const deletedIds = r.rows.map((row) => row.id);
-  if (deletedIds.length > 0) {
-    await applyChatLastMessage(pool, chatId);
-  }
-  return deletedIds;
+  return withTransaction(async (client) => {
+    const r = await client.query(
+      `UPDATE messages
+         SET deleted_for_all = true,
+             deleted_for_all_at = NOW(),
+             deleted_by = $3
+       WHERE chat_id = $1 AND id = ANY($2::int[]) AND deleted_for_all = false
+       RETURNING id`,
+      [chatId, ids, deletedBy]
+    );
+    const deletedIds = r.rows.map((row) => row.id);
+    if (deletedIds.length > 0) {
+      await applyChatLastMessage(client, chatId);
+    }
+    return deletedIds;
+  });
 };
 
 const hideMessagesForUserBulk = async (chatId, userId, ids) => {
@@ -1809,14 +1773,14 @@ const getChatFile = async (fileId) => {
 };
 
 module.exports = {
-  pool,
+  pool, withTransaction,
   initSchema,
   // users
   getUser, listUsers, createUser, updatePass, setActive, setAllClientsAccess, hasAllClientsAccess,
   // clients
-  insertClient, deleteClient, getClientById, listClientIds,
+  insertClient, deleteClient, getClientById,
   // stages
-  insertStage, deleteStagesByClient, getStagesByClient, getStageDbId, listClientIdsByDoctorName,
+  insertStage, deleteStagesByClient, getStagesByClient, listClientIdsByDoctorName,
   // analytics
   insertAnalyticsCategory, insertAnalyticsMarker, insertAnalyticsValue,
   deleteAnalyticsByClient, getCategoriesByClient, getMarkersByCategory, getValuesByMarker,
@@ -1831,14 +1795,14 @@ module.exports = {
   // roles
   listRoles, getRoleByName, insertRole, updateRoleDisplayName, deleteRole,
   // role sections
-  getRoleSections, upsertRoleSection, deleteRoleSections,
+  getRoleSections, upsertRoleSection,
   // role permissions
   getRolePermissions, upsertRolePermission,
   // reference data
   listRefData, insertRefData, updateRefData, deleteRefData, listDistinctAnalyticsMarkers,
   // client assignments
   upsertClientAssignment, deleteClientAssignment,
-  getAssignmentsByUser, getAssignmentsByClient, deleteAssignmentsByClient,
+  getAssignmentsByUser, getAssignmentsByClient,
   // messenger: public keys
   upsertPublicKey, getPublicKey,
   // messenger: chats
@@ -1847,7 +1811,6 @@ module.exports = {
   addChatParticipant, removeChatParticipant, getChatParticipants, getChatParticipantsForChats, isParticipant, getParticipantRole,
   // messenger: messages
   insertMessage, getMessageById, updateMessageContent, deleteMessageForAll, hideMessageForUser, getMessages,
-  applyChatLastMessage,
   getMessagesByIds, deleteMessagesForAllBulk, hideMessagesForUserBulk,
   PIN_FOR_ALL_LIMIT, PIN_FOR_ME_LIMIT,
   countPinnedForAll, pinMessageForAll, unpinMessageForAll, listPinnedForAll,

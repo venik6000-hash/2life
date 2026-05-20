@@ -29,7 +29,4 @@ const broadcast = (event, data, excludeRes = null) => {
   }
 };
 
-// Количество активных соединений (для отладки)
-const connectionCount = () => connections.size;
-
-module.exports = { addConnection, removeConnection, broadcast, connectionCount };
+module.exports = { addConnection, removeConnection, broadcast };

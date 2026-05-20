@@ -1,6 +1,6 @@
 const path = require("path");
 const fs = require("fs");
-const { pool } = require("./db");
+const { withTransaction } = require("./db");
 
 const MESSENGER_TABLES = Object.freeze([
   "message_hidden_for_users",
@@ -136,20 +136,12 @@ async function resetMessengerData({ removeFiles = false } = {}) {
     assertNoSymlinksUnder(getChatUploadsDir());
   }
 
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
+  await withTransaction(async (client) => {
     const existingTables = await getExistingMessengerTables(client);
     if (existingTables.length > 0) {
       await client.query(`TRUNCATE TABLE ${existingTables.map(quoteIdentifier).join(", ")} RESTART IDENTITY`);
     }
-    await client.query("COMMIT");
-  } catch (error) {
-    await client.query("ROLLBACK").catch(() => {});
-    throw error;
-  } finally {
-    client.release();
-  }
+  });
 
   if (removeFiles) {
     const chatDir = getChatUploadsDir();
