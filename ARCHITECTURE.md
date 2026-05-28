@@ -74,7 +74,8 @@ src/main.jsx
 
 ### Хранилище: PostgreSQL
 - `services/db.js` — `pg.Pool`, DDL-схема, все SQL-запросы.
-- Таблицы: `users`, `doctors`, `clients`, `stages`, `analytics_categories`, `analytics_markers`, `analytics_values`, `analytics_files`, `journal_entries`, `protocol_revisions`, `nutrition_revisions`, `activity_log`, `roles`, `role_sections`, `role_permissions`, `reference_data`, `client_assignments`, `dishes`, `client_weekly_menus`, `client_menu_items`, `user_public_keys`, `chats`, `chat_participants`, `messages`, `message_hidden_for_users`, `message_receipts`, `chat_files`.
+- Таблицы: `users`, `doctors`, `clients`, `stages`, `analytics_categories`, `analytics_markers`, `analytics_values`, `analytics_files`, `journal_entries` (legacy, см. ниже), `journal_items`, `journal_comments`, `journal_checklist_template_items`, `journal_notification_deliveries`, `protocol_revisions`, `nutrition_revisions`, `activity_log`, `roles`, `role_sections`, `role_permissions`, `reference_data`, `client_assignments`, `dishes`, `client_weekly_menus`, `client_menu_items`, `user_public_keys`, `chats`, `chat_participants`, `messages`, `message_hidden_for_users`, `message_receipts`, `chat_files`.
+- Журнал: `journal_entries` — legacy таблица заметок по этапу; новый CRM-журнал хранится в `journal_items` (задачи/события/заметки, soft delete), `journal_comments` (треды), `journal_checklist_template_items` (admin-шаблон чек-листа стадии), `journal_notification_deliveries` (дедупликация push). Скрипт `server/scripts/verifyJournalBackfill.js` мигрирует legacy записи в `journal_items` как заметки (идемпотентно).
 - `DATABASE_URL` (env) или `postgresql://postgres:postgres@localhost:5432/2life` по умолчанию.
 
 ### Роуты (`routes/`)
@@ -89,6 +90,7 @@ src/main.jsx
 | `messenger.js`      | `/api/chats`, `/api/messenger`, `/api/users`                            | Чаты (клиентские и внутренние), участники, сообщения, файлы, sync, устройства и push-подписки |
 | `menu.js`           | `/api/menu`, `/api/clients/:clientId/menu`                             | База блюд и недельные меню клиентов                                  |
 | `analyticsFiles.js` | `/api/clients/:clientId/analytics-files`                               | Загрузка, метаданные и скачивание файлов анализов (PDF/изображения)  |
+| `journal.js`        | `/api/clients/:clientId/journal*`, `/api/journal/badges`, `/api/admin/journal/checklist-template*` | CRM-журнал: список/CRUD задач, событий, заметок и комментариев; badge-счётчики; admin-шаблон чек-листа; инициализация чек-листа этапа |
 
 ### Сервисы (`services/`)
 
@@ -108,8 +110,11 @@ src/main.jsx
 | `tokenBlacklist.js`  | In-memory JWT blacklist для серверного logout; записи авто-очищаются по TTL токена |
 | `chatAccessSync.js`  | Синхронизация состава `chat_participants` по правам доступа к клиентам |
 | `messengerCrypto.js` | Серверное AES-256-GCM шифрование/дешифрование сообщений и файлов мессенджера |
-| `messengerPush.js`   | Web Push отправка приватных уведомлений без текста сообщения |
-| `messengerReset.js`  | Guarded reset только таблиц мессенджера и `server/uploads/chat` |
+| `messengerPush.js`   | Web Push отправка: `sendPushToUsers` (общий путь доставки) + `sendPrivateMessagePush` для сообщений мессенджера. Используется и журналом, и мессенджером. |
+| `messengerReset.js`  | Guarded reset только таблиц мессенджера и `server/uploads/chat`. Журнальные таблицы защищены префиксом `journal` в allowlist. |
+| `journalStore.js`    | CRM-журнал: CRUD `journal_items`/`journal_comments`, badge-счётчики, шаблон чек-листа, дедупликация push, идемпотентный backfill legacy `journal_entries`. Переводит между stage_num (frontend) и stages.id (DB) внутренне. |
+| `journalNotifications.js` | Планировщик уведомлений журнала: дневной дайджест ~9:00 и точные напоминания при наступлении due_date+due_time, через `sendPushToUsers`. |
+| `clientAccess.js`    | Разделяемый `canAccessClient(user, clientId)` для роутов клиентов и журнала. |
 
 ### Middleware (`middleware/`)
 - `auth.js`:
@@ -254,7 +259,7 @@ src/main.jsx
 | `injections`    | `GET /api/clients`, `GET /api/clients/:clientId` | `PATCH /api/clients/:clientId` |
 | `analytics`     | `GET /api/clients`, `GET /api/clients/:clientId`, `GET /api/clients/:clientId/analytics-files` | `PUT /api/clients/:clientId/analytics`, `POST /api/import-analytics`, `POST/PATCH/DELETE /api/clients/:clientId/analytics-files/*`, `GET /api/clients/:clientId/analytics-files/:id/download` |
 | `lab`           | `GET /api/clients`, `GET /api/clients/:clientId` | `PATCH /api/clients/:clientId` |
-| `journal`       | `GET /api/clients`, `GET /api/clients/:clientId` | `PATCH /api/clients/:clientId` |
+| `journal`       | `GET /api/clients/:clientId/journal`, `GET /api/journal/badges`, `GET /api/admin/journal/checklist-template` (admin) | `POST /api/clients/:clientId/journal/items`, `PATCH/DELETE /api/clients/:clientId/journal/items/:itemId`, `POST /api/clients/:clientId/journal/items/:itemId/comments`, `POST /api/clients/:clientId/journal/stages/:stageId/checklist/initialize`, `POST/PATCH/DELETE /api/admin/journal/checklist-template/*` (admin) |
 | `messenger`     | `GET /api/chats`, `GET /api/chats/:id/messages`, `GET /api/chats/:id/files/:fileId`, `GET /api/messenger/sync` | `POST /api/chats`, `POST /api/chats/:id/messages`, `POST /api/chats/:id/files`, `PATCH/DELETE /api/chats/:id/messages/:messageId`, `POST /api/chats/:id/read`, `POST/DELETE /api/chats/:id/participants/*`, `POST/DELETE /api/messenger/devices/*` |
 
 ### 12.2 Field mapping для `PATCH /api/clients/:clientId`
@@ -271,7 +276,7 @@ src/main.jsx
 - `protocol`: `stages[*].protocolRevisions`
 - `injections`: `stages[*].injectionSchedule`
 - `lab`: `stages[*].labOrderSelected`, `stages[*].labOrderGroupOrder`
-- `journal`: `stages[*].journal`
+- ~~`journal`: `stages[*].journal`~~ — выведено из общего PATCH-гейта; CRM-журнал использует выделенные роуты `/api/clients/:clientId/journal/*` (см. 12.1). Legacy `stages[*].journal` в payload игнорируется новым кодом, мигрируется через `verifyJournalBackfill.js`.
 
 Примечание: `analytics` отделён в специализированный endpoint `PUT /api/clients/:clientId/analytics`, поэтому не должен проходить через общий PATCH-гейт итерации 4.
 
@@ -357,3 +362,42 @@ Messenger uses server-side AES-256-GCM encryption. Old E2E key bundles are no lo
 - Если отправлено >10 фото, формируются несколько сообщений-бандлов (пример: 14 = 10 + 4).
 - Фото-бандлы отображаются как адаптивная сетка превью (без имён фото), файлы — списком с именами.
 - Overlay просмотр фото: открытие без скачивания, навигация клавишами `ArrowLeft/ArrowRight` и кнопками.
+
+## 15. Journal CRM Snapshot (2026-05-28)
+
+### 15.1 Доменная модель
+
+- `journal_items` — единая таблица задач/событий/заметок: `type IN ('task','event','note')`, `status IN ('open','in_progress','waiting_client','done','cancelled')`. Note всегда `status='done'`. Soft delete (`deleted_at`, `deleted_by`, `delete_reason`). Поля `due_date DATE` + `due_time TIME`, `assignee_user_id` или `is_team_task`, `priority`, JSON `metadata_json`, FK на `clients(id) CASCADE`, `stages(id) SET NULL`, `journal_checklist_template_items(id) SET NULL`.
+- `journal_comments` — треды комментариев к item-у, FK CASCADE на item.
+- `journal_checklist_template_items` — admin-управляемый шаблон чек-листа; новые этапы инициализируются из активных пунктов через `POST .../checklist/initialize`. Soft delete через `active=false`.
+- `journal_notification_deliveries` — `UNIQUE(user_id, kind, delivery_key)` для дедупликации push: `kind='digest'` (key=YYYY-MM-DD), `kind='exact'` (key=`itemId:date:time`).
+
+### 15.2 Stage ID translation
+
+Frontend видит `stage.id` как 1, 2, 3… (это `stages.stage_num`, см. `clientStore.js`). Внутри `journal_items.stage_id` хранится реальный `stages.id` (PK). Хранилище `journalStore.js` транслирует туда/обратно: helper `resolveStageDbId(clientId, stageNum)` для входа, JOIN на `stages` с возвратом `stage_num` для выхода. Роуты и UI работают только в стейдж-нумерации фронтенда.
+
+### 15.3 Permissions
+
+- Раздел `journal` подчиняется обычному `role_sections` (`requireSectionRead/Write("journal")`).
+- Дополнительно — `canAccessClient(user, clientId)` (extracted в `services/clientAccess.js`).
+- Admin-only роуты шаблона: `requireAuth("admin")` без section gate.
+- Backfill `role_sections` for `journal` идёт при `initSchema()` для апгрейдов с pre-journal БД (`viewer` остаётся без доступа).
+
+### 15.4 Push reminders
+
+Используется общий путь доставки `messengerPush.sendPushToUsers({ userIds, title, body, url })`, тот же, что у мессенджера. Планировщик `startJournalNotificationScheduler` (5-минутный интервал, immediate tick):
+
+- `runJournalExactReminders` — каждый тик: ищет открытые task/event с прошедшим due_date+due_time, шлёт push с URL `/?cid=<id>&sec=journal`, пишет delivery для дедупа.
+- `runJournalDigest` — раз в день при `hours===9 && minutes<5`: per-user `На сегодня и просрочено: N`, URL `/`.
+
+Service worker (`public/sw.js`) роутит клики по `payload.url`; messenger fallback `/app/messenger` сохранён.
+
+### 15.5 Verify scripts
+
+- `npm run verify:journal-rules` — pure JS helpers.
+- `npm run verify:journal-frontend-static` — статические проверки UI/API wrapper.
+- `npm run verify:journal-notifications` — статические проверки сервиса+sw.
+- `npm --prefix server run smoke:journal-store` — DB smoke (нужен живой PG).
+- `npm --prefix server run verify:journal-backfill` — миграция legacy (нужен живой PG).
+- `npm --prefix server run verify:messenger-reset` — guard включает все journal-таблицы.
+- `npm run verify:journal-api` / `verify:journal-checklist` — runtime API smoke (нужны env: `JOURNAL_TEST_TOKEN`, `JOURNAL_ADMIN_TOKEN`, `JOURNAL_TEST_CLIENT_ID`, `JOURNAL_TEST_STAGE_ID`).
