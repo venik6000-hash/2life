@@ -5,6 +5,31 @@ const pool = new Pool({
   connectionString: process.env.DATABASE_URL || "postgresql://postgres:postgres@localhost:5432/2life",
 });
 
+const JOURNAL_DEFAULT_TEMPLATE_TITLES = [
+  "Отправить клиента в лабораторию / выдать список анализов",
+  "Проконтролировать сдачу анализов",
+  "Проверить, что файлы анализов загружены",
+  "Подготовить/обновить протокол",
+  "Отправить протокол клиенту",
+  "Подготовить/обновить питание",
+  "Отправить рекомендации по питанию",
+  "Уточнить, начал ли клиент принимать препараты",
+  "Назначить промежуточную встречу/созвон",
+  "Зафиксировать комментарии врача/нутрициолога по этапу",
+  "Закрыть этап / назначить следующий шаг",
+];
+
+const seedJournalChecklistTemplate = async () => {
+  const existing = await pool.query("SELECT COUNT(*)::int AS n FROM journal_checklist_template_items");
+  if (existing.rows[0]?.n > 0) return;
+  for (let i = 0; i < JOURNAL_DEFAULT_TEMPLATE_TITLES.length; i += 1) {
+    await pool.query(
+      "INSERT INTO journal_checklist_template_items (title, sort_order, active) VALUES ($1, $2, true)",
+      [JOURNAL_DEFAULT_TEMPLATE_TITLES[i], i]
+    );
+  }
+};
+
 const initSchema = async () => {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS users (
@@ -381,6 +406,71 @@ const initSchema = async () => {
 
     CREATE INDEX IF NOT EXISTS idx_anf_client ON analytics_files(client_id);
   `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS journal_checklist_template_items (
+      id         SERIAL PRIMARY KEY,
+      title      TEXT NOT NULL DEFAULT '',
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      active     BOOLEAN NOT NULL DEFAULT true,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS journal_items (
+      id                      SERIAL PRIMARY KEY,
+      client_id               TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+      stage_id                INTEGER REFERENCES stages(id) ON DELETE SET NULL,
+      type                    TEXT NOT NULL DEFAULT 'note',
+      title                   TEXT NOT NULL DEFAULT '',
+      description             TEXT NOT NULL DEFAULT '',
+      status                  TEXT NOT NULL DEFAULT 'open',
+      due_date                DATE,
+      due_time                TIME,
+      assignee_user_id        INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      is_team_task            BOOLEAN NOT NULL DEFAULT true,
+      priority                TEXT NOT NULL DEFAULT 'normal',
+      created_by              INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+      completed_at            TIMESTAMPTZ,
+      cancelled_at            TIMESTAMPTZ,
+      source_template_item_id INTEGER REFERENCES journal_checklist_template_items(id) ON DELETE SET NULL,
+      deleted_at              TIMESTAMPTZ,
+      deleted_by              INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      delete_reason           TEXT NOT NULL DEFAULT '',
+      metadata_json           TEXT NOT NULL DEFAULT '{}'
+    );
+
+    CREATE TABLE IF NOT EXISTS journal_comments (
+      id              SERIAL PRIMARY KEY,
+      journal_item_id INTEGER NOT NULL REFERENCES journal_items(id) ON DELETE CASCADE,
+      author_user_id  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      body            TEXT NOT NULL DEFAULT '',
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+      deleted_at      TIMESTAMPTZ
+    );
+
+    CREATE TABLE IF NOT EXISTS journal_notification_deliveries (
+      id              SERIAL PRIMARY KEY,
+      user_id          INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      journal_item_id  INTEGER REFERENCES journal_items(id) ON DELETE CASCADE,
+      kind             TEXT NOT NULL,
+      delivery_key     TEXT NOT NULL,
+      delivered_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE(user_id, kind, delivery_key)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_ji_client ON journal_items(client_id);
+    CREATE INDEX IF NOT EXISTS idx_ji_stage ON journal_items(stage_id);
+    CREATE INDEX IF NOT EXISTS idx_ji_due ON journal_items(due_date, due_time);
+    CREATE INDEX IF NOT EXISTS idx_ji_assignee ON journal_items(assignee_user_id);
+    CREATE INDEX IF NOT EXISTS idx_jc_item ON journal_comments(journal_item_id);
+    CREATE INDEX IF NOT EXISTS idx_jnd_user_kind_key ON journal_notification_deliveries(user_id, kind, delivery_key);
+  `);
+
+  await seedJournalChecklistTemplate();
 
   // Forward-compatible column migrations
   const stageColsRes = await pool.query(
@@ -1775,6 +1865,7 @@ const getChatFile = async (fileId) => {
 module.exports = {
   pool, withTransaction,
   initSchema,
+  JOURNAL_DEFAULT_TEMPLATE_TITLES,
   // users
   getUser, listUsers, createUser, updatePass, setActive, setAllClientsAccess, hasAllClientsAccess,
   // clients

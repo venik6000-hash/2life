@@ -9,6 +9,7 @@
     "verify:messenger-push": "node scripts/verifyMessengerPushConfig.js",
     "smoke:messenger-store": "node scripts/smokeMessengerStore.js",
     "smoke:messenger-contract": "node scripts/smokeMessengerContract.js",
+    "smoke:journal-store": "node scripts/smokeJournalStore.js",
     "start": "node index.js"
   },
   "dependencies": {
