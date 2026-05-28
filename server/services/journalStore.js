@@ -185,6 +185,36 @@ async function recordJournalNotificationDelivery({ userId, journalItemId = null,
   );
 }
 
+async function backfillLegacyJournalEntries() {
+  const legacy = await pool.query(
+    `SELECT je.*, s.id AS current_stage_id
+     FROM journal_entries je
+     JOIN stages s ON s.id = je.stage_id
+     WHERE NOT EXISTS (
+       SELECT 1 FROM journal_items ji
+       WHERE ji.metadata_json::text LIKE '%' || ('"legacy_journal_entry_id":' || je.id)::text || '%'
+     )
+     ORDER BY je.id`
+  );
+  let migrated = 0;
+  for (const row of legacy.rows) {
+    const metadata = {
+      legacy_journal_entry_id: row.id,
+      legacy_type: row.type || "",
+      legacy_author: row.author || "",
+      legacy_date: row.date || "",
+    };
+    await pool.query(
+      `INSERT INTO journal_items
+        (client_id, stage_id, type, title, description, status, is_team_task, priority, metadata_json)
+       VALUES ($1, $2, 'note', 'Заметка', $3, 'done', true, 'normal', $4)`,
+      [row.client_id, row.stage_id, row.text || "", JSON.stringify(metadata)]
+    );
+    migrated += 1;
+  }
+  return { migrated };
+}
+
 module.exports = {
   JOURNAL_DEFAULT_TEMPLATE_TITLES,
   listJournalTemplateItems,
@@ -193,4 +223,5 @@ module.exports = {
   countJournalBadgesForUser,
   recordJournalNotificationDelivery,
   wasJournalNotificationDelivered,
+  backfillLegacyJournalEntries,
 };
