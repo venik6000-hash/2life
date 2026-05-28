@@ -62,6 +62,7 @@ export default function Dashboard() {
     canWriteSection,
     canCreateClient,
     canImportData,
+    reloadJournalBadges,
   } = useDashboard();
   const { user } = useAuth();
   const isClient = isClientRole(user?.role);
@@ -214,8 +215,10 @@ export default function Dashboard() {
   );
   const renderJournalSection = () => (
     <JournalSection
-      st={currentStage}
-      uS={updateStage}
+      clientId={currentClient.id}
+      stages={currentClient.stages || []}
+      readOnly={!canWriteSection("journal")}
+      onChanged={reloadJournalBadges}
     />
   );
 
