@@ -1,7 +1,8 @@
 const express = require("express");
 const router = express.Router();
 const { requireAuth, requireSectionRead, requireSectionWrite } = require("../middleware/auth");
-const { pool, hasAllClientsAccess, getAssignmentsByUser } = require("../services/db");
+const { pool } = require("../services/db");
+const { canAccessClient } = require("../services/clientAccess");
 
 const DISH_TYPES = new Set(["breakfast", "lunch", "dinner", "universal"]);
 const MEAL_TYPES = new Set(["breakfast", "lunch", "dinner"]);
@@ -20,12 +21,6 @@ const readOptionalNumber = (payload, field, existingValue = null) => {
   const n = Number(payload[field]);
   if (!Number.isFinite(n) || n < 0) return { error: `${field} должен быть числом не меньше 0` };
   return { value: n };
-};
-
-const canAccessClient = async (user, clientId) => {
-  if (user.role === "admin" || await hasAllClientsAccess(user.id)) return true;
-  const assigned = await getAssignmentsByUser(user.id);
-  return assigned.some((row) => row.client_id === clientId);
 };
 
 const mapDish = (row) => ({

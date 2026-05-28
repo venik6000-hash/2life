@@ -6,7 +6,7 @@ const { v4: uuidv4 } = require("uuid");
 const { requireAuth } = require("../middleware/auth");
 const { encryptText, decryptText, encryptJson, decryptJson, encryptBuffer, decryptBuffer } = require("../services/messengerCrypto");
 const { createSyncEvent, listSyncEventsForUser, upsertMessengerDevice, removeMessengerDevice, listMessengerDevicesForUser } = require("../services/messengerStore");
-const { pool, hasAllClientsAccess, getAssignmentsByUser,
+const { pool,
   createChat, getChatById, getChatsByUser, getLastMessageForChat, updateChatMeta, setChatPinned,
   addChatParticipant, removeChatParticipant, getChatParticipants, getChatParticipantsForChats,
   isParticipant, getParticipantRole,
@@ -20,6 +20,7 @@ const { pool, hasAllClientsAccess, getAssignmentsByUser,
   countPinnedForUser, pinMessageForUser, unpinMessageForUser, listPinnedForUser,
   fetchMessagesForSearchInChat, fetchMessagesForSearchGlobal,
 } = require("../services/db");
+const { canAccessClient } = require("../services/clientAccess");
 const {
   syncUserChatAccessByClientPermissions,
   syncChatParticipantsByClientAccess,
@@ -120,15 +121,6 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 
 const isClientRole = (role) => {
   const normalized = String(role || "").trim().toLowerCase();
   return normalized === "viewer" || normalized === "client";
-};
-
-// Returns true if the user has access to the given client
-const canAccessClient = async (user, clientId) => {
-  if (user.role === "admin") return true;
-  const all = await hasAllClientsAccess(user.id);
-  if (all) return true;
-  const assignments = await getAssignmentsByUser(user.id);
-  return assignments.some((a) => a.client_id === clientId);
 };
 
 const isStaffUserId = async (userId) => {

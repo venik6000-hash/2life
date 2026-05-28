@@ -5,10 +5,10 @@ const fs      = require("fs");
 const { v4: uuidv4 } = require("uuid");
 const { requireAuth, requireSectionRead, requireSectionWrite } = require("../middleware/auth");
 const {
-  hasAllClientsAccess, getAssignmentsByUser,
   insertAnalyticsFile, getAnalyticsFilesByClient, getAnalyticsFileById,
   updateAnalyticsFile, deleteAnalyticsFile,
 } = require("../services/db");
+const { canAccessClient } = require("../services/clientAccess");
 const { ensureDir } = require("../services/storage");
 
 const router = express.Router();
@@ -35,14 +35,6 @@ const upload = multer({
     }
   },
 });
-
-const canAccessClient = async (user, clientId) => {
-  if (user.role === "admin") return true;
-  const all = await hasAllClientsAccess(user.id);
-  if (all) return true;
-  const assignments = await getAssignmentsByUser(user.id);
-  return assignments.some((a) => a.client_id === clientId);
-};
 
 // GET /api/clients/:clientId/analytics-files
 router.get("/clients/:clientId/analytics-files",
