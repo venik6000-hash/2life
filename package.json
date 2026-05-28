@@ -23,6 +23,7 @@
     "verify:voice-waveform": "node scripts/verifyVoiceWaveform.mjs",
     "verify:messenger-voice": "node scripts/verifyMessengerVoice.mjs",
     "verify:messenger-all": "npm run verify:messenger-unread && npm run verify:messenger-push-client && npm run verify:messenger-static && npm run verify:messenger-pin && npm run verify:messenger-reply && npm run verify:messenger-bulk && npm run verify:messenger-search && npm run verify:messenger-mention && npm run verify:messenger-settings && npm run verify:messenger-chat-preview && npm run verify:messenger-readers && npm run verify:voice-waveform && npm run verify:messenger-voice",
+    "verify:journal-rules": "node scripts/verifyJournalRules.mjs",
     "build": "vite build",
     "preview": "vite preview"
   },
