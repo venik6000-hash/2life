@@ -698,6 +698,22 @@ const initSchema = async () => {
   try { await pool.query("CREATE INDEX IF NOT EXISTS idx_md_jti ON messenger_devices(jti) WHERE jti IS NOT NULL"); } catch (_) {}
   try { await pool.query("CREATE INDEX IF NOT EXISTS idx_mpf_user ON message_pinned_for_users(user_id)"); } catch (_) {}
 
+  // Additive: backfill role_sections for the 'journal' section on upgrades from
+  // pre-journal deployments where existing roles never had a row inserted.
+  try {
+    await pool.query(`
+      INSERT INTO role_sections (role_id, section_id, can_read, can_write)
+      SELECT r.id, 'journal',
+        CASE WHEN r.name = 'viewer' THEN false ELSE true END,
+        CASE WHEN r.name = 'viewer' THEN false ELSE true END
+      FROM roles r
+      WHERE NOT EXISTS (
+        SELECT 1 FROM role_sections rs
+        WHERE rs.role_id = r.id AND rs.section_id = 'journal'
+      )
+    `);
+  } catch (_) {}
+
 };
 
 // ─── Users ──────────────────────────────────────────────────────────────────
