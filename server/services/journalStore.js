@@ -257,9 +257,68 @@ async function createJournalComment({ journalItemId, authorUserId, body }) {
   return rowToComment(res.rows[0]);
 }
 
+async function upsertJournalTemplateItem({ id, title, sortOrder = 0, active = true }) {
+  const cleanTitle = toCleanString(title);
+  if (!cleanTitle) throw new Error("JOURNAL_TEMPLATE_TITLE_REQUIRED");
+  if (id) {
+    const res = await pool.query(
+      `UPDATE journal_checklist_template_items
+       SET title=$2, sort_order=$3, active=$4, updated_at=now()
+       WHERE id=$1 RETURNING *`,
+      [toIntOrNull(id), cleanTitle, Number(sortOrder) || 0, !!active]
+    );
+    return res.rows[0];
+  }
+  const res = await pool.query(
+    `INSERT INTO journal_checklist_template_items (title, sort_order, active)
+     VALUES ($1,$2,$3) RETURNING *`,
+    [cleanTitle, Number(sortOrder) || 0, !!active]
+  );
+  return res.rows[0];
+}
+
+async function deleteJournalTemplateItem(id) {
+  await pool.query("UPDATE journal_checklist_template_items SET active=false, updated_at=now() WHERE id=$1", [toIntOrNull(id)]);
+}
+
+async function initializeStageChecklist({ clientId, stageId, createdBy }) {
+  const template = await listJournalTemplateItems({ includeInactive: false });
+  let created = 0;
+  for (const item of template) {
+    const exists = await pool.query(
+      `SELECT 1 FROM journal_items
+       WHERE client_id=$1 AND stage_id=$2 AND source_template_item_id=$3 AND deleted_at IS NULL
+       LIMIT 1`,
+      [clientId, toIntOrNull(stageId), item.id]
+    );
+    if (exists.rows[0]) continue;
+    await createJournalItem({
+      clientId,
+      stageId,
+      type: "task",
+      title: item.title,
+      description: "",
+      status: "open",
+      dueDate: "",
+      dueTime: "",
+      assigneeUserId: null,
+      isTeamTask: true,
+      priority: "normal",
+      createdBy,
+      sourceTemplateItemId: item.id,
+      metadata: { checklist: true },
+    });
+    created += 1;
+  }
+  return { created };
+}
+
 module.exports = {
   JOURNAL_DEFAULT_TEMPLATE_TITLES,
   listJournalTemplateItems,
+  upsertJournalTemplateItem,
+  deleteJournalTemplateItem,
+  initializeStageChecklist,
   createJournalItem,
   listJournalItems,
   countJournalBadgesForUser,
