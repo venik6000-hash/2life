@@ -46,3 +46,23 @@ export const initializeJournalChecklist = (authFetch, clientId, stageId) =>
 
 export const fetchJournalBadges = (authFetch) =>
   apiJson(authFetch, "/api/journal/badges");
+
+export const fetchJournalTemplate = (authFetch) =>
+  apiJson(authFetch, "/api/admin/journal/checklist-template");
+
+export const createJournalTemplateItem = (authFetch, payload) =>
+  apiJson(authFetch, "/api/admin/journal/checklist-template", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+export const updateJournalTemplateItem = (authFetch, id, payload) =>
+  apiJson(authFetch, `/api/admin/journal/checklist-template/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+
+export const deleteJournalTemplateItem = (authFetch, id) =>
+  apiJson(authFetch, `/api/admin/journal/checklist-template/${id}`, {
+    method: "DELETE",
+  });
