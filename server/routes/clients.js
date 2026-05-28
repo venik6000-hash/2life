@@ -10,6 +10,7 @@ const { pool, upsertClientAssignment, deleteClientAssignment, getAssignmentsByCl
 const { syncUserChatAccessByClientPermissions } = require("../services/chatAccessSync");
 const { notifyUserChatAccessChanges } = require("../services/messengerAccessNotifications");
 const { addConnection, removeConnection, broadcast } = require("../services/sse");
+const { canAccessClient } = require("../services/clientAccess");
 
 // ─── Clients list ────────────────────────────────────────────────────────────
 
@@ -306,13 +307,6 @@ const autoAssignDoctors = async (clientId, assignedByUserId) => {
   }
 };
 
-// Проверяет, имеет ли пользователь доступ к клиенту.
-// Админ — доступ ко всем. Врач — только к назначенным.
-const canAccessClient = async (user, clientId) => {
-  if (user.role === "admin" || await hasAllClientsAccess(user.id)) return true;
-  const assigned = await getAssignmentsByUser(user.id);
-  return assigned.some(r => r.client_id === clientId);
-};
 
 const toStr = (v) => (v == null ? "" : String(v));
 

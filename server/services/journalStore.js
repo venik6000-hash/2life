@@ -215,6 +215,48 @@ async function backfillLegacyJournalEntries() {
   return { migrated };
 }
 
+async function getJournalItemById(itemId) {
+  const res = await pool.query("SELECT * FROM journal_items WHERE id = $1 AND deleted_at IS NULL", [itemId]);
+  return res.rows[0] ? rowToItem(res.rows[0]) : null;
+}
+
+async function updateJournalItem(itemId, payload) {
+  const current = await getJournalItemById(itemId);
+  if (!current) return null;
+  const merged = normalizeItemInput({ ...current, ...payload, type: current.type });
+  const completedAtSql = merged.status === "done" ? "COALESCE(completed_at, now())" : "NULL";
+  const cancelledAtSql = merged.status === "cancelled" ? "COALESCE(cancelled_at, now())" : "NULL";
+  const res = await pool.query(
+    `UPDATE journal_items
+     SET title=$2, description=$3, status=$4, due_date=$5, due_time=$6,
+         assignee_user_id=$7, is_team_task=$8, priority=$9,
+         completed_at=${completedAtSql}, cancelled_at=${cancelledAtSql},
+         metadata_json=$10, updated_at=now()
+     WHERE id=$1 AND deleted_at IS NULL
+     RETURNING *`,
+    [itemId, merged.title, merged.description, merged.status, merged.dueDate, merged.dueTime, merged.assigneeUserId, merged.isTeamTask, merged.priority, JSON.stringify(merged.metadata)]
+  );
+  return res.rows[0] ? rowToItem(res.rows[0]) : null;
+}
+
+async function softDeleteJournalItem(itemId, { deletedBy, reason }) {
+  const res = await pool.query(
+    "UPDATE journal_items SET deleted_at=now(), deleted_by=$2, delete_reason=$3, updated_at=now() WHERE id=$1 AND deleted_at IS NULL RETURNING *",
+    [itemId, toIntOrNull(deletedBy), toCleanString(reason)]
+  );
+  return !!res.rows[0];
+}
+
+async function createJournalComment({ journalItemId, authorUserId, body }) {
+  const cleanBody = toCleanString(body);
+  if (!cleanBody) throw new Error("JOURNAL_COMMENT_BODY_REQUIRED");
+  const res = await pool.query(
+    "INSERT INTO journal_comments (journal_item_id, author_user_id, body) VALUES ($1,$2,$3) RETURNING *",
+    [toIntOrNull(journalItemId), toIntOrNull(authorUserId), cleanBody]
+  );
+  return rowToComment(res.rows[0]);
+}
+
 module.exports = {
   JOURNAL_DEFAULT_TEMPLATE_TITLES,
   listJournalTemplateItems,
@@ -224,4 +266,8 @@ module.exports = {
   recordJournalNotificationDelivery,
   wasJournalNotificationDelivered,
   backfillLegacyJournalEntries,
+  getJournalItemById,
+  updateJournalItem,
+  softDeleteJournalItem,
+  createJournalComment,
 };
