@@ -77,7 +77,7 @@ const normalizeItemInput = (payload) => {
     isTeamTask: payload.assigneeUserId ? false : payload.isTeamTask !== false,
     priority: toCleanString(payload.priority || "normal"),
     sourceTemplateItemId: toIntOrNull(payload.sourceTemplateItemId),
-    metadata: payload.metadata && typeof payload.metadata === "object" ? payload.metadata : {},
+    metadata: payload.metadata && typeof payload.metadata === "object" && !Array.isArray(payload.metadata) ? payload.metadata : {},
   };
 };
 
