@@ -9,6 +9,17 @@ const toIntOrNull = (value) => {
   return Number.isInteger(n) && n > 0 ? n : null;
 };
 
+async function resolveStageDbId(clientId, stageNum) {
+  if (!clientId || stageNum == null || stageNum === "") return null;
+  const n = toIntOrNull(stageNum);
+  if (!n) return null;
+  const res = await pool.query(
+    "SELECT id FROM stages WHERE client_id = $1 AND stage_num = $2 LIMIT 1",
+    [clientId, n]
+  );
+  return res.rows[0]?.id ?? null;
+}
+
 const toCleanString = (value) => String(value ?? "").trim();
 
 const toDateOrNull = (value) => {
@@ -28,7 +39,7 @@ const parseJson = (value, fallback) => {
 const rowToItem = (row, comments = []) => ({
   id: row.id,
   clientId: row.client_id,
-  stageId: row.stage_id,
+  stageId: row.stage_num != null ? Number(row.stage_num) : null,
   type: row.type,
   title: row.title,
   description: row.description,
@@ -100,6 +111,7 @@ async function listJournalTemplateItems({ includeInactive = false } = {}) {
 
 async function createJournalItem(payload) {
   const item = normalizeItemInput(payload);
+  const dbStageId = await resolveStageDbId(payload.clientId, payload.stageId);
   const res = await pool.query(
     `INSERT INTO journal_items
       (client_id, stage_id, type, title, description, status, due_date, due_time,
@@ -108,7 +120,7 @@ async function createJournalItem(payload) {
      RETURNING *`,
     [
       payload.clientId,
-      toIntOrNull(payload.stageId),
+      dbStageId,
       item.type,
       item.title,
       item.description,
@@ -123,12 +135,16 @@ async function createJournalItem(payload) {
       JSON.stringify(item.metadata),
     ]
   );
-  return rowToItem(res.rows[0]);
+  return getJournalItemById(res.rows[0].id);
 }
 
 async function listJournalItems(clientId) {
   const itemRes = await pool.query(
-    "SELECT * FROM journal_items WHERE client_id = $1 AND deleted_at IS NULL ORDER BY created_at DESC, id DESC",
+    `SELECT ji.*, s.stage_num AS stage_num
+     FROM journal_items ji
+     LEFT JOIN stages s ON s.id = ji.stage_id
+     WHERE ji.client_id = $1 AND ji.deleted_at IS NULL
+     ORDER BY ji.created_at DESC, ji.id DESC`,
     [clientId]
   );
   const ids = itemRes.rows.map((row) => row.id);
@@ -257,7 +273,13 @@ async function backfillLegacyJournalEntries() {
 }
 
 async function getJournalItemById(itemId) {
-  const res = await pool.query("SELECT * FROM journal_items WHERE id = $1 AND deleted_at IS NULL", [itemId]);
+  const res = await pool.query(
+    `SELECT ji.*, s.stage_num AS stage_num
+     FROM journal_items ji
+     LEFT JOIN stages s ON s.id = ji.stage_id
+     WHERE ji.id = $1 AND ji.deleted_at IS NULL`,
+    [itemId]
+  );
   return res.rows[0] ? rowToItem(res.rows[0]) : null;
 }
 
@@ -277,7 +299,7 @@ async function updateJournalItem(itemId, payload) {
      RETURNING *`,
     [itemId, merged.title, merged.description, merged.status, merged.dueDate, merged.dueTime, merged.assigneeUserId, merged.isTeamTask, merged.priority, JSON.stringify(merged.metadata)]
   );
-  return res.rows[0] ? rowToItem(res.rows[0]) : null;
+  return res.rows[0] ? getJournalItemById(res.rows[0].id) : null;
 }
 
 async function softDeleteJournalItem(itemId, { deletedBy, reason }) {
@@ -323,13 +345,8 @@ async function deleteJournalTemplateItem(id) {
 }
 
 async function initializeStageChecklist({ clientId, stageId, createdBy }) {
-  const stageId_ = toIntOrNull(stageId);
-  if (!stageId_) throw new Error("JOURNAL_STAGE_NOT_FOUND");
-  const stageCheck = await pool.query(
-    "SELECT 1 FROM stages WHERE id = $1 AND client_id = $2 LIMIT 1",
-    [stageId_, clientId]
-  );
-  if (!stageCheck.rows[0]) throw new Error("JOURNAL_STAGE_NOT_FOUND");
+  const dbStageId = await resolveStageDbId(clientId, stageId);
+  if (!dbStageId) throw new Error("JOURNAL_STAGE_NOT_FOUND");
   const template = await listJournalTemplateItems({ includeInactive: false });
   let created = 0;
   for (const item of template) {
@@ -337,7 +354,7 @@ async function initializeStageChecklist({ clientId, stageId, createdBy }) {
       `SELECT 1 FROM journal_items
        WHERE client_id=$1 AND stage_id=$2 AND source_template_item_id=$3 AND deleted_at IS NULL
        LIMIT 1`,
-      [clientId, toIntOrNull(stageId), item.id]
+      [clientId, dbStageId, item.id]
     );
     if (exists.rows[0]) continue;
     await createJournalItem({
