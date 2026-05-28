@@ -30,7 +30,7 @@ async function assertItemBelongsToClient(req, res) {
     res.status(404).json({ error: "Запись журнала не найдена" });
     return null;
   }
-  if (item.clientId !== req.params.clientId) {
+  if (String(item.clientId) !== req.params.clientId) {
     res.status(404).json({ error: "Запись журнала не найдена" });
     return null;
   }
