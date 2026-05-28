@@ -331,8 +331,9 @@ export function DashboardProvider({ children }) {
   }, [reloadDoctors]);
 
   useEffect(() => {
+    if (!loaded) return;
     reloadJournalBadges();
-  }, [reloadJournalBadges, cid]);
+  }, [loaded, reloadJournalBadges, cid]);
 
   // Track which client IDs were modified (for granular saves)
   const dirtyClientsRef = useRef(new Set());

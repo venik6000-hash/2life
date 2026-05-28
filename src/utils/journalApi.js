@@ -1,8 +1,9 @@
 const apiJson = async (authFetch, url, options = {}) => {
+  const hasBody = options.body !== undefined && options.body !== null;
   const res = await authFetch(url, {
     ...options,
     headers: {
-      "Content-Type": "application/json",
+      ...(hasBody ? { "Content-Type": "application/json" } : {}),
       ...(options.headers || {}),
     },
   });
