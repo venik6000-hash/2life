@@ -7,6 +7,8 @@ const { startAutoBackup } = require("./services/backup");
 const { ensureDir, BACKUP_DIR } = require("./services/storage");
 const { initDefaultAdmin, initDefaultRoles, initDefaultDeficitPresets } = require("./services/setup");
 
+const { startJournalNotificationScheduler } = require("./services/journalNotifications");
+
 const authRouter      = require("./routes/auth");
 const clientsRouter   = require("./routes/clients");
 const doctorsRouter   = require("./routes/doctors");
@@ -48,6 +50,7 @@ async function start() {
     startAutoBackup();
   });
   initWebSocket(httpServer);
+  startJournalNotificationScheduler();
 }
 
 start().catch(console.error);

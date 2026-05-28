@@ -32,15 +32,17 @@ function pickPushBody(msgType, chatTitle) {
   return chatTitle ? `Чат: ${chatTitle}` : "Откройте мессенджер";
 }
 
-async function sendPrivateMessagePush({ userIds, chatTitle, url = "/app/messenger", exceptDeviceId = "", msgType = "text" }) {
+async function sendPushToUsers({ userIds, title, body, url, exceptDeviceId = "" }) {
   if (!PUSH_READY) return { ok: false, skipped: "missing_vapid" };
-  const uniqueUserIds = Array.from(new Set(Array.from(userIds || []).map(Number).filter((id) => Number.isInteger(id) && id > 0)));
+  const uniqueUserIds = Array.from(
+    new Set(
+      Array.from(userIds || [])
+        .map(Number)
+        .filter((id) => Number.isInteger(id) && id > 0)
+    )
+  );
   const devices = await listPushDevicesForUsers(uniqueUserIds);
-  const payload = JSON.stringify({
-    title: "Новое сообщение",
-    body: pickPushBody(msgType, chatTitle),
-    url,
-  });
+  const payload = JSON.stringify({ title, body, url });
   const results = [];
   for (const device of devices) {
     if (exceptDeviceId && device.device_id === exceptDeviceId) continue;
@@ -58,4 +60,14 @@ async function sendPrivateMessagePush({ userIds, chatTitle, url = "/app/messenge
   return { ok: true, results };
 }
 
-module.exports = { getPushConfigStatus, sendPrivateMessagePush };
+async function sendPrivateMessagePush({ userIds, chatTitle, url = "/app/messenger", exceptDeviceId = "", msgType = "text" }) {
+  return sendPushToUsers({
+    userIds,
+    title: "Новое сообщение",
+    body: pickPushBody(msgType, chatTitle),
+    url,
+    exceptDeviceId,
+  });
+}
+
+module.exports = { getPushConfigStatus, sendPrivateMessagePush, sendPushToUsers };

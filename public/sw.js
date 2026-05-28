@@ -30,6 +30,7 @@ self.addEventListener("fetch", (event) => {
   );
 });
 
+// Routes both messenger and journal notification clicks via payload.url.
 self.addEventListener("push", (event) => {
   let payload = {};
   try { payload = event.data ? event.data.json() : {}; } catch { payload = {}; }
@@ -38,7 +39,7 @@ self.addEventListener("push", (event) => {
     body: payload.body || "Откройте мессенджер",
     icon: "/icons/icon-192.png",
     badge: "/icons/icon-192.png",
-    data: { url: payload.url || "/app/messenger" },
+    data: { url: payload.url || "/app/messenger", kind: payload.kind || "generic" },
   };
   event.waitUntil(self.registration.showNotification(title, options));
 });

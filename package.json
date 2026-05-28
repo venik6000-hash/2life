@@ -27,6 +27,7 @@
     "verify:journal-api": "node scripts/verifyJournalApi.mjs",
     "verify:journal-checklist": "node scripts/verifyJournalChecklist.mjs",
     "verify:journal-frontend-static": "node scripts/verifyJournalFrontendStatic.mjs",
+    "verify:journal-notifications": "node scripts/verifyJournalNotifications.mjs",
     "build": "vite build",
     "preview": "vite preview"
   },

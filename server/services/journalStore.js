@@ -185,6 +185,47 @@ async function recordJournalNotificationDelivery({ userId, journalItemId = null,
   );
 }
 
+async function listUsersForJournalDigest(today) {
+  const res = await pool.query(
+    `SELECT u.id, u.role, COALESCE(u.display_name, u.username) AS name, COUNT(ji.id)::int AS due_count
+     FROM users u
+     JOIN role_sections rs ON rs.section_id='journal'
+     JOIN roles r ON r.name = u.role AND r.id = rs.role_id
+     JOIN journal_items ji ON ji.deleted_at IS NULL
+       AND ji.type IN ('task','event')
+       AND ji.status IN ('open','in_progress','waiting_client')
+       AND ji.due_date IS NOT NULL
+       AND ji.due_date <= $1::date
+       AND (ji.is_team_task = true OR ji.assignee_user_id = u.id)
+     LEFT JOIN client_assignments ca ON ca.client_id = ji.client_id AND ca.user_id = u.id
+     WHERE u.active = true
+       AND (u.role = 'admin' OR rs.can_read = true OR rs.can_write = true)
+       AND (u.role = 'admin' OR u.all_clients_access = true OR ca.user_id IS NOT NULL)
+     GROUP BY u.id, u.role, u.display_name, u.username`,
+    [today]
+  );
+  return res.rows;
+}
+
+async function listDueJournalReminders(nowIso) {
+  const res = await pool.query(
+    `SELECT ji.*, u.id AS user_id
+     FROM journal_items ji
+     JOIN users u ON u.active = true
+     LEFT JOIN client_assignments ca ON ca.client_id = ji.client_id AND ca.user_id = u.id
+     WHERE ji.deleted_at IS NULL
+       AND ji.type IN ('task','event')
+       AND ji.status IN ('open','in_progress','waiting_client')
+       AND ji.due_date IS NOT NULL
+       AND ji.due_time IS NOT NULL
+       AND ((ji.due_date::text || 'T' || ji.due_time::text)::timestamp <= $1::timestamp)
+       AND (ji.is_team_task = true OR ji.assignee_user_id = u.id)
+       AND (u.role = 'admin' OR u.all_clients_access = true OR ca.user_id IS NOT NULL)`,
+    [nowIso]
+  );
+  return res.rows;
+}
+
 async function backfillLegacyJournalEntries() {
   const legacy = await pool.query(
     `SELECT je.*
@@ -336,4 +377,6 @@ module.exports = {
   updateJournalItem,
   softDeleteJournalItem,
   createJournalComment,
+  listUsersForJournalDigest,
+  listDueJournalReminders,
 };
