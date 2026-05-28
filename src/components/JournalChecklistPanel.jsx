@@ -15,6 +15,7 @@ export default function JournalChecklistPanel({
   onInitialize,
   onAdd,
   onEdit,
+  onStatusChange,
   onDelete,
   onComment,
 }) {
@@ -85,6 +86,7 @@ export default function JournalChecklistPanel({
                       stages={stages}
                       readOnly={readOnly}
                       onEdit={onEdit}
+                      onStatusChange={onStatusChange}
                       onDelete={onDelete}
                       onComment={onComment}
                     />

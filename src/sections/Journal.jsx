@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useAuth } from "../context/AuthContext";
+import { useTheme } from "../context/ThemeContext";
 import {
   createJournalComment,
   createJournalItem,
@@ -16,6 +17,7 @@ import JournalItemEditor from "../components/JournalItemEditor";
 
 export default function JournalSection({ clientId, stages = [], readOnly = false, onChanged }) {
   const { authFetch, user } = useAuth();
+  const { $ } = useTheme();
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -76,27 +78,15 @@ export default function JournalSection({ clientId, stages = [], readOnly = false
     await refreshAfterChange();
   };
 
-  const handleItemEdit = async (item) => {
-    // If the caller passes the full updated item (status select), persist directly.
-    if (item && item.id && (item.status !== undefined) && !editor) {
-      await updateJournalItem(authFetch, clientId, item.id, {
-        status: item.status,
-        title: item.title,
-        description: item.description,
-        dueDate: item.dueDate,
-        dueTime: item.dueTime,
-        assigneeUserId: item.assigneeUserId,
-        isTeamTask: item.isTeamTask,
-        priority: item.priority,
-      });
-      await refreshAfterChange();
-      return;
-    }
-    setEditor({ item });
+  const openEditor = (item) => setEditor({ item });
+
+  const changeStatus = async (item, status) => {
+    await updateJournalItem(authFetch, clientId, item.id, { status });
+    await refreshAfterChange();
   };
 
   if (loading) return <div style={{ padding: 16 }}>Загрузка журнала...</div>;
-  if (error) return <div style={{ padding: 16, color: "#dc2626" }}>{error}</div>;
+  if (error) return <div style={{ padding: 16, color: $.dn }}>{error}</div>;
 
   return (
     <div style={{ display: "grid", gap: 14 }}>
@@ -106,7 +96,7 @@ export default function JournalSection({ clientId, stages = [], readOnly = false
         onAddTask={() => setEditor({ type: "task" })}
         onAddEvent={() => setEditor({ type: "event" })}
         onAddNote={() => setEditor({ type: "note" })}
-        onEdit={(item) => setEditor({ item })}
+        onEdit={openEditor}
       />
       <JournalChecklistPanel
         stages={stages}
@@ -114,7 +104,8 @@ export default function JournalSection({ clientId, stages = [], readOnly = false
         readOnly={readOnly}
         onInitialize={initChecklist}
         onAdd={(stage) => setEditor({ type: "task", stageId: stage.id })}
-        onEdit={handleItemEdit}
+        onEdit={openEditor}
+        onStatusChange={changeStatus}
         onDelete={removeItem}
         onComment={addComment}
       />
@@ -122,7 +113,8 @@ export default function JournalSection({ clientId, stages = [], readOnly = false
         stages={stages}
         items={items}
         readOnly={readOnly}
-        onEdit={handleItemEdit}
+        onEdit={openEditor}
+        onStatusChange={changeStatus}
         onDelete={removeItem}
         onComment={addComment}
       />

@@ -19,6 +19,7 @@ export default function JournalFeed({
   items = [],
   readOnly = false,
   onEdit,
+  onStatusChange,
   onDelete,
   onComment,
 }) {
@@ -113,6 +114,7 @@ export default function JournalFeed({
               stages={stages}
               readOnly={readOnly}
               onEdit={onEdit}
+              onStatusChange={onStatusChange}
               onDelete={onDelete}
               onComment={onComment}
             />

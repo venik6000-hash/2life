@@ -20,6 +20,7 @@ export default function JournalItemCard({
   stages = [],
   readOnly = false,
   onEdit,
+  onStatusChange,
   onDelete,
   onComment,
   compact = false,
@@ -30,7 +31,7 @@ export default function JournalItemCard({
 
   const handleStatusChange = (e) => {
     if (readOnly) return;
-    onEdit && onEdit({ ...item, status: e.target.value });
+    if (onStatusChange) onStatusChange(item, e.target.value);
   };
 
   const dueLine = !isNote && (item.dueDate || item.dueTime)
