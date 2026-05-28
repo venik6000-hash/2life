@@ -1,18 +1,20 @@
 import { useEffect, useState } from "react";
 import { useAuth } from "../context/AuthContext";
+import { useTheme } from "../context/ThemeContext";
 import {
   createJournalTemplateItem,
   deleteJournalTemplateItem,
   fetchJournalTemplate,
   updateJournalTemplateItem,
 } from "../utils/journalApi";
+import BlurInput from "./BlurInput";
 import Button from "./Button";
 import Card from "./Card";
-import Input from "./Input";
 import Wrapper from "./Wrapper";
 
 export default function AdminJournalTemplatePanel() {
   const { authFetch } = useAuth();
+  const { $ } = useTheme();
   const [items, setItems] = useState([]);
   const [error, setError] = useState("");
 
@@ -47,6 +49,7 @@ export default function AdminJournalTemplatePanel() {
   };
 
   const remove = async (id) => {
+    if (!window.confirm("Удалить пункт?")) return;
     try {
       await deleteJournalTemplateItem(authFetch, id);
       await load();
@@ -62,20 +65,20 @@ export default function AdminJournalTemplatePanel() {
           <div style={{ fontSize: 14, fontWeight: 700 }}>Шаблон чек-листа журнала</div>
           <Button onClick={add} size="sm">+ Пункт</Button>
         </Wrapper>
-        {error && <div style={{ color: "#dc2626", fontSize: 12 }}>{error}</div>}
+        {error && <div style={{ color: $.dn, fontSize: 12 }}>{error}</div>}
         {items.map((item, index) => (
           <Wrapper key={item.id} dir="row" align="center" gap="sm">
             <div style={{ width: 48 }}>
-              <Input
-                type="number"
-                value={String(item.sortOrder ?? index)}
-                onChange={(e) => save(item, { sortOrder: Number(e.target.value) || 0 })}
+              <BlurInput
+                val={String(item.sortOrder ?? index)}
+                onSave={(v) => save(item, { sortOrder: Number(v) || 0 })}
               />
             </div>
             <div style={{ flex: 1, minWidth: 0 }}>
-              <Input
-                value={item.title}
-                onChange={(e) => save(item, { title: e.target.value })}
+              <BlurInput
+                val={item.title}
+                onSave={(v) => save(item, { title: v })}
+                align="left"
               />
             </div>
             <label style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 4 }}>
