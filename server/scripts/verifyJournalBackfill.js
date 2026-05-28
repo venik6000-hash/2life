@@ -34,6 +34,17 @@ async function main() {
   assert.equal(items[0].metadata.legacy_type, "Созвон");
   assert.equal(items[0].metadata.legacy_author, "Врач");
 
+  // Regression guard: ids whose numeric form is a prefix of an already-migrated id
+  // must not be falsely skipped by the idempotency check.
+  await pool.query(
+    "INSERT INTO journal_entries (client_id, stage_id, entry_num, date, type, text, author) VALUES ($1,$2,1,'27.05.2026','Заметка','Префикс','Врач')",
+    [clientId, stageId]
+  );
+  const third = await backfillLegacyJournalEntries();
+  assert.ok(third.migrated >= 1, "prefix-id legacy entry must be migrated");
+  const itemsAfter = await listJournalItems(clientId);
+  assert.equal(itemsAfter.length, 2, "both legacy entries must be present");
+
   await pool.query("DELETE FROM clients WHERE id = $1", [clientId]);
   console.log("journal backfill ok");
 }

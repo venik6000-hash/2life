@@ -187,12 +187,12 @@ async function recordJournalNotificationDelivery({ userId, journalItemId = null,
 
 async function backfillLegacyJournalEntries() {
   const legacy = await pool.query(
-    `SELECT je.*, s.id AS current_stage_id
+    `SELECT je.*
      FROM journal_entries je
      JOIN stages s ON s.id = je.stage_id
      WHERE NOT EXISTS (
        SELECT 1 FROM journal_items ji
-       WHERE ji.metadata_json::text LIKE '%' || ('"legacy_journal_entry_id":' || je.id)::text || '%'
+       WHERE (ji.metadata_json::jsonb ->> 'legacy_journal_entry_id')::int = je.id
      )
      ORDER BY je.id`
   );
