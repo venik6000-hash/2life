@@ -714,6 +714,18 @@ const initSchema = async () => {
     `);
   } catch (_) {}
 
+  // Auto-migrate legacy journal_entries → journal_items on startup. Idempotent
+  // (NOT EXISTS subquery on metadata.legacy_journal_entry_id).
+  try {
+    const { backfillLegacyJournalEntries } = require("./journalStore");
+    const result = await backfillLegacyJournalEntries();
+    if (result?.migrated > 0) {
+      console.log(`[journal] backfilled ${result.migrated} legacy journal_entries → journal_items`);
+    }
+  } catch (error) {
+    console.warn("[journal] legacy backfill failed", error?.message || error);
+  }
+
 };
 
 // ─── Users ──────────────────────────────────────────────────────────────────

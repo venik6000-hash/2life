@@ -287,17 +287,21 @@ async function updateJournalItem(itemId, payload) {
   const current = await getJournalItemById(itemId);
   if (!current) return null;
   const merged = normalizeItemInput({ ...current, ...payload, type: current.type });
-  const completedAtSql = merged.status === "done" ? "COALESCE(completed_at, now())" : "NULL";
-  const cancelledAtSql = merged.status === "cancelled" ? "COALESCE(cancelled_at, now())" : "NULL";
+  const completedAtSql = merged.status === "done" ? "COALESCE(completed_at, now())" : "completed_at";
+  const cancelledAtSql = merged.status === "cancelled" ? "COALESCE(cancelled_at, now())" : "cancelled_at";
+  // Translate frontend stageId (stage_num) to db stages.id if caller supplied one;
+  // if payload omits stageId, preserve current.
+  const stageIdSrc = Object.prototype.hasOwnProperty.call(payload, "stageId") ? payload.stageId : current.stageId;
+  const dbStageId = await resolveStageDbId(current.clientId, stageIdSrc);
   const res = await pool.query(
     `UPDATE journal_items
      SET title=$2, description=$3, status=$4, due_date=$5, due_time=$6,
          assignee_user_id=$7, is_team_task=$8, priority=$9,
          completed_at=${completedAtSql}, cancelled_at=${cancelledAtSql},
-         metadata_json=$10, updated_at=now()
+         metadata_json=$10, stage_id=$11, updated_at=now()
      WHERE id=$1 AND deleted_at IS NULL
      RETURNING *`,
-    [itemId, merged.title, merged.description, merged.status, merged.dueDate, merged.dueTime, merged.assigneeUserId, merged.isTeamTask, merged.priority, JSON.stringify(merged.metadata)]
+    [itemId, merged.title, merged.description, merged.status, merged.dueDate, merged.dueTime, merged.assigneeUserId, merged.isTeamTask, merged.priority, JSON.stringify(merged.metadata), dbStageId]
   );
   return res.rows[0] ? getJournalItemById(res.rows[0].id) : null;
 }
