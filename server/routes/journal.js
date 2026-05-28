@@ -25,7 +25,12 @@ async function assertClientAccess(req, res) {
 }
 
 async function assertItemBelongsToClient(req, res) {
-  const item = await getJournalItemById(Number(req.params.itemId));
+  const itemId = Number(req.params.itemId);
+  if (!Number.isInteger(itemId) || itemId <= 0) {
+    res.status(400).json({ error: "Некорректный идентификатор записи" });
+    return null;
+  }
+  const item = await getJournalItemById(itemId);
   if (!item) {
     res.status(404).json({ error: "Запись журнала не найдена" });
     return null;
