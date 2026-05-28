@@ -1,8 +1,6 @@
 const assert = require("node:assert/strict");
 const { pool, initSchema } = require("../services/db");
 const {
-  JOURNAL_DEFAULT_TEMPLATE_TITLES,
-  listJournalTemplateItems,
   createJournalItem,
   listJournalItems,
   countJournalBadgesForUser,
@@ -21,12 +19,8 @@ async function main() {
   `);
   assert.equal(tables.rows[0].items, "journal_items");
   assert.equal(tables.rows[0].comments, "journal_comments");
-  assert.equal(tables.rows[0].template, "journal_checklist_template_items");
+  assert.equal(tables.rows[0].template, null, "checklist template table should be dropped");
   assert.equal(tables.rows[0].deliveries, "journal_notification_deliveries");
-
-  const template = await listJournalTemplateItems({ includeInactive: false });
-  assert.equal(template.length, JOURNAL_DEFAULT_TEMPLATE_TITLES.length);
-  assert.equal(template[0].title, "Отправить клиента в лабораторию / выдать список анализов");
 
   const clientId = `journal-smoke-${Date.now()}`;
   const stage = await pool.query(
@@ -55,7 +49,6 @@ async function main() {
     isTeamTask: true,
     priority: "normal",
     createdBy: 1,
-    sourceTemplateItemId: null,
     metadata: {},
   });
   assert.ok(item.id);

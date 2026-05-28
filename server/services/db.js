@@ -5,31 +5,6 @@ const pool = new Pool({
   connectionString: process.env.DATABASE_URL || "postgresql://postgres:postgres@localhost:5432/2life",
 });
 
-const JOURNAL_DEFAULT_TEMPLATE_TITLES = [
-  "Отправить клиента в лабораторию / выдать список анализов",
-  "Проконтролировать сдачу анализов",
-  "Проверить, что файлы анализов загружены",
-  "Подготовить/обновить протокол",
-  "Отправить протокол клиенту",
-  "Подготовить/обновить питание",
-  "Отправить рекомендации по питанию",
-  "Уточнить, начал ли клиент принимать препараты",
-  "Назначить промежуточную встречу/созвон",
-  "Зафиксировать комментарии врача/нутрициолога по этапу",
-  "Закрыть этап / назначить следующий шаг",
-];
-
-const seedJournalChecklistTemplate = async () => {
-  const existing = await pool.query("SELECT COUNT(*)::int AS n FROM journal_checklist_template_items");
-  if (existing.rows[0]?.n > 0) return;
-  for (let i = 0; i < JOURNAL_DEFAULT_TEMPLATE_TITLES.length; i += 1) {
-    await pool.query(
-      "INSERT INTO journal_checklist_template_items (title, sort_order, active) VALUES ($1, $2, true)",
-      [JOURNAL_DEFAULT_TEMPLATE_TITLES[i], i]
-    );
-  }
-};
-
 const initSchema = async () => {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS users (
@@ -408,15 +383,6 @@ const initSchema = async () => {
   `);
 
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS journal_checklist_template_items (
-      id         SERIAL PRIMARY KEY,
-      title      TEXT NOT NULL DEFAULT '',
-      sort_order INTEGER NOT NULL DEFAULT 0,
-      active     BOOLEAN NOT NULL DEFAULT true,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-    );
-
     CREATE TABLE IF NOT EXISTS journal_items (
       id                      SERIAL PRIMARY KEY,
       client_id               TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
@@ -435,7 +401,6 @@ const initSchema = async () => {
       updated_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
       completed_at            TIMESTAMPTZ,
       cancelled_at            TIMESTAMPTZ,
-      source_template_item_id INTEGER REFERENCES journal_checklist_template_items(id) ON DELETE SET NULL,
       deleted_at              TIMESTAMPTZ,
       deleted_by              INTEGER REFERENCES users(id) ON DELETE SET NULL,
       delete_reason           TEXT NOT NULL DEFAULT '',
@@ -470,7 +435,26 @@ const initSchema = async () => {
     CREATE INDEX IF NOT EXISTS idx_jnd_user_kind_key ON journal_notification_deliveries(user_id, kind, delivery_key);
   `);
 
-  await seedJournalChecklistTemplate();
+  // One-time cleanup: journal checklist subsystem was removed in 2026-05-28.
+  const colExistsRes = await pool.query(`
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'journal_items' AND column_name = 'source_template_item_id'
+    LIMIT 1
+  `);
+  if (colExistsRes.rowCount > 0) {
+    await pool.query(`
+      DELETE FROM journal_items
+      WHERE source_template_item_id IS NOT NULL
+         OR metadata_json LIKE '%"checklist":true%'
+    `);
+    await pool.query(`ALTER TABLE journal_items DROP COLUMN IF EXISTS source_template_item_id`);
+  } else {
+    await pool.query(`
+      DELETE FROM journal_items
+      WHERE metadata_json LIKE '%"checklist":true%'
+    `);
+  }
+  await pool.query(`DROP TABLE IF EXISTS journal_checklist_template_items`);
 
   // Forward-compatible column migrations
   const stageColsRes = await pool.query(
@@ -1893,7 +1877,6 @@ const getChatFile = async (fileId) => {
 module.exports = {
   pool, withTransaction,
   initSchema,
-  JOURNAL_DEFAULT_TEMPLATE_TITLES,
   // users
   getUser, listUsers, createUser, updatePass, setActive, setAllClientsAccess, hasAllClientsAccess,
   // clients

@@ -18,9 +18,10 @@ const PRIORITIES = ["low", "normal", "high", "urgent"];
 const toCleanString = (v) => (v == null ? "" : String(v));
 
 export default function JournalItemEditor({
-  stages = [],
+  users = [],
   initialType,
   initialStageId,
+  initialStatus,
   item,
   onClose,
   onSave,
@@ -48,14 +49,14 @@ export default function JournalItemEditor({
       stageId: initialStageId == null ? "" : String(initialStageId),
       title: "",
       description: "",
-      status: "open",
+      status: initialStatus || "open",
       dueDate: "",
       dueTime: "",
       assigneeUserId: "",
-      isTeamTask: false,
+      isTeamTask: true,
       priority: "normal",
     };
-  }, [item, initialType, initialStageId]);
+  }, [item, initialType, initialStageId, initialStatus]);
 
   const [state, setState] = useState(initial);
   const [saving, setSaving] = useState(false);
@@ -159,33 +160,18 @@ export default function JournalItemEditor({
 
         {!isNote && (
           <>
-            <Wrapper dir="row" gap="sm" wrap>
-              <div style={{ flex: 1, minWidth: 140 }}>
-                <div style={labelStyle}>Этап</div>
-                <select
-                  value={state.stageId}
-                  onChange={(e) => update({ stageId: e.target.value })}
-                  style={{ ...fieldStyle, marginTop: 4 }}
-                >
-                  <option value="">— Не выбран —</option>
-                  {stages.map((s) => (
-                    <option key={s.id} value={s.id}>{s.title || `Этап ${s.id}`}</option>
-                  ))}
-                </select>
-              </div>
-              <div style={{ flex: 1, minWidth: 140 }}>
-                <div style={labelStyle}>Статус</div>
-                <select
-                  value={state.status}
-                  onChange={(e) => update({ status: e.target.value })}
-                  style={{ ...fieldStyle, marginTop: 4 }}
-                >
-                  {STATUS_KEYS.map((s) => (
-                    <option key={s} value={s}>{JOURNAL_STATUS_LABELS[s] || s}</option>
-                  ))}
-                </select>
-              </div>
-            </Wrapper>
+            <div>
+              <div style={labelStyle}>Статус</div>
+              <select
+                value={state.status}
+                onChange={(e) => update({ status: e.target.value })}
+                style={{ ...fieldStyle, marginTop: 4 }}
+              >
+                {STATUS_KEYS.map((s) => (
+                  <option key={s} value={s}>{JOURNAL_STATUS_LABELS[s] || s}</option>
+                ))}
+              </select>
+            </div>
 
             <Wrapper dir="row" gap="sm" wrap>
               <div style={{ flex: 1, minWidth: 140 }}>
@@ -222,14 +208,20 @@ export default function JournalItemEditor({
 
             <Wrapper dir="row" gap="sm" wrap align="flex-end">
               <div style={{ flex: 1, minWidth: 160 }}>
-                <div style={labelStyle}>Исполнитель (ID сотрудника)</div>
-                <input
-                  type="number"
+                <div style={labelStyle}>Исполнитель</div>
+                <select
                   value={state.assigneeUserId}
+                  disabled={state.isTeamTask}
                   onChange={(e) => update({ assigneeUserId: e.target.value })}
-                  placeholder="например, 42"
-                  style={{ ...fieldStyle, marginTop: 4 }}
-                />
+                  style={{ ...fieldStyle, marginTop: 4, opacity: state.isTeamTask ? 0.5 : 1 }}
+                >
+                  <option value="">— Не назначен —</option>
+                  {users.map((u) => (
+                    <option key={u.id} value={u.id}>
+                      {u.displayName || u.username || `#${u.id}`}
+                    </option>
+                  ))}
+                </select>
               </div>
               <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: $.tx, paddingBottom: 8 }}>
                 <input

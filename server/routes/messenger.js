@@ -1211,7 +1211,7 @@ router.get("/users", requireAuth(), async (req, res) => {
     const users = await listUsers();
     const activeUsers = users
       .filter((u) => u.active !== false)
-      .map((u) => ({ id: u.id, username: u.username, role: u.role }))
+      .map((u) => ({ id: u.id, username: u.username, displayName: u.display_name || null, role: u.role }))
       .sort((a, b) => a.username.localeCompare(b.username, "ru"));
     res.json({ users: activeUsers });
   } catch (e) {

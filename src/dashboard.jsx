@@ -217,6 +217,7 @@ export default function Dashboard() {
     <JournalSection
       clientId={currentClient.id}
       stages={currentClient.stages || []}
+      currentStageId={currentStage?.id}
       readOnly={!canWriteSection("journal")}
       onChanged={reloadJournalBadges}
     />

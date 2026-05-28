@@ -21,7 +21,6 @@ import {
   parseLabOrderMarkersText,
   serializeLabOrderItemPayload
 } from "../utils/labOrderUtils";
-import AdminJournalTemplatePanel from "./AdminJournalTemplatePanel";
 
 const ALL_SECTIONS = ['overview','questionnaire','nutrition','menu','protocol','injections','analytics','lab','journal'];
 const SECTION_LABELS = { overview:'Обзор', questionnaire:'Анкета', nutrition:'Питание', menu:'Меню', protocol:'Протокол', injections:'Инъекции', analytics:'Анализы', lab:'Направление', journal:'Журнал' };
@@ -1197,7 +1196,6 @@ export default function AdminSection() {
               {[
                 { id: "deficit_preset", label: "Пресеты дефицитов" },
                 { id: "lab_order_item", label: "Анализы на направление" },
-                { id: "journal_template", label: "Шаблон журнала" },
               ].map(t => (
                 <Button
                   key={t.id}
@@ -1412,9 +1410,6 @@ export default function AdminSection() {
                 </datalist>
               )}
             </Card>
-            {refSubTab === "journal_template" && (
-              <AdminJournalTemplatePanel />
-            )}
           </Wrapper>
         )}
 

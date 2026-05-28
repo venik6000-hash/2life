@@ -1,4 +1,4 @@
-const { pool, JOURNAL_DEFAULT_TEMPLATE_TITLES } = require("./db");
+const { pool } = require("./db");
 
 const OPEN_STATUSES = new Set(["open", "in_progress", "waiting_client"]);
 const TERMINAL_STATUSES = new Set(["done", "cancelled"]);
@@ -32,6 +32,20 @@ const toTimeOrNull = (value) => {
   return /^\d{2}:\d{2}$/.test(raw) ? raw : null;
 };
 
+// pg returns DATE columns as JS Date objects (local midnight); String(date)
+// yields "Wed May 28 2026 ..." which is not ISO. Normalize to YYYY-MM-DD.
+const toIsoDateString = (value) => {
+  if (!value) return "";
+  if (value instanceof Date) {
+    const y = value.getFullYear();
+    const m = String(value.getMonth() + 1).padStart(2, "0");
+    const d = String(value.getDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  }
+  const match = String(value).match(/^(\d{4}-\d{2}-\d{2})/);
+  return match ? match[1] : "";
+};
+
 const parseJson = (value, fallback) => {
   try { return JSON.parse(value || ""); } catch (_) { return fallback; }
 };
@@ -44,7 +58,7 @@ const rowToItem = (row, comments = []) => ({
   title: row.title,
   description: row.description,
   status: row.status,
-  dueDate: row.due_date ? String(row.due_date).slice(0, 10) : "",
+  dueDate: toIsoDateString(row.due_date),
   dueTime: row.due_time ? String(row.due_time).slice(0, 5) : "",
   assigneeUserId: row.assignee_user_id,
   isTeamTask: !!row.is_team_task,
@@ -54,7 +68,6 @@ const rowToItem = (row, comments = []) => ({
   updatedAt: row.updated_at,
   completedAt: row.completed_at,
   cancelledAt: row.cancelled_at,
-  sourceTemplateItemId: row.source_template_item_id,
   metadata: parseJson(row.metadata_json, {}),
   comments,
 });
@@ -87,27 +100,9 @@ const normalizeItemInput = (payload) => {
     assigneeUserId: toIntOrNull(payload.assigneeUserId),
     isTeamTask: payload.assigneeUserId ? false : payload.isTeamTask !== false,
     priority: toCleanString(payload.priority || "normal"),
-    sourceTemplateItemId: toIntOrNull(payload.sourceTemplateItemId),
     metadata: payload.metadata && typeof payload.metadata === "object" && !Array.isArray(payload.metadata) ? payload.metadata : {},
   };
 };
-
-async function listJournalTemplateItems({ includeInactive = false } = {}) {
-  const res = await pool.query(
-    `SELECT * FROM journal_checklist_template_items
-     WHERE ($1::boolean = true OR active = true)
-     ORDER BY sort_order, id`,
-    [!!includeInactive]
-  );
-  return res.rows.map((row) => ({
-    id: row.id,
-    title: row.title,
-    sortOrder: row.sort_order,
-    active: !!row.active,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  }));
-}
 
 async function createJournalItem(payload) {
   const item = normalizeItemInput(payload);
@@ -115,8 +110,8 @@ async function createJournalItem(payload) {
   const res = await pool.query(
     `INSERT INTO journal_items
       (client_id, stage_id, type, title, description, status, due_date, due_time,
-       assignee_user_id, is_team_task, priority, created_by, source_template_item_id, metadata_json)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+       assignee_user_id, is_team_task, priority, created_by, metadata_json)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
      RETURNING *`,
     [
       payload.clientId,
@@ -131,7 +126,6 @@ async function createJournalItem(payload) {
       item.isTeamTask,
       item.priority,
       toIntOrNull(payload.createdBy),
-      item.sourceTemplateItemId,
       JSON.stringify(item.metadata),
     ]
   );
@@ -324,70 +318,7 @@ async function createJournalComment({ journalItemId, authorUserId, body }) {
   return rowToComment(res.rows[0]);
 }
 
-async function upsertJournalTemplateItem({ id, title, sortOrder = 0, active = true }) {
-  const cleanTitle = toCleanString(title);
-  if (!cleanTitle) throw new Error("JOURNAL_TEMPLATE_TITLE_REQUIRED");
-  if (id) {
-    const res = await pool.query(
-      `UPDATE journal_checklist_template_items
-       SET title=$2, sort_order=$3, active=$4, updated_at=now()
-       WHERE id=$1 RETURNING *`,
-      [toIntOrNull(id), cleanTitle, Number(sortOrder) || 0, !!active]
-    );
-    return res.rows[0];
-  }
-  const res = await pool.query(
-    `INSERT INTO journal_checklist_template_items (title, sort_order, active)
-     VALUES ($1,$2,$3) RETURNING *`,
-    [cleanTitle, Number(sortOrder) || 0, !!active]
-  );
-  return res.rows[0];
-}
-
-async function deleteJournalTemplateItem(id) {
-  await pool.query("UPDATE journal_checklist_template_items SET active=false, updated_at=now() WHERE id=$1", [toIntOrNull(id)]);
-}
-
-async function initializeStageChecklist({ clientId, stageId, createdBy }) {
-  const dbStageId = await resolveStageDbId(clientId, stageId);
-  if (!dbStageId) throw new Error("JOURNAL_STAGE_NOT_FOUND");
-  const template = await listJournalTemplateItems({ includeInactive: false });
-  let created = 0;
-  for (const item of template) {
-    const exists = await pool.query(
-      `SELECT 1 FROM journal_items
-       WHERE client_id=$1 AND stage_id=$2 AND source_template_item_id=$3 AND deleted_at IS NULL
-       LIMIT 1`,
-      [clientId, dbStageId, item.id]
-    );
-    if (exists.rows[0]) continue;
-    await createJournalItem({
-      clientId,
-      stageId,
-      type: "task",
-      title: item.title,
-      description: "",
-      status: "open",
-      dueDate: "",
-      dueTime: "",
-      assigneeUserId: null,
-      isTeamTask: true,
-      priority: "normal",
-      createdBy,
-      sourceTemplateItemId: item.id,
-      metadata: { checklist: true },
-    });
-    created += 1;
-  }
-  return { created };
-}
-
 module.exports = {
-  JOURNAL_DEFAULT_TEMPLATE_TITLES,
-  listJournalTemplateItems,
-  upsertJournalTemplateItem,
-  deleteJournalTemplateItem,
-  initializeStageChecklist,
   createJournalItem,
   listJournalItems,
   countJournalBadgesForUser,

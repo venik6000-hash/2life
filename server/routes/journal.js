@@ -10,10 +10,6 @@ const {
   softDeleteJournalItem,
   createJournalComment,
   countJournalBadgesForUser,
-  listJournalTemplateItems,
-  upsertJournalTemplateItem,
-  deleteJournalTemplateItem,
-  initializeStageChecklist,
 } = require("../services/journalStore");
 const { canAccessClient } = require("../services/clientAccess");
 
@@ -104,59 +100,6 @@ router.get("/journal/badges", requireAuth(), requireSectionRead("journal"), asyn
     const badges = await countJournalBadgesForUser({ userId: req.user.id, role: req.user.role, today: todayIso() });
     res.json({ ok: true, badges });
   } catch (e) {
-    res.status(500).json({ error: "Внутренняя ошибка сервера" });
-  }
-});
-
-router.get("/admin/journal/checklist-template", requireAuth("admin"), async (_req, res) => {
-  try {
-    const items = await listJournalTemplateItems({ includeInactive: true });
-    res.json({ ok: true, items });
-  } catch (e) {
-    res.status(500).json({ error: "Внутренняя ошибка сервера" });
-  }
-});
-
-router.post("/admin/journal/checklist-template", requireAuth("admin"), async (req, res) => {
-  try {
-    const item = await upsertJournalTemplateItem(req.body || {});
-    res.json({ ok: true, item });
-  } catch (e) {
-    res.status(400).json({ error: e.message || "Некорректный пункт шаблона" });
-  }
-});
-
-router.patch("/admin/journal/checklist-template/:id", requireAuth("admin"), async (req, res) => {
-  try {
-    const item = await upsertJournalTemplateItem({ ...req.body, id: Number(req.params.id) });
-    res.json({ ok: true, item });
-  } catch (e) {
-    res.status(400).json({ error: e.message || "Некорректный пункт шаблона" });
-  }
-});
-
-router.delete("/admin/journal/checklist-template/:id", requireAuth("admin"), async (req, res) => {
-  try {
-    await deleteJournalTemplateItem(Number(req.params.id));
-    res.json({ ok: true });
-  } catch (e) {
-    res.status(500).json({ error: "Внутренняя ошибка сервера" });
-  }
-});
-
-router.post("/clients/:clientId/journal/stages/:stageId/checklist/initialize", requireAuth(), requireSectionWrite("journal"), async (req, res) => {
-  try {
-    if (!(await assertClientAccess(req, res))) return;
-    const result = await initializeStageChecklist({
-      clientId: req.params.clientId,
-      stageId: Number(req.params.stageId),
-      createdBy: req.user.id,
-    });
-    res.json({ ok: true, ...result });
-  } catch (e) {
-    if (e.message === "JOURNAL_STAGE_NOT_FOUND") {
-      return res.status(404).json({ error: "Этап не найден" });
-    }
     res.status(500).json({ error: "Внутренняя ошибка сервера" });
   }
 });

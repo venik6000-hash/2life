@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Execution status (2026-05-28):** Implemented via subagent-driven-development on `main`. All code and automated-verification steps are ticked and passing: `npm run build`, `verify:journal-rules`, `verify:journal-kanban-static`, `verify:journal-frontend-static` all green; final code review found zero defects. Intentionally **left unticked** (not performed): every `Commit` step (commits waived by request — work stays on the working tree), the server `smoke:journal-store` + `verify:journal-api` steps and the psql DB-residue check (no local Postgres available), and the Task 13 Step 3 manual UAT checklist (requires a running app + DB). Server changes were syntax-checked (`node --check`) and code-reviewed instead.
+
 **Goal:** Replace the stacked Current/Checklist/Feed journal panels with a 4-column Kanban board (statuses), compact card with native HTML5 D&D, inline comments popup, and a separate collapsed notes feed. Remove the checklist subsystem from frontend and backend; drop the related table and column from the local DB.
 
 **Architecture:** Frontend-only redesign of `src/sections/Journal.jsx` and its components. New presentational components (`JournalSummary`, `JournalBoard`, `JournalColumn`, `JournalCard`, `JournalCommentsPopup`, `JournalNotesPanel`) replace four removed ones (`JournalCurrentPanel`, `JournalChecklistPanel`, `JournalFeed`, `JournalItemCard`). Existing API (`journalApi.js`), rules (`journalRules.js`), and editor (`JournalItemEditor.jsx`) are reused with small additive changes (new helpers, new optional `initialStatus` prop). Checklist code, routes, and schema are deleted in a single late task; production has none of it (`origin/main` verified 2026-05-28).
@@ -69,7 +71,7 @@ Secondary signals:
 - Modify: `src/utils/journalRules.js`
 - Modify: `scripts/verifyJournalRules.mjs`
 
-- [ ] **Step 1: Add failing assertions to the rules verifier**
+- [x] **Step 1: Add failing assertions to the rules verifier**
 
 In `scripts/verifyJournalRules.mjs`, update the existing top import to include the new names. The current import is:
 
@@ -138,7 +140,7 @@ assert.equal(matchesAssigneeFilter({ assigneeUserId: 8, isTeamTask: false }, "mi
 assert.equal(matchesAssigneeFilter({ assigneeUserId: 8, isTeamTask: false }, "all", 7), true);
 ```
 
-- [ ] **Step 2: Run verifier to confirm failure**
+- [x] **Step 2: Run verifier to confirm failure**
 
 ```bash
 PATH="/opt/homebrew/bin:$HOME/.bun/bin:$PATH" npm run verify:journal-rules
@@ -146,7 +148,7 @@ PATH="/opt/homebrew/bin:$HOME/.bun/bin:$PATH" npm run verify:journal-rules
 
 Expected: fail because `BOARD_STATUSES`, `isOnBoard`, `isInNotesPanel`, `summarizeJournalItems`, `matchesAssigneeFilter` are not exported.
 
-- [ ] **Step 3: Implement the helpers**
+- [x] **Step 3: Implement the helpers**
 
 In `src/utils/journalRules.js`, append at the bottom (after `compareJournalDueAsc`):
 
@@ -198,7 +200,7 @@ export const matchesAssigneeFilter = (item, mode, userId) => {
 };
 ```
 
-- [ ] **Step 4: Re-run verifier**
+- [x] **Step 4: Re-run verifier**
 
 ```bash
 PATH="/opt/homebrew/bin:$HOME/.bun/bin:$PATH" npm run verify:journal-rules
@@ -220,7 +222,7 @@ git commit -m "feat: add journal board predicates and summary helpers"
 **Files:**
 - Modify: `src/components/JournalItemEditor.jsx`
 
-- [ ] **Step 1: Accept and use the new prop**
+- [x] **Step 1: Accept and use the new prop**
 
 In `src/components/JournalItemEditor.jsx`, change the component signature:
 
@@ -259,7 +261,7 @@ Update the `useMemo` dependency array to include `initialStatus`:
   }, [item, initialType, initialStageId, initialStatus]);
 ```
 
-- [ ] **Step 2: Smoke-build to confirm no syntax errors**
+- [x] **Step 2: Smoke-build to confirm no syntax errors**
 
 ```bash
 PATH="/opt/homebrew/bin:$HOME/.bun/bin:$PATH" npm run build
@@ -281,7 +283,7 @@ git commit -m "feat: accept initialStatus in JournalItemEditor"
 **Files:**
 - Create: `src/components/JournalSummary.jsx`
 
-- [ ] **Step 1: Write the component**
+- [x] **Step 1: Write the component**
 
 Create `src/components/JournalSummary.jsx`:
 
@@ -341,7 +343,7 @@ git commit -m "feat: add JournalSummary component"
 **Files:**
 - Create: `src/components/JournalCommentsPopup.jsx`
 
-- [ ] **Step 1: Write the component**
+- [x] **Step 1: Write the component**
 
 Create `src/components/JournalCommentsPopup.jsx`:
 
@@ -526,7 +528,7 @@ git commit -m "feat: add JournalCommentsPopup component"
 **Files:**
 - Create: `src/components/JournalCard.jsx`
 
-- [ ] **Step 1: Write the component**
+- [x] **Step 1: Write the component**
 
 Create `src/components/JournalCard.jsx`:
 
@@ -825,7 +827,7 @@ git commit -m "feat: add JournalCard component"
 **Files:**
 - Create: `src/components/JournalColumn.jsx`
 
-- [ ] **Step 1: Write the component**
+- [x] **Step 1: Write the component**
 
 Create `src/components/JournalColumn.jsx`:
 
@@ -971,7 +973,7 @@ git commit -m "feat: add JournalColumn component"
 **Files:**
 - Create: `src/components/JournalBoard.jsx`
 
-- [ ] **Step 1: Write the component**
+- [x] **Step 1: Write the component**
 
 Create `src/components/JournalBoard.jsx`:
 
@@ -1171,7 +1173,7 @@ git commit -m "feat: add JournalBoard component"
 **Files:**
 - Create: `src/components/JournalNotesPanel.jsx`
 
-- [ ] **Step 1: Write the component**
+- [x] **Step 1: Write the component**
 
 Create `src/components/JournalNotesPanel.jsx`:
 
@@ -1350,7 +1352,7 @@ git commit -m "feat: add JournalNotesPanel component"
 **Files:**
 - Modify: `src/sections/Journal.jsx`
 
-- [ ] **Step 1: Replace the file contents**
+- [x] **Step 1: Replace the file contents**
 
 Replace the entire contents of `src/sections/Journal.jsx` with:
 
@@ -1538,7 +1540,7 @@ export default function JournalSection({ clientId, stages = [], readOnly = false
 }
 ```
 
-- [ ] **Step 2: Build to verify imports**
+- [x] **Step 2: Build to verify imports**
 
 ```bash
 PATH="/opt/homebrew/bin:$HOME/.bun/bin:$PATH" npm run build
@@ -1561,7 +1563,7 @@ git commit -m "feat: rewrite Journal section to drive Kanban board"
 - Create: `scripts/verifyJournalKanbanStatic.mjs`
 - Modify: `package.json`
 
-- [ ] **Step 1: Create the verifier**
+- [x] **Step 1: Create the verifier**
 
 Create `scripts/verifyJournalKanbanStatic.mjs`:
 
@@ -1635,7 +1637,7 @@ assert.doesNotMatch(api, /deleteJournalTemplateItem/);
 console.log("journal kanban static ok");
 ```
 
-- [ ] **Step 2: Register the script**
+- [x] **Step 2: Register the script**
 
 In `package.json`, find the existing `"verify:journal-frontend-static"` line and add directly after it:
 
@@ -1649,7 +1651,7 @@ Remove this line entirely (in the same edit):
     "verify:journal-checklist": "node scripts/verifyJournalChecklist.mjs",
 ```
 
-- [ ] **Step 3: Run the verifier; expect failure (Tasks 11/12 not done yet)**
+- [x] **Step 3: Run the verifier; expect failure (Tasks 11/12 not done yet)**
 
 ```bash
 PATH="/opt/homebrew/bin:$HOME/.bun/bin:$PATH" npm run verify:journal-kanban-static
@@ -1679,7 +1681,7 @@ git commit -m "feat: add journal-kanban static verifier and drop checklist scrip
 - Modify: `src/components/AdminSectionPanel.jsx`
 - Modify: `src/utils/journalApi.js`
 
-- [ ] **Step 1: Delete the obsolete files**
+- [x] **Step 1: Delete the obsolete files**
 
 Run:
 
@@ -1693,14 +1695,14 @@ git rm src/components/JournalCurrentPanel.jsx \
   scripts/verifyJournalChecklist.mjs
 ```
 
-- [ ] **Step 2: Remove admin panel import and usage**
+- [x] **Step 2: Remove admin panel import and usage**
 
 In `src/components/AdminSectionPanel.jsx`:
 
 1. Delete the line `import AdminJournalTemplatePanel from "./AdminJournalTemplatePanel";` (around line 24).
 2. Delete the JSX element `<AdminJournalTemplatePanel />` (around line 1416). If it sits inside a wrapping `<>...</>` or `<div>` that now becomes empty/redundant, leave the wrapper in place — do not restructure adjacent admin sections.
 
-- [ ] **Step 3: Strip checklist helpers from journalApi**
+- [x] **Step 3: Strip checklist helpers from journalApi**
 
 In `src/utils/journalApi.js`, delete the following exported helpers entirely:
 
@@ -1714,7 +1716,7 @@ export const deleteJournalTemplateItem = ...
 
 Keep `fetchJournal`, `createJournalItem`, `updateJournalItem`, `deleteJournalItem`, `createJournalComment`, `fetchJournalBadges`.
 
-- [ ] **Step 4: Verify frontend build and static checks**
+- [x] **Step 4: Verify frontend build and static checks**
 
 ```bash
 PATH="/opt/homebrew/bin:$HOME/.bun/bin:$PATH" npm run build
@@ -1745,7 +1747,7 @@ git commit -m "chore: remove obsolete journal frontend components and checklist 
 - Modify: `server/services/journalStore.js`
 - Modify: `server/routes/journal.js`
 
-- [ ] **Step 1: Strip the checklist routes**
+- [x] **Step 1: Strip the checklist routes**
 
 In `server/routes/journal.js`, delete all four checklist routes:
 
@@ -1764,7 +1766,7 @@ Remove the now-unused imports at the top of the file:
   initializeStageChecklist,
 ```
 
-- [ ] **Step 2: Strip the store**
+- [x] **Step 2: Strip the store**
 
 In `server/services/journalStore.js`:
 
@@ -1831,7 +1833,7 @@ module.exports = {
 };
 ```
 
-- [ ] **Step 3: Strip checklist schema from `initSchema` and add one-time drop migration**
+- [x] **Step 3: Strip checklist schema from `initSchema` and add one-time drop migration**
 
 In `server/services/db.js`:
 
@@ -1909,7 +1911,7 @@ git commit -m "chore: remove journal checklist subsystem from server"
 
 **Files:** (none modified)
 
-- [ ] **Step 1: Full build**
+- [x] **Step 1: Full build**
 
 ```bash
 PATH="/opt/homebrew/bin:$HOME/.bun/bin:$PATH" npm run build
@@ -1917,7 +1919,7 @@ PATH="/opt/homebrew/bin:$HOME/.bun/bin:$PATH" npm run build
 
 Expected: build succeeds with no errors.
 
-- [ ] **Step 2: All journal verifiers**
+- [x] **Step 2: All journal verifiers**
 
 ```bash
 PATH="/opt/homebrew/bin:$HOME/.bun/bin:$PATH" npm run verify:journal-rules
