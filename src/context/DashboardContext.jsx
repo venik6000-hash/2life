@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { calculateBmiValue } from "../utils/helpers";
 import { useAuth } from "./AuthContext";
+import { fetchJournalBadges } from "../utils/journalApi";
 
 export const SECTIONS = [
   {id:"overview",ic:"◉",lb:"Обзор"},{id:"questionnaire",ic:"📋",lb:"Анкета"},
@@ -146,6 +147,7 @@ export function DashboardProvider({ children }) {
   const [deficitPresets, setDeficitPresets] = useState([]);
   const [labOrderTemplates, setLabOrderTemplates] = useState([]);
   const [loaded, setLoaded] = useState(false);
+  const [journalBadges, setJournalBadges] = useState({});
 
   const isAdmin = useMemo(() => !!(permissions?.isAdmin || user?.role === "admin"), [permissions, user?.role]);
   const canReadSection = useCallback((sectionId) => {
@@ -170,6 +172,21 @@ export function DashboardProvider({ children }) {
     () => sec === "admin" ? isAdmin : canWriteSection(sec),
     [canWriteSection, sec, isAdmin]
   );
+
+  const reloadJournalBadges = useCallback(async () => {
+    if (!canReadSection("journal")) {
+      setJournalBadges({});
+      return {};
+    }
+    try {
+      const data = await fetchJournalBadges(authFetch);
+      const badges = data?.badges && typeof data.badges === "object" ? data.badges : {};
+      setJournalBadges(badges);
+      return badges;
+    } catch (_) {
+      return {};
+    }
+  }, [authFetch, canReadSection]);
 
   const normalizeDoctors = useCallback((items = []) => {
     const byKey = new Map();
@@ -312,6 +329,10 @@ export function DashboardProvider({ children }) {
     window.addEventListener("doctors-changed", handleDoctorsChanged);
     return () => window.removeEventListener("doctors-changed", handleDoctorsChanged);
   }, [reloadDoctors]);
+
+  useEffect(() => {
+    reloadJournalBadges();
+  }, [reloadJournalBadges, cid]);
 
   // Track which client IDs were modified (for granular saves)
   const dirtyClientsRef = useRef(new Set());
@@ -743,6 +764,7 @@ export function DashboardProvider({ children }) {
     canCreateClient, canDeleteClient, canImportData, isAdmin,
     cl, st, stageProfile, autoBmiValue,
     uC, uS, updateClientName, renameClientById, removeStage, removeClient, createClient, importStageExcel,
+    journalBadges, reloadJournalBadges,
   }), [
     cls, cid, si, sec, so, pk, md, pri, nri,
     doctors, deficitPresets, labOrderTemplates, loaded,
@@ -750,6 +772,7 @@ export function DashboardProvider({ children }) {
     canCreateClient, canDeleteClient, canImportData, isAdmin,
     cl, st, stageProfile, autoBmiValue,
     uC, uS, updateClientName, renameClientById, removeStage, removeClient, createClient, importStageExcel,
+    journalBadges, reloadJournalBadges,
   ]);
 
   return (

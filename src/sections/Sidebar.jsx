@@ -12,7 +12,7 @@ import SidebarStageList from "../components/SidebarStageList";
 export default function Sidebar() {
   const {
     so, setSo, pk, setPk, cls, cl, cid, si, setSi, sec, setSec, setCid, setPri, setMd, removeStage,
-    visibleSections, canCreateClient, canWriteSection, renameClientById,
+    visibleSections, canCreateClient, canWriteSection, renameClientById, journalBadges,
   } = useDashboard();
   const { user, logout } = useAuth();
   const [loggingOut, setLoggingOut] = useState(false);
@@ -69,6 +69,7 @@ export default function Sidebar() {
           activeClientId={cid}
           canRename={canRenameClients}
           canCreate={canCreateClient}
+          journalBadges={journalBadges}
           onToggle={() => setPk(!pk)}
           onSelectClient={handleSelectClient}
           onRenameClient={handleRenameClient}

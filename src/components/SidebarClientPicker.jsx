@@ -1,7 +1,8 @@
 import { useTheme } from "../context/ThemeContext";
 import ClientAvatar from "./ClientAvatar";
+import JournalBadge from "./JournalBadge";
 
-function SidebarClientMenuItem({ client, active, canRename, onSelect, onRename }) {
+function SidebarClientMenuItem({ client, active, canRename, badgeCount, onSelect, onRename }) {
   const { $ } = useTheme();
 
   return (
@@ -22,6 +23,7 @@ function SidebarClientMenuItem({ client, active, canRename, onSelect, onRename }
       <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
         {client.shortName || client.name}
       </span>
+      <JournalBadge count={badgeCount} />
       {canRename && (
         <button
           type="button"
@@ -53,6 +55,7 @@ export default function SidebarClientPicker({
   activeClientId,
   canRename,
   canCreate,
+  journalBadges = {},
   onToggle,
   onSelectClient,
   onRenameClient,
@@ -93,6 +96,7 @@ export default function SidebarClientPicker({
               client={item}
               active={item.id === activeClientId}
               canRename={canRename}
+              badgeCount={journalBadges[item.id] || 0}
               onSelect={onSelectClient}
               onRename={onRenameClient}
             />
