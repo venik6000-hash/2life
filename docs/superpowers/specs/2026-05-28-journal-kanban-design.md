@@ -137,7 +137,7 @@ Below the board, a collapsed `▸ Заметки · N` strip. Expanded:
 - Vertical flat list of notes (`type === "note"`), newest first.
 - Each row: `DD.MM · автор · текст` with stage tag if `stageId` set. Click row → opens editor for that note. Hover shows delete `×`.
 - Inline `[+ Добавить заметку]` button opens the editor in note mode (existing flow, `type=note`).
-- "Quote into task" is a row-level action `→ задача` that creates a new task on the board prefilled with `description = "<note text>"`, `stageId` matching the note, and writes back `metadata.quotedFromNoteId = note.id`. The note row gets a small 🔗 indicator when it has been quoted at least once.
+- "Quote into task" is a row-level action `→ задача` that creates a new task on the board prefilled with `description = "<note text>"`, `stageId` matching the note, and writes back `metadata.quotedFromNoteId = note.id`. The note row gets a small 🔗 indicator when it has been quoted at least once. **In scope for v1.**
 
 The notes panel is the only place notes are visible. They do not appear on the board, even after being checked off.
 
@@ -239,4 +239,4 @@ No new global CSS. All styles inline-on-component, consistent with the rest of t
 
 - D&D on touch screens: native HTML5 does not handle touch reliably. Acceptable for v1 (employees use desktop); the `⋯ Move to →` menu is the touch fallback.
 - The schema change (drop `source_template_item_id`, drop `journal_checklist_template_items`) is destructive but acceptable because prod has neither (origin/main verified 2026-05-28: no `journalStore` or related routes exist on remote).
-- "Quote into task" from notes is new behaviour. If it complicates the implementation, defer to v1.1.
+- The `metadata.quotedFromNoteId` link is one-way (task points to note). If later we want backlinks rendered on the note, add a `quotedTasks` lookup at load time.
