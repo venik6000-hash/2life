@@ -282,6 +282,13 @@ async function deleteJournalTemplateItem(id) {
 }
 
 async function initializeStageChecklist({ clientId, stageId, createdBy }) {
+  const stageId_ = toIntOrNull(stageId);
+  if (!stageId_) throw new Error("JOURNAL_STAGE_NOT_FOUND");
+  const stageCheck = await pool.query(
+    "SELECT 1 FROM stages WHERE id = $1 AND client_id = $2 LIMIT 1",
+    [stageId_, clientId]
+  );
+  if (!stageCheck.rows[0]) throw new Error("JOURNAL_STAGE_NOT_FOUND");
   const template = await listJournalTemplateItems({ includeInactive: false });
   let created = 0;
   for (const item of template) {

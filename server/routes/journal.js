@@ -154,6 +154,9 @@ router.post("/clients/:clientId/journal/stages/:stageId/checklist/initialize", r
     });
     res.json({ ok: true, ...result });
   } catch (e) {
+    if (e.message === "JOURNAL_STAGE_NOT_FOUND") {
+      return res.status(404).json({ error: "Этап не найден" });
+    }
     res.status(500).json({ error: "Внутренняя ошибка сервера" });
   }
 });
