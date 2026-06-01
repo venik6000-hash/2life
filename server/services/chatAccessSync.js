@@ -298,7 +298,7 @@ const syncUserChatAccessByClientPermissions = async (db, userId) => {
   const allowedClientIds = await getAllowedClientIdsForUser(db, safeUserId);
 
   const chatsRes = await db.query(
-    "SELECT id, client_id, created_by FROM chats ORDER BY id"
+    "SELECT id, client_id, created_by FROM chats WHERE client_id IS NOT NULL ORDER BY id"
   );
   const chats = chatsRes.rows;
 
