@@ -36,11 +36,21 @@ const journalRouter        = require("./routes/journal");
 const app  = express();
 const PORT = 3001;
 
+let appReady = false;
+
 app.use(cors({
   origin: process.env.CORS_ORIGIN || "http://localhost:3000",
   credentials: true,
 }));
 app.use(express.json({ limit: "50mb" }));
+
+// Health endpoint — always reachable, even before init completes
+app.get("/api/health", (req, res) => res.json({ ready: appReady, ts: Date.now() }));
+// Readiness gate — 503 until init done; placed before router mounts so it intercepts all /api/*
+app.use("/api", (req, res, next) => {
+  if (appReady) return next();
+  res.status(503).json({ error: "starting", message: "Сервис запускается, повторите запрос" });
+});
 
 app.use("/api", authRouter);
 app.use("/api", clientsRouter);
@@ -53,18 +63,21 @@ app.use("/api", analyticsFilesRouter);
 app.use("/api", journalRouter);
 
 async function start() {
+  // Bind listen early so the port is open during DB-wait/init (returns 503 until appReady flips)
+  const httpServer = app.listen(PORT, () => {
+    console.log(`2life API слушает (инициализация...): http://localhost:${PORT}`);
+  });
   await waitForDb();          // self-heal transient DB-not-ready; throws (→ fail loud) only if still unreachable after retries
   await initSchema();
   ensureDir(BACKUP_DIR);
   await initDefaultAdmin();
   await initDefaultRoles();
   await initDefaultDeficitPresets();
+  appReady = true;
+  console.log(`2life API готов: http://localhost:${PORT}`);
   const { initWebSocket } = require("./services/ws");
-  const httpServer = app.listen(PORT, () => {
-    console.log(`2life API запущен: http://localhost:${PORT}`);
-    startAutoBackup();
-  });
   initWebSocket(httpServer);
+  startAutoBackup();
   startJournalNotificationScheduler();
 }
 
