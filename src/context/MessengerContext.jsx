@@ -14,7 +14,8 @@ import {
   savePendingQueue,
 } from "../utils/messengerCache";
 
-const MessengerContext = createContext(null);
+const MessengerStateContext = createContext(null);
+const MessengerActionsContext = createContext(null);
 const CURSOR_KEY = "dash_messenger_sync_cursor";
 const FILE_IV_PLACEHOLDER = "server";
 const WS_RETRY_MS = 4000;
@@ -1231,20 +1232,38 @@ export function MessengerProvider({ children }) {
     syncMessengerRef.current?.();
   }, [ready]);
 
-  const contextValue = useMemo(() => ({
+  const stateValue = useMemo(() => ({
     ready,
     cryptoReady: ready,
     cryptoError,
     wsConnected,
     notificationStatus,
-    setNotificationStatus,
     chats,
     chatsLoaded,
     activeChatId,
-    setActiveChatId,
     messages,
     pendingQueue,
     syncCursor,
+    pinnedForAll,
+    pinnedForMe,
+    replyTargets,
+    selectionMode,
+    selectedIds,
+    fontSize,
+  }), [ready, cryptoError, wsConnected, notificationStatus, chats, chatsLoaded, activeChatId, messages, pendingQueue, syncCursor, pinnedForAll, pinnedForMe, replyTargets, selectionMode, selectedIds, fontSize]);
+
+  // NOTE: this value is NOT yet fully referentially stable. Five actions close over
+  // high-traffic volatile state and so appear in the dep array below: editMsg/forwardMsg
+  // (messages), bulkDelete (messages), flushPendingQueue (pendingQueue), syncMessenger
+  // (syncCursor). Until those are refactored to read state via refs, actionsValue
+  // re-identifies on most message/sync activity — so migrating a consumer to
+  // useMessengerActions() alone will NOT insulate it from message traffic yet. It DOES
+  // already insulate from low-frequency state (fontSize, selection, notificationStatus,
+  // wsConnected, cryptoError, replyTargets). Finish the ref refactor before relying on
+  // action-only stability (see plan Phase 6 Step 3).
+  const actionsValue = useMemo(() => ({
+    setNotificationStatus,
+    setActiveChatId,
     unlockCrypto,
     buildMessengerKeysForPassword,
     loadChats,
@@ -1273,12 +1292,6 @@ export function MessengerProvider({ children }) {
     unregisterDevice,
     enableNotifications,
     clearLocalCache,
-    pinnedForAll,
-    pinnedForMe,
-    replyTargets,
-    selectionMode,
-    selectedIds,
-    fontSize,
     pinForAll, unpinForAll, pinForMe, unpinForMe,
     loadPinnedForAll, loadPinnedForMe,
     setReplyTarget, clearReplyTarget,
@@ -1288,17 +1301,13 @@ export function MessengerProvider({ children }) {
     updateDisplayName, setFontSize,
     listDevices, revokeDevice,
   }), [
-    activeChatId,
     addParticipant,
     buildMessengerKeysForPassword,
     bulkDelete,
     bulkForward,
-    chats,
-    chatsLoaded,
     clearLocalCache,
     clearReplyTarget,
     createNewChat,
-    cryptoError,
     deleteMsg,
     downloadFile,
     downloadFiles,
@@ -1308,7 +1317,6 @@ export function MessengerProvider({ children }) {
     exitSelectionMode,
     fetchChatById,
     flushPendingQueue,
-    fontSize,
     forwardMsg,
     getFileUrl,
     listDevices,
@@ -1317,23 +1325,14 @@ export function MessengerProvider({ children }) {
     loadPinnedForAll,
     loadPinnedForMe,
     markRead,
-    messages,
-    notificationStatus,
-    pendingQueue,
     pinForAll,
     pinForMe,
-    pinnedForAll,
-    pinnedForMe,
     queuePendingMessage,
-    ready,
     registerDevice,
     removeParticipant,
-    replyTargets,
     revokeDevice,
     searchGlobal,
     searchInChat,
-    selectedIds,
-    selectionMode,
     sendFile,
     sendFiles,
     sendVoiceMessage,
@@ -1341,7 +1340,6 @@ export function MessengerProvider({ children }) {
     sendTyping,
     setFontSize,
     setReplyTarget,
-    syncCursor,
     syncMessenger,
     toggleSelection,
     unlockCrypto,
@@ -1350,14 +1348,24 @@ export function MessengerProvider({ children }) {
     unregisterDevice,
     updateChatSettings,
     updateDisplayName,
-    wsConnected,
   ]);
 
   return (
-    <MessengerContext.Provider value={contextValue}>
-      {children}
-    </MessengerContext.Provider>
+    <MessengerActionsContext.Provider value={actionsValue}>
+      <MessengerStateContext.Provider value={stateValue}>
+        {children}
+      </MessengerStateContext.Provider>
+    </MessengerActionsContext.Provider>
   );
 }
 
-export const useMessenger = () => useContext(MessengerContext);
+export const useMessengerState = () => useContext(MessengerStateContext);
+export const useMessengerActions = () => useContext(MessengerActionsContext);
+
+// Back-compat shim: merges state + actions so existing consumers keep the single-object API.
+// New/perf-sensitive consumers should migrate to useMessengerState()/useMessengerActions().
+export const useMessenger = () => {
+  const state = useContext(MessengerStateContext);
+  const actions = useContext(MessengerActionsContext);
+  return useMemo(() => ({ ...state, ...actions }), [state, actions]);
+};
