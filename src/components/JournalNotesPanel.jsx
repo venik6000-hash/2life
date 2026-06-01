@@ -24,6 +24,7 @@ export default function JournalNotesPanel({
   allItems = [],
   stages = [],
   readOnly = false,
+  usersById = {},
   onEditNote,
   onAddNote,
   onQuoteToTask,
@@ -100,7 +101,7 @@ export default function JournalNotesPanel({
                   {formatCreated(note.createdAt)}
                 </span>
                 <span style={{ fontSize: 11, color: $.txS, minWidth: 38 }}>
-                  #{note.createdBy || "—"}
+                  {usersById[note.createdBy]?.displayName || usersById[note.createdBy]?.username || `#${note.createdBy || "—"}`}
                 </span>
                 <div
                   onClick={() => onEditNote && onEditNote(note)}

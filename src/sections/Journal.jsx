@@ -198,6 +198,7 @@ export default function JournalSection({ clientId, stages = [], currentStageId, 
         allItems={items}
         stages={stages}
         readOnly={readOnly}
+        usersById={usersById}
         onEditNote={openEdit}
         onAddNote={handleAddNote}
         onQuoteToTask={handleQuoteToTask}
@@ -208,6 +209,7 @@ export default function JournalSection({ clientId, stages = [], currentStageId, 
           item={popupItem}
           anchorRect={commentPopup.anchorRect}
           readOnly={readOnly}
+          usersById={usersById}
           onClose={() => setCommentPopup(null)}
           onAddComment={addComment}
         />

@@ -35,6 +35,7 @@ export default function JournalCommentsPopup({
   readOnly = false,
   onClose,
   onAddComment,
+  usersById = {},
 }) {
   const { $ } = useTheme();
   const [text, setText] = useState("");
@@ -118,7 +119,7 @@ export default function JournalCommentsPopup({
             comments.map((c) => (
               <div key={c.id} style={{ display: "grid", gap: 2 }}>
                 <div style={{ color: $.txS, fontSize: 11 }}>
-                  #{c.authorUserId || "—"} · {formatStamp(c.createdAt)}
+                  {usersById[c.authorUserId]?.displayName || usersById[c.authorUserId]?.username || `#${c.authorUserId || "—"}`} · {formatStamp(c.createdAt)}
                 </div>
                 <div style={{ whiteSpace: "pre-wrap" }}>{c.body}</div>
               </div>
