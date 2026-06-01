@@ -456,6 +456,9 @@ const initSchema = async () => {
   }
   await pool.query(`DROP TABLE IF EXISTS journal_checklist_template_items`);
 
+  const { ensureMigrationsTable, runOnce } = require("./migrations");
+  await ensureMigrationsTable();
+
   // Forward-compatible column migrations
   const stageColsRes = await pool.query(
     `SELECT column_name FROM information_schema.columns WHERE table_name = 'stages'`
@@ -496,8 +499,11 @@ const initSchema = async () => {
   try { await pool.query("ALTER TABLE messages ADD COLUMN encrypted_text TEXT NOT NULL DEFAULT ''"); } catch (_) {}
   try { await pool.query("ALTER TABLE messages ADD COLUMN encrypted_meta TEXT NOT NULL DEFAULT ''"); } catch (_) {}
   try { await pool.query("ALTER TABLE messages ADD COLUMN client_message_id TEXT NOT NULL DEFAULT ''"); } catch (_) {}
-  try { await pool.query("UPDATE messages SET encrypted_text = ciphertext WHERE encrypted_text = '' AND NULLIF(ciphertext, '') IS NOT NULL"); } catch (_) {}
-  try { await pool.query("UPDATE messages SET encrypted_meta = iv WHERE encrypted_meta = '' AND NULLIF(iv, '') IS NOT NULL"); } catch (_) {}
+  // messages encrypted_text/meta migration
+  await runOnce("2026-05_messages_encrypted_columns", async (c) => {
+    await c.query("UPDATE messages SET encrypted_text = ciphertext WHERE encrypted_text = '' AND NULLIF(ciphertext, '') IS NOT NULL");
+    await c.query("UPDATE messages SET encrypted_meta = iv        WHERE encrypted_meta = '' AND NULLIF(iv, '') IS NOT NULL");
+  });
   try { await pool.query("ALTER TABLE messages ALTER COLUMN ciphertext DROP NOT NULL"); } catch (_) {}
   try { await pool.query("ALTER TABLE messages ALTER COLUMN iv DROP NOT NULL"); } catch (_) {}
   try { await pool.query("ALTER TABLE chats ADD COLUMN updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()"); } catch (_) {}
@@ -521,23 +527,16 @@ const initSchema = async () => {
   try { await pool.query("ALTER TABLE chats ADD COLUMN last_message_type TEXT"); } catch (_) {}
   try { await pool.query("ALTER TABLE chats ADD COLUMN last_message_encrypted_text TEXT"); } catch (_) {}
   try { await pool.query("CREATE INDEX IF NOT EXISTS idx_chats_last_message_at ON chats(last_message_at DESC NULLS LAST)"); } catch (_) {}
-  try {
-    await pool.query(`
-      UPDATE chats c
-      SET last_message_id = lm.id,
-          last_message_at = lm.created_at,
-          last_message_sender_id = lm.sender_id,
-          last_message_type = lm.msg_type,
+  // chats last-message backfill
+  await runOnce("2026-05_backfill_chats_last_message", async (c) => {
+    await c.query(`UPDATE chats c SET last_message_id = lm.id, last_message_at = lm.created_at,
+          last_message_sender_id = lm.sender_id, last_message_type = lm.msg_type,
           last_message_encrypted_text = lm.encrypted_text
-      FROM (
-        SELECT DISTINCT ON (chat_id) chat_id, id, created_at, sender_id, msg_type, encrypted_text
-        FROM messages
-        WHERE msg_type <> 'system' AND deleted_for_all = false
-        ORDER BY chat_id, id DESC
-      ) lm
-      WHERE c.id = lm.chat_id AND c.last_message_id IS NULL
-    `);
-  } catch (_) {}
+      FROM ( SELECT DISTINCT ON (chat_id) chat_id, id, created_at, sender_id, msg_type, encrypted_text
+        FROM messages WHERE msg_type <> 'system' AND deleted_for_all = false
+        ORDER BY chat_id, id DESC ) lm
+      WHERE c.id = lm.chat_id AND c.last_message_id IS NULL`);
+  });
   try { await pool.query("CREATE INDEX IF NOT EXISTS idx_msg_client_message ON messages(chat_id, client_message_id)"); } catch (_) {}
   try {
     await pool.query(
@@ -547,21 +546,11 @@ const initSchema = async () => {
     );
   } catch (_) {}
   try { await pool.query("ALTER TABLE chats ALTER COLUMN client_id DROP NOT NULL"); } catch (_) {}
-  try {
-    await pool.query(`
-      UPDATE chats
-      SET is_internal = true
-      WHERE client_id IS NULL
-    `);
-  } catch (_) {}
-  try {
-    await pool.query(`
-      UPDATE chats
-      SET is_internal = false
-      WHERE client_id IS NOT NULL
-        AND is_internal IS DISTINCT FROM false
-    `);
-  } catch (_) {}
+  // chats is_internal normalization (two UPDATEs)
+  await runOnce("2026-05_normalize_chats_is_internal", async (c) => {
+    await c.query("UPDATE chats SET is_internal = true  WHERE client_id IS NULL");
+    await c.query("UPDATE chats SET is_internal = false WHERE client_id IS NOT NULL AND is_internal IS DISTINCT FROM false");
+  });
 
   const chatParticipantColsRes = await pool.query(
     `SELECT column_name FROM information_schema.columns WHERE table_name = 'chat_participants'`
@@ -576,9 +565,9 @@ const initSchema = async () => {
     await pool.query("UPDATE roles SET display_name = 'Клиент' WHERE name IN ('viewer', 'client')");
   } catch (_) {}
 
-  try {
-    // Ensure every role has explicit messenger section permissions.
-    await pool.query(`
+  // Ensure every role has explicit messenger section permissions.
+  await runOnce("2026-05_role_sections_messenger", async (c) => {
+    await c.query(`
       INSERT INTO role_sections (role_id, section_id, can_read, can_write)
       SELECT r.id, 'messenger', true, true
       FROM roles r
@@ -589,11 +578,11 @@ const initSchema = async () => {
           AND rs.section_id = 'messenger'
       )
     `);
-  } catch (_) {}
+  });
 
-  try {
-    // Existing staff roles should see the new menu section after upgrade.
-    await pool.query(`
+  // Existing staff roles should see the new menu section after upgrade.
+  await runOnce("2026-05_role_sections_menu", async (c) => {
+    await c.query(`
       INSERT INTO role_sections (role_id, section_id, can_read, can_write)
       SELECT r.id, 'menu', true, CASE WHEN r.name = 'viewer' THEN false ELSE true END
       FROM roles r
@@ -604,7 +593,7 @@ const initSchema = async () => {
           AND rs.section_id = 'menu'
       )
     `);
-  } catch (_) {}
+  });
 
   // NOTE: Do NOT force-reset the client/viewer role's sections on startup.
   // The "messenger-only" default for the client role is seeded once during
@@ -677,8 +666,8 @@ const initSchema = async () => {
 
   // Additive: backfill role_sections for the 'journal' section on upgrades from
   // pre-journal deployments where existing roles never had a row inserted.
-  try {
-    await pool.query(`
+  await runOnce("2026-05_role_sections_journal", async (c) => {
+    await c.query(`
       INSERT INTO role_sections (role_id, section_id, can_read, can_write)
       SELECT r.id, 'journal',
         CASE WHEN r.name = 'viewer' THEN false ELSE true END,
@@ -689,19 +678,20 @@ const initSchema = async () => {
         WHERE rs.role_id = r.id AND rs.section_id = 'journal'
       )
     `);
-  } catch (_) {}
+  });
 
-  // Auto-migrate legacy journal_entries → journal_items on startup. Idempotent
-  // (NOT EXISTS subquery on metadata.legacy_journal_entry_id).
-  try {
+  // Auto-migrate legacy journal_entries → journal_items on startup.
+  // NOTE: backfillLegacyJournalEntries() writes via the shared `pool`, NOT the
+  // runOnce transaction client — so its INSERTs self-commit and are NOT rolled
+  // back if this runOnce later fails. Recording-once is still correct because
+  // the backfill is independently idempotent (its own NOT EXISTS guard on
+  // metadata.legacy_journal_entry_id); worst case on an unlucky crash is one
+  // redundant detection scan next boot, never lost or duplicated data.
+  await runOnce("2026-05_backfill_legacy_journal_entries", async () => {
     const { backfillLegacyJournalEntries } = require("./journalStore");
     const result = await backfillLegacyJournalEntries();
-    if (result?.migrated > 0) {
-      console.log(`[journal] backfilled ${result.migrated} legacy journal_entries → journal_items`);
-    }
-  } catch (error) {
-    console.warn("[journal] legacy backfill failed", error?.message || error);
-  }
+    if (result?.migrated > 0) console.log(`[journal] backfilled ${result.migrated} legacy entries`);
+  });
 
 };
 

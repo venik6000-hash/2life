@@ -11,6 +11,7 @@
     "smoke:messenger-contract": "node scripts/smokeMessengerContract.js",
     "smoke:journal-store": "node scripts/smokeJournalStore.js",
     "verify:journal-backfill": "node scripts/verifyJournalBackfill.js",
+    "verify:migrations": "node scripts/verifyMigrations.js",
     "start": "node index.js"
   },
   "dependencies": {
