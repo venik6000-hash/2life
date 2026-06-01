@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useEffect, useCallback } from "react";
 import { clearPendingPassword } from "../utils/cryptoSession";
-import { withNoStoreCache } from "../utils/fetchOptions";
+import { withNoStoreCache, TimeoutError } from "../utils/fetchOptions";
 
 const AuthContext = createContext(null);
 const TOKEN_KEY = "dash_token";
@@ -51,20 +51,21 @@ export function AuthProvider({ children }) {
 
   useEffect(() => {
     if (!token) { setChecking(false); return; }
-    fetch("/api/auth/me", withNoStoreCache({ headers: { Authorization: `Bearer ${token}`, "X-Messenger-Device-Id": getOrCreateDeviceId() } }))
-      .then(r => r.ok ? r.json() : Promise.reject())
+    const controller = (typeof AbortController !== "undefined") ? new AbortController() : null;
+    const timer = controller ? setTimeout(() => controller.abort(), 10000) : null;
+    fetch("/api/auth/me", withNoStoreCache({ headers: { Authorization: `Bearer ${token}`, "X-Messenger-Device-Id": getOrCreateDeviceId() }, signal: controller?.signal }))
+      .then(r => r.ok ? r.json() : Promise.reject(new Error("unauthorized")))
       .then(data => {
         setUser(data.user);
         try { localStorage.setItem(USER_KEY, JSON.stringify(data.user)); } catch (_) {}
         setPermissions(data.permissions);
       })
-      .catch(() => {
-        setToken(null);
-        setUser(null);
-        setPermissions(null);
-        clearSessionCache();
+      .catch((err) => {
+        if (err?.name === "AbortError") return; // timeout: keep cached session, just stop checking (finally runs)
+        // real failure (401/invalid): clear, as before
+        setToken(null); setUser(null); setPermissions(null); clearSessionCache();
       })
-      .finally(() => setChecking(false));
+      .finally(() => { if (timer) clearTimeout(timer); setChecking(false); });
   }, [token, clearSessionCache]);
 
   const login = useCallback(async (username, password) => {
@@ -119,10 +120,21 @@ export function AuthProvider({ children }) {
   }, []);
 
   const authFetch = useCallback(async (url, opts = {}) => {
-    const headers = { ...(opts.headers || {}) };
+    const { timeoutMs = 10000, headers: optHeaders, signal: optSignal, ...rest } = opts;
+    const headers = { ...(optHeaders || {}) };
     if (token) headers["Authorization"] = `Bearer ${token}`;
     headers["X-Messenger-Device-Id"] = getOrCreateDeviceId();
-    const res = await fetch(url, withNoStoreCache({ ...opts, headers }));
+    const controller = (timeoutMs > 0 && typeof AbortController !== "undefined" && !optSignal) ? new AbortController() : null;
+    const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+    let res;
+    try {
+      res = await fetch(url, withNoStoreCache({ ...rest, headers, signal: optSignal || controller?.signal }));
+    } catch (err) {
+      if (controller && err?.name === "AbortError") throw new TimeoutError(`Запрос превысил ${timeoutMs} мс`);
+      throw err;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
     // Если сервер сообщает, что наш токен отозван — мгновенно разлогиниваемся.
     if (res.status === 401 && token) {
       try {

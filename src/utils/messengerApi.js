@@ -60,6 +60,7 @@ export const MessengerApi = {
   uploadFile: (authFetch, chatId, form) => apiJson(authFetch, `/api/chats/${chatId}/files`, {
     method: "POST",
     body: form,
+    timeoutMs: 0, // uploads can be large; disable per-request timeout
   }),
   sync: (authFetch, cursor) => apiJson(
     authFetch,

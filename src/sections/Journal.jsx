@@ -176,7 +176,12 @@ export default function JournalSection({ clientId, stages = [], currentStageId, 
     : null;
 
   if (loading) return <div style={{ padding: 16 }}>Загрузка журнала...</div>;
-  if (error) return <div style={{ padding: 16, color: $.dn }}>{error}</div>;
+  if (error) return (
+    <div style={{ padding: 16 }}>
+      <div style={{ color: $.dn, marginBottom: 8 }}>{error}</div>
+      <button onClick={loadJournal} style={{ cursor: "pointer", padding: "4px 12px" }}>Повторить</button>
+    </div>
+  );
 
   return (
     <div style={{ display: "grid", gap: 12 }}>
