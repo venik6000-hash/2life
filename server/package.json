@@ -12,6 +12,7 @@
     "smoke:journal-store": "node scripts/smokeJournalStore.js",
     "verify:journal-backfill": "node scripts/verifyJournalBackfill.js",
     "verify:migrations": "node scripts/verifyMigrations.js",
+    "verify:permissions": "node scripts/verifyPermissions.js",
     "start": "node index.js"
   },
   "dependencies": {
