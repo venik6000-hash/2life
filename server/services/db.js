@@ -5,6 +5,12 @@ const pool = new Pool({
   connectionString: process.env.DATABASE_URL || "postgresql://postgres:postgres@localhost:5432/2life",
 });
 
+// pg emits 'error' on an IDLE pooled client dying out-of-band (Postgres restart,
+// network blip). Log and swallow it: without this listener the event would surface
+// as an uncaughtException (see server/index.js) and bounce the whole container for a
+// transient drop. The pool transparently reconnects on the next query.
+pool.on("error", (err) => console.error("[pg pool] idle client error:", err.message));
+
 const initSchema = async () => {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS users (

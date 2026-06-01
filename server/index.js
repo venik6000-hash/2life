@@ -8,6 +8,20 @@ const { ensureDir, BACKUP_DIR } = require("./services/storage");
 const { initDefaultAdmin, initDefaultRoles, initDefaultDeficitPresets } = require("./services/setup");
 
 const { startJournalNotificationScheduler } = require("./services/journalNotifications");
+const { waitForDb } = require("./services/waitForDb");
+
+// Intentional asymmetry — do NOT unify these:
+//  - unhandledRejection logs only: one orphaned request/WS/scheduler promise must
+//    not take the whole server down.
+//  - uncaughtException exits(1): the process may be in an unknown state, so let
+//    Docker `restart: unless-stopped` relaunch a clean one.
+process.on("unhandledRejection", (reason) => {
+  console.error("[unhandledRejection]", reason);
+});
+process.on("uncaughtException", (err) => {
+  console.error("[uncaughtException]", err);
+  process.exit(1);
+});
 
 const authRouter      = require("./routes/auth");
 const clientsRouter   = require("./routes/clients");
@@ -39,6 +53,7 @@ app.use("/api", analyticsFilesRouter);
 app.use("/api", journalRouter);
 
 async function start() {
+  await waitForDb();          // self-heal transient DB-not-ready; throws (→ fail loud) only if still unreachable after retries
   await initSchema();
   ensureDir(BACKUP_DIR);
   await initDefaultAdmin();
@@ -53,4 +68,7 @@ async function start() {
   startJournalNotificationScheduler();
 }
 
-start().catch(console.error);
+start().catch((err) => {
+  console.error("[startup] FATAL — server failed to initialize:", err);
+  process.exit(1); // non-zero exit → Docker `restart: unless-stopped` relaunches the container
+});
