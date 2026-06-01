@@ -731,10 +731,11 @@ const initSchema = async () => {
     } catch (_) {}
   }
 
-  // Backfill in case column existed but had nulls from legacy data.
-  try {
-    await pool.query("UPDATE messages SET deleted_for_all = false WHERE deleted_for_all IS NULL");
-  } catch (_) {}
+  // One-time backfill for any legacy NULLs (the column is NOT NULL DEFAULT false now,
+  // so this matches nothing on a reachable DB — behind runOnce so it isn't a per-boot scan).
+  await runOnce("2026-05_messages_deleted_for_all_notnull", async (c) => {
+    await c.query("UPDATE messages SET deleted_for_all = false WHERE deleted_for_all IS NULL");
+  });
 
   // ─── Sub-project A: messenger telegram-parity ───────────────────────────────
   try { await pool.query("ALTER TABLE messages ADD COLUMN pinned_at TIMESTAMPTZ"); } catch (_) {}
