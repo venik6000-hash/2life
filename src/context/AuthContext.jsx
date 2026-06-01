@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect, useCallback } from "react";
 import { clearPendingPassword } from "../utils/cryptoSession";
+import { withNoStoreCache } from "../utils/fetchOptions";
 
 const AuthContext = createContext(null);
 const TOKEN_KEY = "dash_token";
@@ -50,7 +51,7 @@ export function AuthProvider({ children }) {
 
   useEffect(() => {
     if (!token) { setChecking(false); return; }
-    fetch("/api/auth/me", { headers: { Authorization: `Bearer ${token}`, "X-Messenger-Device-Id": getOrCreateDeviceId() } })
+    fetch("/api/auth/me", withNoStoreCache({ headers: { Authorization: `Bearer ${token}`, "X-Messenger-Device-Id": getOrCreateDeviceId() } }))
       .then(r => r.ok ? r.json() : Promise.reject())
       .then(data => {
         setUser(data.user);
@@ -69,6 +70,7 @@ export function AuthProvider({ children }) {
   const login = useCallback(async (username, password) => {
     const res = await fetch("/api/auth/login", {
       method: "POST",
+      cache: "no-store",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ username, password })
     });
@@ -99,6 +101,7 @@ export function AuthProvider({ children }) {
     if (currentToken) {
       await fetch("/api/auth/logout", {
         method: "POST",
+        cache: "no-store",
         headers: { Authorization: `Bearer ${currentToken}` },
       }).catch(() => {}); // silent — клиент всё равно разлогинится
     }
@@ -119,7 +122,7 @@ export function AuthProvider({ children }) {
     const headers = { ...(opts.headers || {}) };
     if (token) headers["Authorization"] = `Bearer ${token}`;
     headers["X-Messenger-Device-Id"] = getOrCreateDeviceId();
-    const res = await fetch(url, { ...opts, headers });
+    const res = await fetch(url, withNoStoreCache({ ...opts, headers }));
     // Если сервер сообщает, что наш токен отозван — мгновенно разлогиниваемся.
     if (res.status === 401 && token) {
       try {

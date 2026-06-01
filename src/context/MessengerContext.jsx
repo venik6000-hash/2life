@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { useAuth } from "./AuthContext";
 import { MsgSocket } from "../utils/websocket";
 import { MessengerApi } from "../utils/messengerApi";
+import { shouldSyncMessengerInCurrentView } from "../utils/messengerRealtime";
 import { ensurePushSubscription, requestNotificationPermission } from "../utils/pushSubscription";
 import {
   clearMessengerCache,
@@ -597,7 +598,7 @@ export function MessengerProvider({ children }) {
       getTicket,
       onOpen: () => {
         setWsConnected(true);
-        syncMessengerRef.current?.();
+        if (shouldSyncMessengerInCurrentView()) syncMessengerRef.current?.();
       },
       onClose: () => setWsConnected(false),
       onMessage: handleWsEvent,
@@ -1226,6 +1227,7 @@ export function MessengerProvider({ children }) {
 
   useEffect(() => {
     if (!ready) return;
+    if (!shouldSyncMessengerInCurrentView()) return;
     syncMessengerRef.current?.();
   }, [ready]);
 

@@ -2,6 +2,7 @@ import { createContext, useContext, useState, useCallback, useRef, useEffect, us
 import { calculateBmiValue } from "../utils/helpers";
 import { useAuth } from "./AuthContext";
 import { fetchJournalBadges } from "../utils/journalApi";
+import { withTimeout } from "../utils/requestTimeout";
 
 export const SECTIONS = [
   {id:"overview",ic:"◉",lb:"Обзор"},{id:"questionnaire",ic:"📋",lb:"Анкета"},
@@ -17,6 +18,7 @@ export const isClientRole = (role) => {
 };
 
 const DashboardContext = createContext(null);
+const BOOTSTRAP_REQUEST_TIMEOUT_MS = 8000;
 
 const isPlainObject = (value) =>
   value != null &&
@@ -244,6 +246,13 @@ export function DashboardProvider({ children }) {
     return adminItems || [];
   }, [authFetch]);
 
+  const fetchJsonArray = useCallback(async (request) => {
+    const res = await request;
+    if (!res?.ok) return [];
+    const data = await res.json().catch(() => null);
+    return Array.isArray(data) ? data : [];
+  }, []);
+
   useEffect(()=>{ if(cid!==null) localStorage.setItem("dash_cid", cid); },[cid]);
   useEffect(()=>{ localStorage.setItem("dash_si", String(si)); },[si]);
   useEffect(()=>{ setNri(0); },[cid, si]);
@@ -256,39 +265,68 @@ export function DashboardProvider({ children }) {
   }, [sec, visibleSections]);
 
   useEffect(() => {
-    const deficitPresetsPromise = canReadSection("overview")
-      ? fetchReferenceItems("deficit_preset")
-      : Promise.resolve([]);
-    const labOrderPromise = canReadSection("lab")
-      ? fetchReferenceItems("lab_order_item")
-      : Promise.resolve([]);
+    let cancelled = false;
 
-    Promise.allSettled([
-      authFetch("/api/clients"),
-      authFetch("/api/doctors"),
-      deficitPresetsPromise,
-      labOrderPromise
-    ]).then(async ([clientsRes, doctorsRes, deficitPresetsRes, labOrderRes]) => {
-      if (clientsRes.status === "fulfilled") {
-        const data = await clientsRes.value.json();
-        if (data && data.length) {
-          setCls(data);
-          const saved = localStorage.getItem("dash_cid");
-          const exists = saved && data.find(c=>c.id===saved);
-          setCid(exists ? saved : data[0].id);
+    const applyClients = (data) => {
+      if (!Array.isArray(data) || data.length === 0) {
+        setCls([]);
+        return;
+      }
+      setCls(data);
+      const saved = localStorage.getItem("dash_cid");
+      const exists = saved && data.find(c => c.id === saved);
+      setCid(exists ? saved : data[0].id);
+    };
+
+    const loadOptionalData = async () => {
+      const deficitPresetsPromise = canReadSection("overview")
+        ? fetchReferenceItems("deficit_preset")
+        : Promise.resolve([]);
+      const labOrderPromise = canReadSection("lab")
+        ? fetchReferenceItems("lab_order_item")
+        : Promise.resolve([]);
+
+      const [doctorsList, deficitItems, labItems] = await Promise.all([
+        withTimeout(fetchJsonArray(authFetch("/api/doctors")).catch(() => []), [], BOOTSTRAP_REQUEST_TIMEOUT_MS),
+        withTimeout(deficitPresetsPromise, [], BOOTSTRAP_REQUEST_TIMEOUT_MS),
+        withTimeout(labOrderPromise, [], BOOTSTRAP_REQUEST_TIMEOUT_MS),
+      ]);
+
+      if (cancelled) return;
+      setDoctors(normalizeDoctors(doctorsList));
+      setDeficitPresets(deficitItems || []);
+      setLabOrderTemplates(labItems || []);
+    };
+
+    const loadInitialData = async () => {
+      try {
+        const clients = await withTimeout(
+          fetchJsonArray(authFetch("/api/clients")).catch(() => []),
+          [],
+          BOOTSTRAP_REQUEST_TIMEOUT_MS
+        );
+        if (cancelled) return;
+        applyClients(clients);
+      } finally {
+        if (!cancelled) setLoaded(true);
+      }
+
+      try {
+        await loadOptionalData();
+      } catch (_) {
+        if (!cancelled) {
+          setDoctors([]);
+          setDeficitPresets([]);
+          setLabOrderTemplates([]);
         }
       }
-      if (doctorsRes.status === "fulfilled") {
-        const list = await doctorsRes.value.json();
-        setDoctors(Array.isArray(list) ? normalizeDoctors(list) : []);
-      } else {
-        setDoctors([]);
-      }
-      if (deficitPresetsRes.status === "fulfilled") setDeficitPresets(deficitPresetsRes.value || []);
-      if (labOrderRes.status === "fulfilled") setLabOrderTemplates(labOrderRes.value || []);
-      setLoaded(true);
-    }).catch(() => setLoaded(true));
-  }, [authFetch, fetchReferenceItems, normalizeDoctors, canReadSection]);
+    };
+
+    loadInitialData().catch(() => {
+      if (!cancelled) setLoaded(true);
+    });
+    return () => { cancelled = true; };
+  }, [authFetch, fetchReferenceItems, fetchJsonArray, normalizeDoctors, canReadSection]);
 
   useEffect(() => {
     if (!loaded) return;
