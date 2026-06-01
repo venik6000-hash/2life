@@ -34,6 +34,11 @@ const { getDeviceJti } = require("../services/messengerStore");
 const { ensureDir } = require("../services/storage");
 
 const router = express.Router();
+
+function serverError(res, e) {
+  console.error("[messenger]", e);
+  res.status(500).json({ error: "Внутренняя ошибка сервера" });
+}
 const CHAT_ACCESS_SYNC_TTL_MS = Math.max(0, Number(process.env.CHAT_ACCESS_SYNC_TTL_MS || 5000));
 const userChatSyncCache = new Map(); // userId -> { syncedAt: number, inFlight: Promise|null }
 
@@ -176,7 +181,7 @@ router.get("/chats", requireAuth(), async (req, res) => {
 
     res.json({ chats: enriched });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    return serverError(res, e);
   }
 });
 
@@ -280,7 +285,7 @@ router.post("/chats", requireAuth(), async (req, res) => {
       }
     });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    return serverError(res, e);
   }
 });
 
@@ -298,7 +303,7 @@ router.get("/chats/:chatId", requireAuth(), async (req, res) => {
     const ownParticipant = participants.find((p) => p.user_id === req.user.id);
     res.json({ chat: { ...chat, is_pinned: !!ownParticipant?.is_pinned, participants, receipts } });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    return serverError(res, e);
   }
 });
 
@@ -366,7 +371,7 @@ router.patch("/chats/:chatId", requireAuth(), async (req, res) => {
     const ownParticipant = participants.find((p) => p.user_id === req.user.id);
     res.json({ chat: { ...nextChat, is_pinned: !!ownParticipant?.is_pinned, participants, receipts } });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    return serverError(res, e);
   }
 });
 
@@ -384,7 +389,7 @@ router.get("/chats/:chatId/messages", requireAuth(), async (req, res) => {
     const msgs = await getMessages(chatId, req.user.id, beforeId, limit);
     res.json({ messages: msgs.map(serializeMessage) });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    return serverError(res, e);
   }
 });
 
@@ -479,7 +484,7 @@ router.post("/chats/:chatId/messages", requireAuth(), async (req, res) => {
 
     res.json({ ok: true, message });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    return serverError(res, e);
   }
 });
 
@@ -526,7 +531,7 @@ router.patch("/chats/:chatId/messages/:messageId", requireAuth(), async (req, re
 
     res.json({ message });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    return serverError(res, e);
   }
 });
 
@@ -565,7 +570,7 @@ router.delete("/chats/:chatId/messages/:messageId", requireAuth(), async (req, r
 
     return res.status(400).json({ error: "Недопустимый scope. Используйте self или all" });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    return serverError(res, e);
   }
 });
 
@@ -602,7 +607,7 @@ router.post("/chats/:chatId/messages/:messageId/pin", requireAuth(), async (req,
 
     res.json({ ok: true, messageId, pinnedAt: pinned.pinned_at });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    return serverError(res, e);
   }
 });
 
@@ -623,7 +628,7 @@ router.delete("/chats/:chatId/messages/:messageId/pin", requireAuth(), async (re
 
     res.json({ ok: true, wasPinned: true });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    return serverError(res, e);
   }
 });
 
@@ -658,7 +663,7 @@ router.post("/chats/:chatId/messages/:messageId/pin-for-me", requireAuth(), asyn
     sendTo(req.user.id, { type: "personal_pin_added", chatId, messageId });
     res.json({ ok: true, messageId, pinnedAt: pinned?.pinned_at ?? null });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    return serverError(res, e);
   }
 });
 
@@ -678,7 +683,7 @@ router.delete("/chats/:chatId/messages/:messageId/pin-for-me", requireAuth(), as
     sendTo(req.user.id, { type: "personal_pin_removed", chatId, messageId });
     res.json({ ok: true, wasPinned: ok });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    return serverError(res, e);
   }
 });
 
@@ -735,7 +740,7 @@ router.post("/chats/:chatId/messages/bulk-delete", requireAuth(), async (req, re
 
     return res.status(400).json({ error: "Недопустимый scope" });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    return serverError(res, e);
   }
 });
 
@@ -804,7 +809,7 @@ router.post("/chats/:chatId/messages/bulk-forward", requireAuth(), async (req, r
 
     res.json({ ok: true, forwarded: forwarded.length, ids: forwarded.map((f) => f.messageId) });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    return serverError(res, e);
   }
 });
 
@@ -849,7 +854,7 @@ router.get("/chats/:chatId/messages/search", requireAuth(), async (req, res) => 
     }
     res.json({ matches, done: false, nextBefore });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    return serverError(res, e);
   }
 });
 
@@ -896,7 +901,7 @@ router.get("/messenger/search", requireAuth(), async (req, res) => {
     }
     res.json({ groups: Array.from(groupsMap.values()), done: false, nextBefore });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    return serverError(res, e);
   }
 });
 
@@ -908,7 +913,7 @@ router.get("/chats/:chatId/pinned", requireAuth(), async (req, res) => {
     const rows = await listPinnedForAll(chatId, PIN_FOR_ALL_LIMIT);
     res.json({ messages: rows.map(serializeMessage) });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    return serverError(res, e);
   }
 });
 
@@ -920,7 +925,7 @@ router.get("/chats/:chatId/pinned-for-me", requireAuth(), async (req, res) => {
     const rows = await listPinnedForUser(chatId, req.user.id, PIN_FOR_ME_LIMIT);
     res.json({ messages: rows.map(serializeMessage) });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    return serverError(res, e);
   }
 });
 
@@ -944,7 +949,7 @@ router.get("/chats/:chatId/messages/:messageId/readers", requireAuth(), async (r
     const readers = await getReadersForMessage(chatId, messageId);
     res.json({ readers });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    return serverError(res, e);
   }
 });
 
@@ -963,7 +968,7 @@ router.post("/chats/:chatId/read", requireAuth(), async (req, res) => {
 
     res.json({ ok: true });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    return serverError(res, e);
   }
 });
 
@@ -974,7 +979,7 @@ router.get("/messenger/sync", requireAuth(), async (req, res) => {
     const events = await listSyncEventsForUser(req.user.id, after);
     res.json({ ok: true, events, cursor: events.at(-1)?.id || after });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    return serverError(res, e);
   }
 });
 
@@ -1005,7 +1010,7 @@ router.post("/messenger/devices", requireAuth(), async (req, res) => {
     });
     res.json({ ok: true, deviceId: device.device_id });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    return serverError(res, e);
   }
 });
 
@@ -1015,7 +1020,7 @@ router.get("/messenger/devices", requireAuth(), async (req, res) => {
     const devices = await listMessengerDevicesForUser(pool, req.user.id);
     res.json({ devices });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    return serverError(res, e);
   }
 });
 
@@ -1034,7 +1039,7 @@ router.delete("/messenger/devices/:deviceId", requireAuth(), async (req, res) =>
     try { forceLogoutDevice(req.user.id, deviceId); } catch (_) {}
     res.json({ ok: true });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    return serverError(res, e);
   }
 });
 
@@ -1092,7 +1097,7 @@ router.post("/chats/:chatId/participants", requireAuth(), async (req, res) => {
 
     res.json({ participants });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    return serverError(res, e);
   }
 });
 
@@ -1137,7 +1142,7 @@ router.delete("/chats/:chatId/participants/:userId", requireAuth(), async (req, 
 
     res.json({ participants });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    return serverError(res, e);
   }
 });
 
@@ -1166,7 +1171,7 @@ router.post("/chats/:chatId/files", requireAuth(), upload.single("file"), async 
 
     res.json({ file: row });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    return serverError(res, e);
   }
 });
 
@@ -1197,7 +1202,7 @@ router.get("/chats/:chatId/files/:fileId", requireAuth(), async (req, res) => {
 
     res.send(plain);
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    return serverError(res, e);
   }
 });
 
@@ -1215,7 +1220,7 @@ router.get("/users", requireAuth(), async (req, res) => {
       .sort((a, b) => a.username.localeCompare(b.username, "ru"));
     res.json({ users: activeUsers });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    return serverError(res, e);
   }
 });
 
