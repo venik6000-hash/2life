@@ -48,6 +48,7 @@ router.get("/clients/:clientId/journal", requireAuth(), requireSectionRead("jour
     const items = await listJournalItems(req.params.clientId);
     res.json({ ok: true, items });
   } catch (e) {
+    console.error(e);
     res.status(500).json({ error: "Внутренняя ошибка сервера" });
   }
 });
@@ -80,6 +81,7 @@ router.delete("/clients/:clientId/journal/items/:itemId", requireAuth(), require
     await softDeleteJournalItem(Number(req.params.itemId), { deletedBy: req.user.id, reason: req.body?.reason || "" });
     res.json({ ok: true });
   } catch (e) {
+    console.error(e);
     res.status(500).json({ error: "Внутренняя ошибка сервера" });
   }
 });
@@ -100,6 +102,7 @@ router.get("/journal/badges", requireAuth(), requireSectionRead("journal"), asyn
     const badges = await countJournalBadgesForUser({ userId: req.user.id, role: req.user.role, today: todayIso() });
     res.json({ ok: true, badges });
   } catch (e) {
+    console.error(e);
     res.status(500).json({ error: "Внутренняя ошибка сервера" });
   }
 });
