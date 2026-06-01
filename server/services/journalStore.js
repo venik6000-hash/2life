@@ -223,6 +223,7 @@ async function listDueJournalReminders(nowIso) {
        AND ji.type IN ('task','event')
        AND ji.status IN ('open','in_progress','waiting_client')
        AND ji.due_date IS NOT NULL
+       AND ji.due_date <= $1::date
        AND ji.due_time IS NOT NULL
        AND ((ji.due_date::text || 'T' || ji.due_time::text)::timestamp <= $1::timestamp)
        AND (ji.is_team_task = true OR ji.assignee_user_id = u.id)
