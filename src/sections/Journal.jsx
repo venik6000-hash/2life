@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "../context/AuthContext";
 import { useTheme } from "../context/ThemeContext";
 import {
@@ -30,17 +30,21 @@ export default function JournalSection({ clientId, stages = [], currentStageId, 
   const [editor, setEditor] = useState(null);
   const [commentPopup, setCommentPopup] = useState(null);
 
+  const loadSeqRef = useRef(0);
   const loadJournal = async () => {
     if (!clientId) return;
+    const seq = ++loadSeqRef.current;
     setLoading(true);
     setError("");
     try {
       const data = await fetchJournal(authFetch, clientId);
+      if (seq !== loadSeqRef.current) return;            // a newer load started — discard this result
       setItems(Array.isArray(data.items) ? data.items : []);
     } catch (err) {
+      if (seq !== loadSeqRef.current) return;
       setError(err.message || "Не удалось загрузить журнал");
     } finally {
-      setLoading(false);
+      if (seq === loadSeqRef.current) setLoading(false);
     }
   };
 
@@ -75,16 +79,29 @@ export default function JournalSection({ clientId, stages = [], currentStageId, 
   const boardItems = useMemo(() => items.filter(isOnBoard), [items]);
   const noteItems = useMemo(() => items.filter(isInNotesPanel), [items]);
 
+  // Full reload + parent notify. Kept for paths that still need server truth
+  // (delete / comment / quote-to-task); save/move/drop patch state inline instead.
   const refreshAfterChange = async () => {
     await loadJournal();
     if (onChanged) await onChanged();
   };
 
   const saveItem = async (payload) => {
-    if (editor?.item?.id) await updateJournalItem(authFetch, clientId, editor.item.id, payload);
-    else await createJournalItem(authFetch, clientId, payload);
-    setEditor(null);
-    await refreshAfterChange();
+    try {
+      if (editor?.item?.id) {
+        const editId = editor.item.id;
+        const { item } = await updateJournalItem(authFetch, clientId, editId, payload);
+        if (!item) { await loadJournal(); setEditor(null); return; } // row vanished — resync to truth
+        setItems((prev) => prev.map((it) => (Number(it.id) === Number(editId) ? { ...item, comments: it.comments ?? [] } : it)));
+      } else {
+        const { item } = await createJournalItem(authFetch, clientId, payload);
+        if (item) setItems((prev) => [{ ...item, comments: [] }, ...prev]);
+      }
+      setEditor(null);
+      if (onChanged) await onChanged();
+    } catch (err) {
+      window.alert(err.message || "Не удалось сохранить запись");
+    }
   };
 
   const removeItem = async (item) => {
@@ -100,21 +117,26 @@ export default function JournalSection({ clientId, stages = [], currentStageId, 
 
   const handleMove = async (item, toStatus) => {
     if (!toStatus || toStatus === item.status) return;
-    await updateJournalItem(authFetch, clientId, item.id, { status: toStatus });
-    await refreshAfterChange();
+    try {
+      const { item: updated } = await updateJournalItem(authFetch, clientId, item.id, { status: toStatus });
+      if (!updated) { await loadJournal(); return; } // row vanished — resync to truth
+      setItems((prev) => prev.map((it) => (Number(it.id) === Number(item.id) ? { ...updated, comments: it.comments ?? [] } : it)));
+      if (onChanged) await onChanged();
+    } catch (err) {
+      window.alert(err.message || "Не удалось обновить запись");
+      await loadJournal();
+    }
   };
 
   const handleDrop = async ({ id, fromStatus, toStatus }) => {
     if (!id || fromStatus === toStatus) return;
-    // Optimistic update.
-    setItems((prev) =>
-      prev.map((it) => (Number(it.id) === Number(id) ? { ...it, status: toStatus } : it))
-    );
+    setItems((prev) => prev.map((it) => (Number(it.id) === Number(id) ? { ...it, status: toStatus } : it)));
     try {
-      await updateJournalItem(authFetch, clientId, id, { status: toStatus });
-      await refreshAfterChange();
+      const { item: updated } = await updateJournalItem(authFetch, clientId, id, { status: toStatus });
+      if (!updated) { await loadJournal(); return; } // row vanished — resync to truth
+      setItems((prev) => prev.map((it) => (Number(it.id) === Number(id) ? { ...updated, comments: it.comments ?? [] } : it)));
+      if (onChanged) await onChanged();
     } catch (err) {
-      // Rollback: full reload to get truth.
       window.alert(err.message || "Не удалось обновить статус");
       await loadJournal();
     }

@@ -279,21 +279,29 @@ async function updateJournalItem(itemId, payload) {
   const merged = normalizeItemInput({ ...current, ...payload, type: current.type });
   const completedAtSql = merged.status === "done" ? "COALESCE(completed_at, now())" : "completed_at";
   const cancelledAtSql = merged.status === "cancelled" ? "COALESCE(cancelled_at, now())" : "cancelled_at";
-  // Translate frontend stageId (stage_num) to db stages.id if caller supplied one;
-  // if payload omits stageId, preserve current.
-  const stageIdSrc = Object.prototype.hasOwnProperty.call(payload, "stageId") ? payload.stageId : current.stageId;
-  const dbStageId = await resolveStageDbId(current.clientId, stageIdSrc);
+  // current.stageId is already a stage_num (per rowToItem). Resolve the source stage_num:
+  const rawStageNum = Object.prototype.hasOwnProperty.call(payload, "stageId") ? payload.stageId : current.stageId;
+  // CRITICAL: match resolveStageDbId's coercion EXACTLY — 0 / null / "" / non-int all mean "no stage" (null),
+  // NOT a lookup of stage_num=0 (which the stages table CAN contain, since stage_num defaults to 0).
+  const stageNumParam = toIntOrNull(rawStageNum) || null;
   const res = await pool.query(
-    `UPDATE journal_items
-     SET title=$2, description=$3, status=$4, due_date=$5, due_time=$6,
-         assignee_user_id=$7, is_team_task=$8, priority=$9,
-         completed_at=${completedAtSql}, cancelled_at=${cancelledAtSql},
-         metadata_json=$10, stage_id=$11, updated_at=now()
-     WHERE id=$1 AND deleted_at IS NULL
-     RETURNING *`,
-    [itemId, merged.title, merged.description, merged.status, merged.dueDate, merged.dueTime, merged.assigneeUserId, merged.isTeamTask, merged.priority, JSON.stringify(merged.metadata), dbStageId]
+    `WITH upd AS (
+       UPDATE journal_items
+       SET title=$2, description=$3, status=$4, due_date=$5, due_time=$6,
+           assignee_user_id=$7, is_team_task=$8, priority=$9,
+           completed_at=${completedAtSql}, cancelled_at=${cancelledAtSql},
+           metadata_json=$10, updated_at=now(),
+           stage_id = (SELECT id FROM stages WHERE client_id=$11 AND stage_num=$12 LIMIT 1)
+       WHERE id=$1 AND deleted_at IS NULL
+       RETURNING *
+     )
+     SELECT upd.*, s.stage_num AS stage_num
+     FROM upd LEFT JOIN stages s ON s.id = upd.stage_id`,
+    [itemId, merged.title, merged.description, merged.status, merged.dueDate, merged.dueTime,
+     merged.assigneeUserId, merged.isTeamTask, merged.priority, JSON.stringify(merged.metadata),
+     current.clientId, stageNumParam]
   );
-  return res.rows[0] ? getJournalItemById(res.rows[0].id) : null;
+  return res.rows[0] ? rowToItem(res.rows[0]) : null;
 }
 
 async function softDeleteJournalItem(itemId, { deletedBy, reason }) {

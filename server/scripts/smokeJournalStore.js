@@ -6,6 +6,7 @@ const {
   countJournalBadgesForUser,
   recordJournalNotificationDelivery,
   wasJournalNotificationDelivered,
+  updateJournalItem,
 } = require("../services/journalStore");
 
 async function main() {
@@ -117,6 +118,18 @@ async function main() {
   );
   assert.equal(legacyIdRes.rows.length, 1, "should find exactly one row");
   assert.equal(legacyIdRes.rows[0].lid, 987654, "JSONB ->> should extract legacy_journal_entry_id correctly");
+
+  // Phase 4: single enriched CTE — updateJournalItem resolves stage inline and returns enriched row.
+  // Create a second stage (stage_num 2) for the same client.
+  await pool.query(
+    `INSERT INTO stages (client_id, stage_num, title, subtitle, doctor, doctor_role, date_start, date_end, status)
+     VALUES ($1, 2, 'Stage 2', '', '', '', '', '', 'active')`,
+    [clientId]
+  );
+  const updatedItem = await updateJournalItem(item.id, { status: "done", stageId: 2 });
+  assert.ok(updatedItem, "updateJournalItem should return the updated item");
+  assert.equal(updatedItem.status, "done", "updated item should have status=done");
+  assert.equal(updatedItem.stageId, 2, "updated item should have stageId=2 (stage_num resolved inline by CTE)");
 
   // Cleanup: deleting the client cascades to journal_items, stages, etc.
   await pool.query("DELETE FROM clients WHERE id = $1", [clientId]);
