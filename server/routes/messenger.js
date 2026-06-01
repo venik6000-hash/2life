@@ -1206,7 +1206,11 @@ router.get("/chats/:chatId/files/:fileId", requireAuth(), async (req, res) => {
   }
 });
 
-// GET /api/users — список пользователей (для сотрудников/админа, только базовые поля)
+// GET /api/users — authenticated staff directory.
+// Intentionally NOT gated to a single section: multiple features need this endpoint
+// (messenger participant picker, journal assignee picker). Any authenticated non-client
+// staff member may call it. Returns only non-sensitive basic fields:
+// { id, username, displayName, role } for active users only. Client roles receive 403.
 router.get("/users", requireAuth(), async (req, res) => {
   try {
     if (isClientRole(req.user?.role)) {
