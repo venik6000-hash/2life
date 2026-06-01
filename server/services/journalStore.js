@@ -46,10 +46,6 @@ const toIsoDateString = (value) => {
   return match ? match[1] : "";
 };
 
-const parseJson = (value, fallback) => {
-  try { return JSON.parse(value || ""); } catch (_) { return fallback; }
-};
-
 const rowToItem = (row, comments = []) => ({
   id: row.id,
   clientId: row.client_id,
@@ -68,7 +64,7 @@ const rowToItem = (row, comments = []) => ({
   updatedAt: row.updated_at,
   completedAt: row.completed_at,
   cancelledAt: row.cancelled_at,
-  metadata: parseJson(row.metadata_json, {}),
+  metadata: row.metadata_json && typeof row.metadata_json === "object" && !Array.isArray(row.metadata_json) ? row.metadata_json : {},
   comments,
 });
 
@@ -243,7 +239,7 @@ async function backfillLegacyJournalEntries() {
      JOIN stages s ON s.id = je.stage_id
      WHERE NOT EXISTS (
        SELECT 1 FROM journal_items ji
-       WHERE (ji.metadata_json::jsonb ->> 'legacy_journal_entry_id')::int = je.id
+       WHERE (ji.metadata_json ->> 'legacy_journal_entry_id')::int = je.id
      )
      ORDER BY je.id`
   );

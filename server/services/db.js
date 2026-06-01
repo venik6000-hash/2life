@@ -441,29 +441,51 @@ const initSchema = async () => {
     CREATE INDEX IF NOT EXISTS idx_jnd_user_kind_key ON journal_notification_deliveries(user_id, kind, delivery_key);
   `);
 
-  // One-time cleanup: journal checklist subsystem was removed in 2026-05-28.
-  const colExistsRes = await pool.query(`
-    SELECT 1 FROM information_schema.columns
-    WHERE table_name = 'journal_items' AND column_name = 'source_template_item_id'
-    LIMIT 1
-  `);
-  if (colExistsRes.rowCount > 0) {
-    await pool.query(`
-      DELETE FROM journal_items
-      WHERE source_template_item_id IS NOT NULL
-         OR metadata_json LIKE '%"checklist":true%'
-    `);
-    await pool.query(`ALTER TABLE journal_items DROP COLUMN IF EXISTS source_template_item_id`);
-  } else {
-    await pool.query(`
-      DELETE FROM journal_items
-      WHERE metadata_json LIKE '%"checklist":true%'
-    `);
-  }
-  await pool.query(`DROP TABLE IF EXISTS journal_checklist_template_items`);
-
   const { ensureMigrationsTable, runOnce } = require("./migrations");
   await ensureMigrationsTable();
+
+  // One-time cleanup: journal checklist subsystem was removed in 2026-05-28.
+  // Wrapped in runOnce so the LIKE '%"checklist":true%' operator only runs while
+  // metadata_json is still TEXT (before the JSONB conversion below). LIKE is a
+  // TEXT operator — once the column becomes JSONB it would throw on every boot.
+  await runOnce("2026-05_journal_checklist_cleanup", async (c) => {
+    const colExistsRes = await c.query(`
+      SELECT 1 FROM information_schema.columns
+      WHERE table_name = 'journal_items' AND column_name = 'source_template_item_id'
+      LIMIT 1
+    `);
+    if (colExistsRes.rowCount > 0) {
+      await c.query(`
+        DELETE FROM journal_items
+        WHERE source_template_item_id IS NOT NULL
+           OR metadata_json LIKE '%"checklist":true%'
+      `);
+      await c.query(`ALTER TABLE journal_items DROP COLUMN IF EXISTS source_template_item_id`);
+    } else {
+      await c.query(`
+        DELETE FROM journal_items
+        WHERE metadata_json LIKE '%"checklist":true%'
+      `);
+    }
+    await c.query(`DROP TABLE IF EXISTS journal_checklist_template_items`);
+  });
+
+  // Convert metadata_json TEXT → JSONB so the column type matches the data,
+  // eliminates per-row JSON.parse, and makes the legacy_journal_entry_id path
+  // indexable. The defensive COALESCE/NULLIF guards against any empty-string
+  // rows that would cause a naive ::jsonb cast to throw.
+  await runOnce("2026-06_journal_metadata_jsonb", async (c) => {
+    // Drop the TEXT default first; PostgreSQL cannot implicitly cast it when
+    // changing column type, so we need a clean ALTER TYPE then restore default.
+    await c.query("ALTER TABLE journal_items ALTER COLUMN metadata_json DROP DEFAULT");
+    await c.query("ALTER TABLE journal_items ALTER COLUMN metadata_json TYPE JSONB USING COALESCE(NULLIF(metadata_json,''),'{}')::jsonb");
+    await c.query("ALTER TABLE journal_items ALTER COLUMN metadata_json SET DEFAULT '{}'::jsonb");
+    // Index the ::int expression (not the raw text ->>): the legacy-detection query
+    // compares (metadata_json->>'legacy_journal_entry_id')::int = je.id, so the index
+    // must match that exact expression to be used. Safe because this key is only ever
+    // written as an integer (journal_entries.id) by backfillLegacyJournalEntries.
+    await c.query("CREATE INDEX IF NOT EXISTS idx_ji_legacy_entry ON journal_items (((metadata_json->>'legacy_journal_entry_id')::int))");
+  });
 
   // Forward-compatible column migrations
   const stageColsRes = await pool.query(
@@ -505,10 +527,19 @@ const initSchema = async () => {
   try { await pool.query("ALTER TABLE messages ADD COLUMN encrypted_text TEXT NOT NULL DEFAULT ''"); } catch (_) {}
   try { await pool.query("ALTER TABLE messages ADD COLUMN encrypted_meta TEXT NOT NULL DEFAULT ''"); } catch (_) {}
   try { await pool.query("ALTER TABLE messages ADD COLUMN client_message_id TEXT NOT NULL DEFAULT ''"); } catch (_) {}
-  // messages encrypted_text/meta migration
+  // messages encrypted_text/meta migration (ciphertext/iv are old column names that
+  // don't exist on fresh installs — guard so this is a no-op on a blank database)
   await runOnce("2026-05_messages_encrypted_columns", async (c) => {
-    await c.query("UPDATE messages SET encrypted_text = ciphertext WHERE encrypted_text = '' AND NULLIF(ciphertext, '') IS NOT NULL");
-    await c.query("UPDATE messages SET encrypted_meta = iv        WHERE encrypted_meta = '' AND NULLIF(iv, '') IS NOT NULL");
+    const msgCols = await c.query(
+      `SELECT column_name FROM information_schema.columns WHERE table_name = 'messages'`
+    );
+    const msgColNames = msgCols.rows.map(r => r.column_name);
+    if (msgColNames.includes("ciphertext")) {
+      await c.query("UPDATE messages SET encrypted_text = ciphertext WHERE encrypted_text = '' AND NULLIF(ciphertext, '') IS NOT NULL");
+    }
+    if (msgColNames.includes("iv")) {
+      await c.query("UPDATE messages SET encrypted_meta = iv WHERE encrypted_meta = '' AND NULLIF(iv, '') IS NOT NULL");
+    }
   });
   try { await pool.query("ALTER TABLE messages ALTER COLUMN ciphertext DROP NOT NULL"); } catch (_) {}
   try { await pool.query("ALTER TABLE messages ALTER COLUMN iv DROP NOT NULL"); } catch (_) {}
