@@ -487,6 +487,62 @@ const initSchema = async () => {
     await c.query("CREATE INDEX IF NOT EXISTS idx_ji_legacy_entry ON journal_items (((metadata_json->>'legacy_journal_entry_id')::int))");
   });
 
+  // Merge duplicate client chats (one per client is the invariant).
+  // Strategy: keep the chat with the lowest id ("survivor"), re-point all related rows to it.
+  //   messages + chat_files  — re-pointed by UPDATE (no client_message_id collisions exist).
+  //   chat_participants      — de-duped like a set: delete conflicting loser rows first, then re-point.
+  //   message_receipts       — merged preserving the max last_read_message_id per user.
+  //   messenger_sync_events  — cascade-deleted with the loser chats (ephemeral delta-sync log, not preserved).
+  //   message_hidden_for_users / message_pinned_for_users — key on message_id, not chat_id, so they
+  //     follow their messages automatically and must NOT be touched here.
+  // After the merge a partial unique index enforces the invariant going forward.
+  await runOnce("2026-06_chats_one_per_client", async (c) => {
+    const dupes = await c.query(`
+      SELECT client_id, MIN(id) AS keep_id, array_agg(id) AS ids
+      FROM chats WHERE client_id IS NOT NULL AND is_internal = false
+      GROUP BY client_id HAVING COUNT(*) > 1
+    `);
+    for (const row of dupes.rows) {
+      const losers = row.ids.filter((id) => id !== row.keep_id);
+      if (!losers.length) continue;
+      // 1) messages + files: re-point to survivor (no client_message_id collisions exist)
+      await c.query("UPDATE messages SET chat_id = $1 WHERE chat_id = ANY($2::int[])", [row.keep_id, losers]);
+      await c.query("UPDATE chat_files SET chat_id = $1 WHERE chat_id = ANY($2::int[])", [row.keep_id, losers]);
+      // 2) participants: delete losers' rows that would collide with survivor's (chat_id,user_id), then re-point the rest
+      await c.query(`DELETE FROM chat_participants cp WHERE cp.chat_id = ANY($1::int[])
+                     AND EXISTS (SELECT 1 FROM chat_participants k WHERE k.chat_id=$2 AND k.user_id=cp.user_id)`, [losers, row.keep_id]);
+      await c.query("UPDATE chat_participants SET chat_id = $1 WHERE chat_id = ANY($2::int[])", [row.keep_id, losers]);
+      // 3) message_receipts: PRESERVE read-state (preserve real last_read AND read_at — read_at
+      //    feeds the "seen by" ordering, so keep the genuine timestamps rather than stamping now()).
+      //    For users who have a receipt on BOTH survivor and a loser: bump survivor to the max.
+      await c.query(`
+        UPDATE message_receipts s
+        SET last_read_message_id = GREATEST(s.last_read_message_id, l.maxlrm),
+            read_at = GREATEST(s.read_at, l.maxread)
+        FROM (SELECT user_id, MAX(last_read_message_id) AS maxlrm, MAX(read_at) AS maxread
+              FROM message_receipts WHERE chat_id = ANY($2::int[]) GROUP BY user_id) l
+        WHERE s.chat_id = $1 AND s.user_id = l.user_id`, [row.keep_id, losers]);
+      //    For users who had a receipt ONLY on a loser: create one on the survivor.
+      await c.query(`
+        INSERT INTO message_receipts (chat_id, user_id, last_read_message_id, read_at)
+        SELECT $1, user_id, MAX(last_read_message_id), MAX(read_at)
+        FROM message_receipts
+        WHERE chat_id = ANY($2::int[])
+          AND user_id NOT IN (SELECT user_id FROM message_receipts WHERE chat_id = $1)
+        GROUP BY user_id`, [row.keep_id, losers]);
+      // 4) delete loser chats. This CASCADE-deletes their now-empty message_receipts and their
+      //    messenger_sync_events (ephemeral delta-sync log — intentionally not preserved).
+      await c.query("DELETE FROM chats WHERE id = ANY($1::int[])", [losers]);
+      // 5) the survivor just absorbed the losers' (possibly newer) messages. Recompute its
+      //    denormalized last_message_* cache — the IS NULL-guarded backfill above cannot, because
+      //    the survivor's cache is already populated, so without this its chat-list preview/sort
+      //    would stay stale until the next message arrives.
+      await applyChatLastMessage(c, row.keep_id);
+    }
+    await c.query(`CREATE UNIQUE INDEX IF NOT EXISTS uq_chat_one_per_client
+                   ON chats(client_id) WHERE client_id IS NOT NULL AND is_internal = false`);
+  });
+
   // Forward-compatible column migrations
   const stageColsRes = await pool.query(
     `SELECT column_name FROM information_schema.columns WHERE table_name = 'stages'`
@@ -1128,6 +1184,8 @@ const createChat = async ({ clientId = null, title, icon = "", createdBy, isInte
   const r = await pool.query(
     `INSERT INTO chats (client_id, is_internal, title, icon, created_by)
      VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (client_id) WHERE (client_id IS NOT NULL AND is_internal = false)
+     DO UPDATE SET title = chats.title   -- no-op so RETURNING yields the existing row
      RETURNING *`,
     [clientId || null, !!isInternal, safeTitle, safeIcon, createdBy]
   );

@@ -67,7 +67,7 @@ const normalizeChatList = (items = []) => {
   const normalized = [];
   for (const item of Array.isArray(items) ? items : []) {
     if (!item?.id) continue;
-    const key = item.client_id || `chat-${item.id}`;
+    const key = item.id;
     if (seen.has(key)) continue;
     seen.add(key);
     normalized.push({ ...item, participants: item.participants || [], receipts: item.receipts || [] });
