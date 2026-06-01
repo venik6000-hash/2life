@@ -606,21 +606,14 @@ const initSchema = async () => {
     `);
   } catch (_) {}
 
-  try {
-    // Client role must only have messenger access.
-    const clientRolesRes = await pool.query("SELECT id FROM roles WHERE name IN ('viewer', 'client')");
-    for (const row of clientRolesRes.rows) {
-      await pool.query(
-        "UPDATE role_sections SET can_read = false, can_write = false WHERE role_id = $1 AND section_id <> 'messenger'",
-        [row.id]
-      );
-      await pool.query(
-        "UPDATE role_sections SET can_read = true, can_write = true WHERE role_id = $1 AND section_id = 'messenger'",
-        [row.id]
-      );
-      await pool.query("UPDATE role_permissions SET granted = false WHERE role_id = $1", [row.id]);
-    }
-  } catch (_) {}
+  // NOTE: Do NOT force-reset the client/viewer role's sections on startup.
+  // The "messenger-only" default for the client role is seeded once during
+  // initial setup (initDefaultRoles), and messenger access for every role is
+  // ensured idempotently above (INSERT ... WHERE NOT EXISTS). The previous
+  // unconditional UPDATE here re-ran on EVERY boot and wiped the section /
+  // permission checkboxes an admin had configured in the Roles tab — making
+  // edits "fall off" after each restart/redeploy. Admin-configured access must
+  // persist and only change when the admin changes it.
 
   const messageColsRes = await pool.query(
     `SELECT column_name FROM information_schema.columns WHERE table_name = 'messages'`
