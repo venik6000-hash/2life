@@ -7,7 +7,7 @@ const getPermissionsForRole = async (roleName) => {
     const sections = ['overview','questionnaire','nutrition','menu','protocol','injections','analytics','lab','journal','messenger'];
     const sectionsObj = {};
     for (const s of sections) sectionsObj[s] = { read: true, write: true };
-    return { sections: sectionsObj, canDeleteClient: true, canCreateClient: true, canImportData: true, isAdmin: true };
+    return { sections: sectionsObj, canDeleteClient: true, canCreateClient: true, canImportData: true, isAdmin: true, isClient: false };
   }
 
   // Preserve the client↔viewer fallback: pick the requested role's id, else the fallback's id
@@ -15,13 +15,13 @@ const getPermissionsForRole = async (roleName) => {
   const fallback = roleName === "client" ? "viewer" : roleName === "viewer" ? "client" : null;
   const r = await pool.query(
     `WITH picked AS (
-       SELECT id FROM roles WHERE name = $1
+       SELECT id, is_client FROM roles WHERE name = $1
        UNION ALL
-       SELECT id FROM roles WHERE name = $2 AND $2 IS NOT NULL
+       SELECT id, is_client FROM roles WHERE name = $2 AND $2 IS NOT NULL
          AND NOT EXISTS (SELECT 1 FROM roles WHERE name = $1)
        LIMIT 1
      )
-     SELECT rs.section_id, rs.can_read, rs.can_write, rp.permission, rp.granted
+     SELECT p.is_client, rs.section_id, rs.can_read, rs.can_write, rp.permission, rp.granted
      FROM picked p
      LEFT JOIN role_sections rs ON rs.role_id = p.id
      LEFT JOIN role_permissions rp ON rp.role_id = p.id`,
@@ -42,7 +42,25 @@ const getPermissionsForRole = async (roleName) => {
     canCreateClient: !!perms['create_client'],
     canImportData:   !!perms['import_data'],
     isAdmin: false,
+    isClient: !!r.rows[0].is_client,
   };
 };
 
-module.exports = { getPermissionsForRole };
+// Short-TTL cache for hot paths (every messenger HTTP request and every
+// inbound WS message checks section permissions). Permission changes apply
+// within TTL; admin role-edit routes also invalidate explicitly.
+const PERM_CACHE_TTL_MS = 10_000;
+const permCache = new Map(); // roleName -> { at, value }
+
+const getPermissionsForRoleCached = async (roleName) => {
+  const key = String(roleName || "");
+  const hit = permCache.get(key);
+  if (hit && Date.now() - hit.at < PERM_CACHE_TTL_MS) return hit.value;
+  const value = await getPermissionsForRole(roleName);
+  permCache.set(key, { at: Date.now(), value });
+  return value;
+};
+
+const invalidatePermissionsCache = () => { permCache.clear(); };
+
+module.exports = { getPermissionsForRole, getPermissionsForRoleCached, invalidatePermissionsCache };

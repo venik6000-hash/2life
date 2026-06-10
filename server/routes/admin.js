@@ -1,13 +1,16 @@
 const express = require("express");
 const router = express.Router();
 const { requireAuth } = require("../middleware/auth");
-const { pool, withTransaction, listRoles, getRoleById, countUsersByRole, insertRole, updateRoleDisplayName, deleteRole,
+const { pool, withTransaction, getRoleById, countUsersByRole, insertRole, updateRoleDisplayName, updateRoleIsClient, deleteRole,
         getRoleSections, upsertRoleSection,
-        getRolePermissions, upsertRolePermission,
+        upsertRolePermission,
         listRefData, insertRefData, updateRefData, deleteRefData, listDistinctAnalyticsMarkers,
         insertDoctor, listDoctors, listClientIdsByDoctorName, upsertClientAssignment, deleteDoctorClientAssignments } = require("../services/db");
 const { syncUserChatAccessByClientPermissions } = require("../services/chatAccessSync");
 const { notifyUserChatAccessChanges } = require("../services/messengerAccessNotifications");
+const { invalidateRoleFlagsCache } = require("../services/roleFlags");
+const { invalidatePermissionsCache } = require("../services/permissions");
+const { broadcast: sseBroadcast } = require("../services/sse");
 
 const normalizeAnalyticsKey = (value) => String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
 const toSafeInt = (value) => {
@@ -20,10 +23,13 @@ const syncDoctorUserAssignments = async ({ doctorName, userId, assignedBy }) => 
   const safeUserId = toSafeInt(userId);
   if (!safeName || !safeUserId) return;
   const clientIds = await listClientIdsByDoctorName(safeName);
-  await Promise.all(clientIds.map((clientId) =>
-    upsertClientAssignment(safeUserId, clientId, toSafeInt(assignedBy), "doctor")
-  ));
-  const syncResult = await syncUserChatAccessByClientPermissions(pool, safeUserId);
+  // Assignments + chat-access sync commit atomically; notify after commit.
+  const syncResult = await withTransaction(async (db) => {
+    for (const clientId of clientIds) {
+      await upsertClientAssignment(safeUserId, clientId, toSafeInt(assignedBy), "doctor", db);
+    }
+    return syncUserChatAccessByClientPermissions(db, safeUserId);
+  });
   await notifyUserChatAccessChanges(pool, safeUserId, syncResult);
 };
 
@@ -31,29 +37,41 @@ const cleanupDoctorUserAssignments = async ({ doctorName, userId }) => {
   const safeName = String(doctorName || "").trim();
   const safeUserId = toSafeInt(userId);
   if (!safeName || !safeUserId) return;
-  await deleteDoctorClientAssignments(safeUserId, safeName);
-  const syncResult = await syncUserChatAccessByClientPermissions(pool, safeUserId);
+  // Removal + chat-access sync commit atomically; notify after commit.
+  const syncResult = await withTransaction(async (db) => {
+    await deleteDoctorClientAssignments(safeUserId, safeName, db);
+    return syncUserChatAccessByClientPermissions(db, safeUserId);
+  });
   await notifyUserChatAccessChanges(pool, safeUserId, syncResult);
 };
 
 // --- Roles ---
 
-// GET /api/admin/roles
+// GET /api/admin/roles — one JOIN query instead of 1+2N per-role queries.
 router.get("/admin/roles", requireAuth("admin"), async (req, res) => {
   try {
-    const roles = await listRoles();
-    const result = await Promise.all(roles.map(async (r) => {
-      const [sections, permissions] = await Promise.all([
-        getRoleSections(r.id),
-        getRolePermissions(r.id),
-      ]);
-      const sectionsObj = {};
-      for (const s of sections) sectionsObj[s.section_id] = { read: s.can_read, write: s.can_write };
-      const permsObj = {};
-      for (const p of permissions) permsObj[p.permission] = p.granted;
-      return { id: r.id, name: r.name, displayName: r.display_name, isSystem: r.is_system, sections: sectionsObj, permissions: permsObj };
-    }));
-    res.json({ ok: true, roles: result });
+    const r = await pool.query(`
+      SELECT ro.id, ro.name, ro.display_name, ro.is_system, ro.is_client,
+             rs.section_id, rs.can_read, rs.can_write,
+             rp.permission, rp.granted
+      FROM roles ro
+      LEFT JOIN role_sections rs ON rs.role_id = ro.id
+      LEFT JOIN role_permissions rp ON rp.role_id = ro.id
+      ORDER BY ro.id
+    `);
+    // The double LEFT JOIN yields a sections×permissions cross product per
+    // role; fold by key (dedupes naturally, same as permissions.js).
+    const byId = new Map();
+    for (const row of r.rows) {
+      let role = byId.get(row.id);
+      if (!role) {
+        role = { id: row.id, name: row.name, displayName: row.display_name, isSystem: row.is_system, isClient: !!row.is_client, sections: {}, permissions: {} };
+        byId.set(row.id, role);
+      }
+      if (row.section_id != null) role.sections[row.section_id] = { read: row.can_read, write: row.can_write };
+      if (row.permission != null) role.permissions[row.permission] = row.granted;
+    }
+    res.json({ ok: true, roles: Array.from(byId.values()) });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -62,32 +80,61 @@ router.get("/admin/roles", requireAuth("admin"), async (req, res) => {
 // POST /api/admin/roles - create new role
 router.post("/admin/roles", requireAuth("admin"), async (req, res) => {
   try {
-    const { name, displayName } = req.body || {};
+    const { name, displayName, isClient } = req.body || {};
     if (!name || !displayName) return res.status(400).json({ error: "name и displayName обязательны" });
     const safeName = String(name).trim().toLowerCase().replace(/[^a-z0-9_]/g, '_');
+    const wantsClient = isClient === true;
     const ALL_SECTIONS = ['overview','questionnaire','nutrition','menu','protocol','injections','analytics','lab','journal','messenger'];
     const ALL_PERMISSIONS = ['delete_client','create_client','import_data'];
     // Role + its sections/permissions are created atomically: a failure rolls back
     // the whole role instead of leaving a half-configured one behind.
+    // Client roles start with NO section access (admin opens sections explicitly);
+    // staff roles start read-only on everything — except messenger, which staff
+    // get with write so messaging works out of the box.
     const roleId = await withTransaction(async (db) => {
-      const res2 = await insertRole(safeName, String(displayName).trim(), false, db);
-      for (const sec of ALL_SECTIONS) await upsertRoleSection(res2.id, sec, true, false, db);
+      const res2 = await insertRole(safeName, String(displayName).trim(), false, db, wantsClient);
+      for (const sec of ALL_SECTIONS) {
+        const isMessenger = sec === "messenger";
+        await upsertRoleSection(res2.id, sec, !wantsClient, !wantsClient && isMessenger, db);
+      }
       for (const perm of ALL_PERMISSIONS) await upsertRolePermission(res2.id, perm, false, db);
       return res2.id;
     });
-    res.json({ ok: true, id: roleId, name: safeName, displayName });
+    invalidateRoleFlagsCache();
+    invalidatePermissionsCache();
+    res.json({ ok: true, id: roleId, name: safeName, displayName, isClient: wantsClient });
   } catch (e) {
     if (e.code === '23505') return res.status(409).json({ error: "Роль с таким именем уже существует" });
     res.status(500).json({ error: e.message });
   }
 });
 
-// PATCH /api/admin/roles/:id - rename display name
+// PATCH /api/admin/roles/:id - rename display name and/or toggle is_client
 router.patch("/admin/roles/:id", requireAuth("admin"), async (req, res) => {
   try {
-    const { displayName } = req.body || {};
-    if (!displayName) return res.status(400).json({ error: "displayName обязателен" });
-    await updateRoleDisplayName(String(displayName).trim(), Number(req.params.id));
+    const { displayName, isClient } = req.body || {};
+    const hasDisplayName = typeof displayName === "string" && displayName.trim();
+    const hasIsClient = typeof isClient === "boolean";
+    if (!hasDisplayName && !hasIsClient) {
+      return res.status(400).json({ error: "displayName или isClient обязателен" });
+    }
+    const roleId = Number(req.params.id);
+    if (hasIsClient) {
+      const role = await getRoleById(roleId);
+      if (!role) return res.status(404).json({ error: "Роль не найдена" });
+      // The admin role is hardcoded to full access — marking it as a client
+      // role would be meaningless and confusing.
+      if (role.name === "admin") {
+        return res.status(400).json({ error: "Роль администратора нельзя сделать клиентской" });
+      }
+      await updateRoleIsClient(isClient, roleId);
+      invalidateRoleFlagsCache();
+      invalidatePermissionsCache();
+      try { sseBroadcast("permissions-updated", { roleName: role.name }); } catch (_) {}
+    }
+    if (hasDisplayName) {
+      await updateRoleDisplayName(String(displayName).trim(), roleId);
+    }
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -113,6 +160,8 @@ router.delete("/admin/roles/:id", requireAuth("admin"), async (req, res) => {
     }
     const result = await deleteRole(roleId);
     if (result.rowCount === 0) return res.status(400).json({ error: "Системную роль нельзя удалить" });
+    invalidateRoleFlagsCache();
+    invalidatePermissionsCache();
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -123,6 +172,8 @@ router.delete("/admin/roles/:id", requireAuth("admin"), async (req, res) => {
 router.put("/admin/roles/:id/sections", requireAuth("admin"), async (req, res) => {
   try {
     const roleId = Number(req.params.id);
+    const role = await getRoleById(roleId);
+    if (!role) return res.status(404).json({ error: "Роль не найдена" });
     const { sections, permissions } = req.body || {};
     // Sections + permissions are saved atomically (all-or-nothing) so a partial
     // failure can't leave half the checkboxes saved and half not.
@@ -147,6 +198,9 @@ router.put("/admin/roles/:id/sections", requireAuth("admin"), async (req, res) =
         }
       }
     });
+    invalidatePermissionsCache();
+    // Live revocation: every open tab of users with this role re-reads perms.
+    try { sseBroadcast("permissions-updated", { roleName: role.name }); } catch (_) {}
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: e.message });

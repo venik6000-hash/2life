@@ -22,8 +22,8 @@ import {
   serializeLabOrderItemPayload
 } from "../utils/labOrderUtils";
 
-const ALL_SECTIONS = ['overview','questionnaire','nutrition','menu','protocol','injections','analytics','lab','journal'];
-const SECTION_LABELS = { overview:'Обзор', questionnaire:'Анкета', nutrition:'Питание', menu:'Меню', protocol:'Протокол', injections:'Инъекции', analytics:'Анализы', lab:'Направление', journal:'Журнал' };
+const ALL_SECTIONS = ['overview','questionnaire','nutrition','menu','protocol','injections','analytics','lab','journal','messenger'];
+const SECTION_LABELS = { overview:'Обзор', questionnaire:'Анкета', nutrition:'Питание', menu:'Меню', protocol:'Протокол', injections:'Инъекции', analytics:'Анализы', lab:'Направление', journal:'Журнал', messenger:'Мессенджер' };
 const ALL_PERMISSIONS = ['delete_client','create_client','import_data'];
 const PERM_LABELS = { delete_client:'Удалять клиентов', create_client:'Создавать клиентов', import_data:'Импортировать данные' };
 const DEFICIT_TRIGGER_LABELS = { auto: "Авто (референс → оптимум)", ref: "Ниже референса", optimal: "Ниже оптимума" };
@@ -78,6 +78,7 @@ export default function AdminSection() {
   const [rolesData, setRolesData] = useState([]);
   const [roleFormName, setRoleFormName] = useState("");
   const [roleFormDisplay, setRoleFormDisplay] = useState("");
+  const [roleFormIsClient, setRoleFormIsClient] = useState(false);
   const [roleFormErr, setRoleFormErr] = useState("");
   const [editingRoleId, setEditingRoleId] = useState(null);
   const [editingRoleDisplay, setEditingRoleDisplay] = useState("");
@@ -459,10 +460,10 @@ export default function AdminSection() {
   const handleCreateRole = async () => {
     setRoleFormErr("");
     if (!roleFormName.trim() || !roleFormDisplay.trim()) { setRoleFormErr("Заполните оба поля"); return; }
-    const r = await authFetch("/api/admin/roles", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: roleFormName, displayName: roleFormDisplay }) });
+    const r = await authFetch("/api/admin/roles", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: roleFormName, displayName: roleFormDisplay, isClient: roleFormIsClient }) });
     const d = await r.json();
     if (!r.ok) { setRoleFormErr(d.error || "Ошибка"); return; }
-    setRoleFormName(""); setRoleFormDisplay("");
+    setRoleFormName(""); setRoleFormDisplay(""); setRoleFormIsClient(false);
     fetchRoles();
   };
 
@@ -478,6 +479,13 @@ export default function AdminSection() {
     if (!editingRoleDisplay.trim()) return;
     await authFetch(`/api/admin/roles/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ displayName: editingRoleDisplay }) });
     setEditingRoleId(null); setEditingRoleDisplay("");
+    fetchRoles();
+  };
+
+  const handleToggleRoleIsClient = async (id, val) => {
+    const r = await authFetch(`/api/admin/roles/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ isClient: val }) });
+    const d = await readResponseSafe(r);
+    if (!r.ok) { alert(d.error || "Ошибка сохранения роли"); return; }
     fetchRoles();
   };
 
@@ -1026,6 +1034,10 @@ export default function AdminSection() {
                     <Input value={roleFormDisplay} onChange={e => setRoleFormDisplay(e.target.value)} placeholder="Моя роль" />
                   </Wrapper>
                 </FormField>
+                <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, cursor: "pointer", paddingBottom: 8 }}>
+                  <input type="checkbox" checked={roleFormIsClient} onChange={e => setRoleFormIsClient(e.target.checked)} />
+                  Клиентская роль
+                </label>
                 <Button onClick={handleCreateRole}>+ Создать</Button>
               </Wrapper>
               {roleFormErr && <div style={{ marginTop: 8, color: $.dn, fontSize: 12 }}>{roleFormErr}</div>}
@@ -1052,6 +1064,7 @@ export default function AdminSection() {
                         <span style={{ fontWeight: 700, fontSize: 15 }}>{role.displayName}</span>
                         <span style={{ fontSize: 12, color: $.txM }}>({role.name})</span>
                         {role.isSystem && <span style={{ fontSize: 10, background: $.ac + "22", color: $.ac, padding: "2px 7px", borderRadius: 4, fontWeight: 600 }}>СИСТЕМА</span>}
+                        {role.isClient && <span style={{ fontSize: 10, background: $.ok + "22", color: $.ok, padding: "2px 7px", borderRadius: 4, fontWeight: 600 }}>КЛИЕНТ</span>}
                         <Button onClick={() => { setEditingRoleId(role.id); setEditingRoleDisplay(role.displayName); }} variant="bare" tone="neutral" size="xs">✏️</Button>
                       </>
                     )}
@@ -1073,6 +1086,11 @@ export default function AdminSection() {
                   </div>
                 ) : (
                   <>
+                    <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, cursor: "pointer", marginBottom: 12 }}>
+                      <input type="checkbox" checked={!!role.isClient} onChange={e => handleToggleRoleIsClient(role.id, e.target.checked)} />
+                      Клиентская роль
+                      <span style={{ fontSize: 11, color: $.txM }}>— пользователи с этой ролью считаются клиентами (пациентами), а не сотрудниками</span>
+                    </label>
                     <div style={{ fontSize: 12, fontWeight: 600, color: $.txM, textTransform: "uppercase", letterSpacing: .5, marginBottom: 8 }}>Разделы</div>
                     <Wrapper overflowX="auto" marginBottom={14}>
                       <table style={{ borderCollapse: "collapse", fontSize: 12 }}>

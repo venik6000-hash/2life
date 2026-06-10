@@ -43,11 +43,11 @@ const initDefaultRoles = async () => {
     { name: 'admin',        display_name: 'Администратор', is_system: true,  write: true,  permissions: { delete_client: true,  create_client: true,  import_data: true } },
     { name: 'doctor',       display_name: 'Врач',           is_system: true,  write: true,  permissions: { delete_client: false, create_client: true,  import_data: true } },
     { name: 'nutritionist', display_name: 'Нутрициолог',    is_system: false, write: true,  permissions: { delete_client: false, create_client: false, import_data: true } },
-    { name: 'viewer',       display_name: 'Клиент',         is_system: false, write: false, permissions: { delete_client: false, create_client: false, import_data: false } },
+    { name: 'viewer',       display_name: 'Клиент',         is_system: false, write: false, is_client: true, permissions: { delete_client: false, create_client: false, import_data: false } },
   ];
 
   for (const r of roles) {
-    const res = await insertRole(r.name, r.display_name, r.is_system);
+    const res = await insertRole(r.name, r.display_name, r.is_system, undefined, r.is_client === true);
     const roleId = res.id;
     for (const sec of ALL_SECTIONS) {
       if (r.name === "viewer") {

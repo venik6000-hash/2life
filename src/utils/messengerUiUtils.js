@@ -107,8 +107,16 @@ export const getPhotoBundleLayout = (count) => {
   return { cols, rowHeight, tiles };
 };
 
-export const isClientRole = (role) => {
-  const normalized = String(role || "").trim().toLowerCase();
+// Accepts a user-like object carrying the explicit is_client flag (set by the
+// admin per role), or a bare role-name string. The name check survives only as
+// a fallback for stale cached sessions saved before the flag existed.
+export const isClientRole = (userOrRole) => {
+  if (userOrRole && typeof userOrRole === "object") {
+    if (typeof userOrRole.is_client === "boolean") return userOrRole.is_client;
+    if (typeof userOrRole.isClient === "boolean") return userOrRole.isClient;
+  }
+  const name = typeof userOrRole === "string" ? userOrRole : String(userOrRole?.role || "");
+  const normalized = name.trim().toLowerCase();
   return normalized === "viewer" || normalized === "client";
 };
 

@@ -7,6 +7,7 @@ const { ipKeyGenerator } = rateLimit;
 const { getUser, listUsers, createUser, pool } = require("../services/db");
 const { syncUserChatAccessByClientPermissions } = require("../services/chatAccessSync");
 const { notifyUserChatAccessChanges } = require("../services/messengerAccessNotifications");
+const { broadcast: sseBroadcast } = require("../services/sse");
 const { requireAuth, signToken }   = require("../middleware/auth");
 const { blacklistToken }           = require("../services/tokenBlacklist");
 const { getPermissionsForRole }    = require("../services/permissions");
@@ -127,7 +128,7 @@ router.post("/auth/login", loginLimiter, async (req, res) => {
     res.json({
       ok: true,
       token,
-      user: { id: user.id, username: user.username, role: user.role, all_clients_access: !!user.all_clients_access, display_name: user.display_name || "" },
+      user: { id: user.id, username: user.username, role: user.role, all_clients_access: !!user.all_clients_access, display_name: user.display_name || "", is_client: permissions?.isClient === true },
       permissions,
     });
   } catch (e) {
@@ -163,6 +164,7 @@ router.get("/auth/me", requireAuth(), async (req, res) => {
       token_version: Number(row.token_version || 0),
     };
     const permissions = await getPermissionsForRole(currentUser.role);
+    currentUser.is_client = permissions?.isClient === true;
     res.json({ ok: true, user: currentUser, permissions });
   } catch (e) {
     console.error("[auth] /me error:", e);
@@ -307,6 +309,7 @@ router.post("/auth/change-password", requireAuth(), async (req, res) => {
     };
     const nextToken = signToken({ id: nextUser.id, username: nextUser.username, role: nextUser.role, token_version: Number(user.token_version || 0) + 1 });
     const permissions = await getPermissionsForRole(nextUser.role);
+    nextUser.is_client = permissions?.isClient === true;
     res.json({ ok: true, messengerReset, token: nextToken, user: nextUser, permissions });
   } catch (e) {
     try { await client.query("ROLLBACK"); } catch (_) {}
@@ -459,6 +462,10 @@ router.patch("/admin/users/:id", requireAuth("admin"), async (req, res) => {
     await client.query("COMMIT");
     committed = true;
     await notifyUserChatAccessChanges(pool, id, syncResult);
+    if (shouldSyncChatAccess) {
+      // Live revocation: open tabs of this user re-read their permissions.
+      try { sseBroadcast("permissions-updated", { userId: id }); } catch (_) {}
+    }
     if (forceLogoutReason) {
       try { require("../services/ws").forceLogoutUser(id, forceLogoutReason); } catch (_) {}
     }
@@ -496,6 +503,7 @@ router.delete("/admin/users/:id", requireAuth("admin"), async (req, res) => {
     const syncResult = await syncUserChatAccessByClientPermissions(client, id);
     await client.query("COMMIT");
     await notifyUserChatAccessChanges(pool, id, syncResult);
+    try { sseBroadcast("permissions-updated", { userId: id }); } catch (_) {}
     try { require("../services/ws").forceLogoutUser(id, "user_inactive"); } catch (_) {}
     res.json({ ok: true });
   } catch (e) {

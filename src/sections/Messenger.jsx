@@ -12,7 +12,7 @@ import { isClientRole } from "../utils/messengerUiUtils";
 
 export default function MessengerSection() {
   const { user } = useAuth();
-  const { cid, cls, isAdmin } = useDashboard();
+  const { cid, cls, isAdmin, canWriteSection } = useDashboard();
   const {
     ready, wsConnected,
     chats, chatsLoaded, activeChatId, setActiveChatId, messages,
@@ -26,7 +26,8 @@ export default function MessengerSection() {
   const pendingJumpRef = useRef(null);
   const [jumpToMessageId, setJumpToMessageId] = useState(null);
   const activeChat = chats.find((c) => c.id === activeChatId) || null;
-  const canCreateChat = !isClientRole(user?.role);
+  const canWriteMessenger = canWriteSection("messenger");
+  const canCreateChat = !isClientRole(user) && canWriteMessenger;
   const hasGlobalClientAccess = isAdmin || !!user?.all_clients_access;
 
   useEffect(() => {
@@ -92,6 +93,7 @@ export default function MessengerSection() {
               chat={activeChat}
               chats={chats}
               user={user}
+              readOnly={!canWriteMessenger}
               messages={messages}
               sendMsg={sendMsg}
               sendFiles={sendFiles}
@@ -113,6 +115,7 @@ export default function MessengerSection() {
             <MessengerParticipantsPanel
               chat={activeChat}
               user={user}
+              readOnly={!canWriteMessenger}
               addParticipant={addParticipant}
               removeParticipant={removeParticipant}
               onClose={() => setShowParticipants(false)}

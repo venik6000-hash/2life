@@ -21,6 +21,7 @@ export default function MessengerChatWindow({
   updateChatSettings,
   jumpToMessageId,
   onJumpHandled,
+  readOnly = false,
 }) {
   const { $ } = useTheme();
   const {
@@ -348,11 +349,11 @@ export default function MessengerChatWindow({
     grouped.push({ type: "msg", msg });
   }
 
-  const canEdit = contextMenu?.msg && contextMenu.msg.sender_id === user.id && contextMenu.msg.msg_type === "text" && !contextMenu.msg.deleted_for_all;
-  const canDeleteForAll = contextMenu?.msg && (contextMenu.msg.sender_id === user.id || user.role === "admin");
+  const canEdit = !readOnly && contextMenu?.msg && contextMenu.msg.sender_id === user.id && contextMenu.msg.msg_type === "text" && !contextMenu.msg.deleted_for_all;
+  const canDeleteForAll = !readOnly && contextMenu?.msg && (contextMenu.msg.sender_id === user.id || user.role === "admin");
   const forwardChats = (chats || []).filter((c) => c.id !== chat.id);
   const meInChat = (chat.participants || []).find((p) => p.user_id === user.id) || null;
-  const canEditInternalChat = (!!chat.is_internal) && (meInChat?.role_in_chat === "owner" || user.role === "admin");
+  const canEditInternalChat = !readOnly && (!!chat.is_internal) && (meInChat?.role_in_chat === "owner" || user.role === "admin");
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
@@ -489,6 +490,11 @@ export default function MessengerChatWindow({
       </div>
 
       {/* Input */}
+      {readOnly ? (
+        <div style={{ padding: "12px 14px", borderTop: `1px solid ${$.brd}`, flexShrink: 0, fontSize: 12, color: $.txM, textAlign: "center" }}>
+          У вас доступ к мессенджеру только для чтения
+        </div>
+      ) : (
       <div style={{ padding: "10px 14px", borderTop: `1px solid ${$.brd}`, flexShrink: 0 }}>
         {editTarget && (
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8, padding: "6px 10px", borderRadius: 8, background: $.bgI, border: `1px solid ${$.brd}` }}>
@@ -574,6 +580,7 @@ export default function MessengerChatWindow({
         {actionError && <div style={{ fontSize: 11, color: $.dn, marginTop: 6, paddingLeft: 4 }}>{actionError}</div>}
         <div style={{ fontSize: 10, color: $.txM, marginTop: 4, paddingLeft: 4 }}>🔒 Сообщения зашифрованы</div>
       </div>
+      )}
 
       {contextMenu && (() => {
         const msg = contextMenu.msg || {};

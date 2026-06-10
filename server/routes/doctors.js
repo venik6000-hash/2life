@@ -4,7 +4,7 @@ const router  = express.Router();
 const { getDoctors, saveDoctors, getClients } = require("../services/clientStore");
 const { createBackupSnapshot } = require("../services/backup");
 const { requireAuth } = require("../middleware/auth");
-const { pool, getDoctorByName, replaceDoctorClientAssignments } = require("../services/db");
+const { pool, withTransaction, getDoctorByName, replaceDoctorClientAssignments } = require("../services/db");
 const { syncUserChatAccessByClientPermissions } = require("../services/chatAccessSync");
 const { notifyUserChatAccessChanges } = require("../services/messengerAccessNotifications");
 
@@ -46,9 +46,16 @@ const syncDoctorAssignmentsForAllClients = async (assignedByUserId) => {
       const doctor = await getDoctorByName(name);
       if (doctor?.user_id) nextDoctorUserIds.push(Number(doctor.user_id));
     }
-    const touchedUserIds = await replaceDoctorClientAssignments(client.id, nextDoctorUserIds, assignedByUserId || null);
-    for (const userId of touchedUserIds) {
-      const syncResult = await syncUserChatAccessByClientPermissions(pool, userId);
+    // Per-client: assignment replacement + chat-access sync commit atomically.
+    const syncResults = await withTransaction(async (db) => {
+      const touchedUserIds = await replaceDoctorClientAssignments(client.id, nextDoctorUserIds, assignedByUserId || null, db);
+      const results = [];
+      for (const userId of touchedUserIds) {
+        results.push({ userId, syncResult: await syncUserChatAccessByClientPermissions(db, userId) });
+      }
+      return results;
+    });
+    for (const { userId, syncResult } of syncResults) {
       await notifyUserChatAccessChanges(pool, userId, syncResult);
     }
   }

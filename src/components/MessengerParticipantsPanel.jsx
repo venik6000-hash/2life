@@ -9,6 +9,7 @@ export default function MessengerParticipantsPanel({
   addParticipant,
   removeParticipant,
   onClose,
+  readOnly = false,
 }) {
   const { $ } = useTheme();
   const { authFetch } = useAuth();
@@ -20,7 +21,7 @@ export default function MessengerParticipantsPanel({
 
   const isOwner = (chat.participants || []).find((participant) => participant.user_id === user.id)?.role_in_chat === "owner"
     || user.role === "admin";
-  const canManageParticipants = isOwner && !isClientRole(user.role);
+  const canManageParticipants = isOwner && !readOnly && !isClientRole(user);
 
   useEffect(() => {
     if (!canManageParticipants) {
@@ -34,7 +35,7 @@ export default function MessengerParticipantsPanel({
     const normalizeUsers = (rows = []) => rows
       .filter((item) => item && item.id != null && item.username)
       .filter((item) => item.active !== false)
-      .map((item) => ({ id: Number(item.id), username: String(item.username), role: String(item.role || "") }));
+      .map((item) => ({ id: Number(item.id), username: String(item.username), role: String(item.role || ""), is_client: typeof item.is_client === "boolean" ? item.is_client : undefined }));
 
     const fetchUsers = async () => {
       setUsersLoading(true);
@@ -64,7 +65,7 @@ export default function MessengerParticipantsPanel({
     return () => { cancelled = true; };
   }, [authFetch, canManageParticipants, user.role]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const isViewingAsClient = isClientRole(user.role);
+  const isViewingAsClient = isClientRole(user);
   const visibleParticipants = isViewingAsClient
     ? (chat.participants || []).filter((p) => p.role !== "admin")
     : (chat.participants || []);
@@ -72,7 +73,7 @@ export default function MessengerParticipantsPanel({
   const available = allUsers.filter((item) => (
     item.id !== user.id &&
     !participantIds.has(item.id) &&
-    (!chat.is_internal || !isClientRole(item.role))
+    (!chat.is_internal || !isClientRole(item))
   ));
 
   const handleAdd = async (userId, username) => {

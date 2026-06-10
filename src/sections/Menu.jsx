@@ -120,7 +120,7 @@ function Tabs({ activeTab, onChange }) {
 export default function MenuSection({ cl, readOnly = false }) {
   const { $ } = useTheme();
   const { authFetch, user } = useAuth();
-  const isClient = isClientRole(user?.role);
+  const isClient = isClientRole(user);
   const [activeTab, setActiveTab] = useState("client");
   const [weekStart, setWeekStart] = useState(() => getMonday());
   const [selectedSlot, setSelectedSlot] = useState({ dayIndex: 0, mealType: "breakfast" });

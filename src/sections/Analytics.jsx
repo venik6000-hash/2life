@@ -53,7 +53,7 @@ export default function AnalyticsSection({
   readOnly = false,
 }) {
   const { authFetch, user } = useAuth();
-  const isClient = isClientRole(user?.role);
+  const isClient = isClientRole(user);
   const [anaEdit, setAnaEdit] = useState(false);
   const [analyticsTab, setAnalyticsTab] = useState("table");
   const [collapsedCategories, setCollapsedCategories] = useState({});

@@ -3,7 +3,7 @@ const multer   = require("multer");
 const path     = require("path");
 const fs       = require("fs");
 const { v4: uuidv4 } = require("uuid");
-const { requireAuth } = require("../middleware/auth");
+const { requireAuth, requireSectionRead, requireSectionWrite, hasSectionWrite, attachPermissions } = require("../middleware/auth");
 const { encryptText, decryptText, encryptJson, decryptJson, encryptBuffer, decryptBuffer } = require("../services/messengerCrypto");
 const { createSyncEvent, listSyncEventsForUser, upsertMessengerDevice, removeMessengerDevice, listMessengerDevicesForUser } = require("../services/messengerStore");
 const { pool,
@@ -21,6 +21,7 @@ const { pool,
   fetchMessagesForSearchInChat, fetchMessagesForSearchGlobal,
 } = require("../services/db");
 const { canAccessClient } = require("../services/clientAccess");
+const { isClientRoleName } = require("../services/roleFlags");
 const {
   syncUserChatAccessByClientPermissions,
   syncChatParticipantsByClientAccess,
@@ -123,11 +124,6 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-const isClientRole = (role) => {
-  const normalized = String(role || "").trim().toLowerCase();
-  return normalized === "viewer" || normalized === "client";
-};
-
 const isStaffUserId = async (userId) => {
   const safeUserId = Number(userId);
   if (!Number.isInteger(safeUserId) || safeUserId <= 0) return false;
@@ -137,7 +133,7 @@ const isStaffUserId = async (userId) => {
   );
   const row = r.rows[0] || null;
   if (!row || row.active === false) return false;
-  return !isClientRole(row.role);
+  return !(await isClientRoleName(row.role));
 };
 
 // Ensure caller is a participant; return 403 if not
@@ -150,7 +146,7 @@ const requireParticipant = async (req, res, chatId) => {
 // ── Chats ─────────────────────────────────────────────────────────────────────
 
 // GET /api/chats?clientId=xxx  — list chats the caller participates in (scoped to client if given)
-router.get("/chats", requireAuth(), async (req, res) => {
+router.get("/chats", requireAuth(), requireSectionRead("messenger"), async (req, res) => {
   try {
     await syncUserChatAccessCached(req.user.id);
 
@@ -187,9 +183,9 @@ router.get("/chats", requireAuth(), async (req, res) => {
 
 // POST /api/chats  — create new chat
 // body: { clientId?, title?, icon?, isInternal?, isPinned?, participants: [{ userId, encryptedChatKey }] }
-router.post("/chats", requireAuth(), async (req, res) => {
+router.post("/chats", requireAuth(), requireSectionWrite("messenger"), async (req, res) => {
   try {
-    if (isClientRole(req.user?.role)) {
+    if (await isClientRoleName(req.user?.role)) {
       return res.status(403).json({ error: "Клиент не может создавать чаты" });
     }
 
@@ -290,7 +286,7 @@ router.post("/chats", requireAuth(), async (req, res) => {
 });
 
 // GET /api/chats/:chatId
-router.get("/chats/:chatId", requireAuth(), async (req, res) => {
+router.get("/chats/:chatId", requireAuth(), requireSectionRead("messenger"), async (req, res) => {
   try {
     const chatId = Number(req.params.chatId);
     const chat = await getChatById(chatId);
@@ -309,7 +305,7 @@ router.get("/chats/:chatId", requireAuth(), async (req, res) => {
 
 // PATCH /api/chats/:chatId — update chat metadata and/or pin status
 // body: { title?, icon?, isPinned? }
-router.patch("/chats/:chatId", requireAuth(), async (req, res) => {
+router.patch("/chats/:chatId", requireAuth(), requireSectionRead("messenger"), async (req, res) => {
   try {
     const chatId = Number(req.params.chatId);
     if (!Number.isInteger(chatId) || chatId <= 0) {
@@ -326,6 +322,12 @@ router.patch("/chats/:chatId", requireAuth(), async (req, res) => {
 
     let nextChat = chat;
     if (hasTitle || hasIcon) {
+      // The route itself is gated by messenger READ (so a read-only user can
+      // still toggle their personal pin below); renaming needs WRITE.
+      const permissions = await attachPermissions(req);
+      if (!hasSectionWrite(permissions, "messenger")) {
+        return res.status(403).json({ error: "Нет прав на изменение раздела" });
+      }
       const role = await getParticipantRole(chatId, req.user.id);
       if (role !== "owner" && req.user.role !== "admin") {
         return res.status(403).json({ error: "Только владелец чата может менять название и иконку" });
@@ -378,7 +380,7 @@ router.patch("/chats/:chatId", requireAuth(), async (req, res) => {
 // ── Messages ──────────────────────────────────────────────────────────────────
 
 // GET /api/chats/:chatId/messages?before=ID&limit=50
-router.get("/chats/:chatId/messages", requireAuth(), async (req, res) => {
+router.get("/chats/:chatId/messages", requireAuth(), requireSectionRead("messenger"), async (req, res) => {
   try {
     const chatId = Number(req.params.chatId);
     if (!(await requireParticipant(req, res, chatId))) return;
@@ -394,7 +396,7 @@ router.get("/chats/:chatId/messages", requireAuth(), async (req, res) => {
 });
 
 // POST /api/chats/:chatId/messages  — HTTP fallback (WS preferred)
-router.post("/chats/:chatId/messages", requireAuth(), async (req, res) => {
+router.post("/chats/:chatId/messages", requireAuth(), requireSectionWrite("messenger"), async (req, res) => {
   try {
     const chatId = Number(req.params.chatId);
     if (!(await requireParticipant(req, res, chatId))) return;
@@ -489,7 +491,7 @@ router.post("/chats/:chatId/messages", requireAuth(), async (req, res) => {
 });
 
 // PATCH /api/chats/:chatId/messages/:messageId  — edit message text
-router.patch("/chats/:chatId/messages/:messageId", requireAuth(), async (req, res) => {
+router.patch("/chats/:chatId/messages/:messageId", requireAuth(), requireSectionWrite("messenger"), async (req, res) => {
   try {
     const chatId = Number(req.params.chatId);
     const messageId = Number(req.params.messageId);
@@ -536,7 +538,7 @@ router.patch("/chats/:chatId/messages/:messageId", requireAuth(), async (req, re
 });
 
 // DELETE /api/chats/:chatId/messages/:messageId?scope=self|all
-router.delete("/chats/:chatId/messages/:messageId", requireAuth(), async (req, res) => {
+router.delete("/chats/:chatId/messages/:messageId", requireAuth(), requireSectionWrite("messenger"), async (req, res) => {
   try {
     const chatId = Number(req.params.chatId);
     const messageId = Number(req.params.messageId);
@@ -575,7 +577,7 @@ router.delete("/chats/:chatId/messages/:messageId", requireAuth(), async (req, r
 });
 
 // POST /api/chats/:chatId/messages/:messageId/pin — pin for all in chat
-router.post("/chats/:chatId/messages/:messageId/pin", requireAuth(), async (req, res) => {
+router.post("/chats/:chatId/messages/:messageId/pin", requireAuth(), requireSectionWrite("messenger"), async (req, res) => {
   try {
     const chatId = Number(req.params.chatId);
     const messageId = Number(req.params.messageId);
@@ -612,7 +614,7 @@ router.post("/chats/:chatId/messages/:messageId/pin", requireAuth(), async (req,
 });
 
 // DELETE /api/chats/:chatId/messages/:messageId/pin — unpin for all
-router.delete("/chats/:chatId/messages/:messageId/pin", requireAuth(), async (req, res) => {
+router.delete("/chats/:chatId/messages/:messageId/pin", requireAuth(), requireSectionWrite("messenger"), async (req, res) => {
   try {
     const chatId = Number(req.params.chatId);
     const messageId = Number(req.params.messageId);
@@ -633,7 +635,7 @@ router.delete("/chats/:chatId/messages/:messageId/pin", requireAuth(), async (re
 });
 
 // POST /api/chats/:chatId/messages/:messageId/pin-for-me — personal pin
-router.post("/chats/:chatId/messages/:messageId/pin-for-me", requireAuth(), async (req, res) => {
+router.post("/chats/:chatId/messages/:messageId/pin-for-me", requireAuth(), requireSectionRead("messenger"), async (req, res) => {
   try {
     const chatId = Number(req.params.chatId);
     const messageId = Number(req.params.messageId);
@@ -668,7 +670,7 @@ router.post("/chats/:chatId/messages/:messageId/pin-for-me", requireAuth(), asyn
 });
 
 // DELETE /api/chats/:chatId/messages/:messageId/pin-for-me
-router.delete("/chats/:chatId/messages/:messageId/pin-for-me", requireAuth(), async (req, res) => {
+router.delete("/chats/:chatId/messages/:messageId/pin-for-me", requireAuth(), requireSectionRead("messenger"), async (req, res) => {
   try {
     const chatId = Number(req.params.chatId);
     const messageId = Number(req.params.messageId);
@@ -689,7 +691,7 @@ router.delete("/chats/:chatId/messages/:messageId/pin-for-me", requireAuth(), as
 
 // POST /api/chats/:chatId/messages/bulk-delete
 // body: { ids: number[], scope: "self" | "all" }
-router.post("/chats/:chatId/messages/bulk-delete", requireAuth(), async (req, res) => {
+router.post("/chats/:chatId/messages/bulk-delete", requireAuth(), requireSectionWrite("messenger"), async (req, res) => {
   try {
     const chatId = Number(req.params.chatId);
     if (!(await requireParticipant(req, res, chatId))) return;
@@ -746,7 +748,7 @@ router.post("/chats/:chatId/messages/bulk-delete", requireAuth(), async (req, re
 
 // POST /api/chats/:chatId/messages/bulk-forward
 // body: { ids: number[], targetChatId: number }
-router.post("/chats/:chatId/messages/bulk-forward", requireAuth(), async (req, res) => {
+router.post("/chats/:chatId/messages/bulk-forward", requireAuth(), requireSectionWrite("messenger"), async (req, res) => {
   try {
     const chatId = Number(req.params.chatId);
     const targetChatId = Number(req.body?.targetChatId);
@@ -814,7 +816,7 @@ router.post("/chats/:chatId/messages/bulk-forward", requireAuth(), async (req, r
 });
 
 // GET /api/chats/:chatId/messages/search?q=...&limit=50&before=...
-router.get("/chats/:chatId/messages/search", requireAuth(), async (req, res) => {
+router.get("/chats/:chatId/messages/search", requireAuth(), requireSectionRead("messenger"), async (req, res) => {
   try {
     const chatId = Number(req.params.chatId);
     await syncUserChatAccessCached(req.user.id);
@@ -859,7 +861,7 @@ router.get("/chats/:chatId/messages/search", requireAuth(), async (req, res) => 
 });
 
 // GET /api/messenger/search?q=...&limit=50&before=...
-router.get("/messenger/search", requireAuth(), async (req, res) => {
+router.get("/messenger/search", requireAuth(), requireSectionRead("messenger"), async (req, res) => {
   try {
     const q = String(req.query.q || "").trim();
     const limit = Math.min(Number(req.query.limit) || 50, 100);
@@ -906,7 +908,7 @@ router.get("/messenger/search", requireAuth(), async (req, res) => {
 });
 
 // GET /api/chats/:chatId/pinned — top-5 for-all pins (newest first)
-router.get("/chats/:chatId/pinned", requireAuth(), async (req, res) => {
+router.get("/chats/:chatId/pinned", requireAuth(), requireSectionRead("messenger"), async (req, res) => {
   try {
     const chatId = Number(req.params.chatId);
     if (!(await requireParticipant(req, res, chatId))) return;
@@ -918,7 +920,7 @@ router.get("/chats/:chatId/pinned", requireAuth(), async (req, res) => {
 });
 
 // GET /api/chats/:chatId/pinned-for-me — personal pins for this user
-router.get("/chats/:chatId/pinned-for-me", requireAuth(), async (req, res) => {
+router.get("/chats/:chatId/pinned-for-me", requireAuth(), requireSectionRead("messenger"), async (req, res) => {
   try {
     const chatId = Number(req.params.chatId);
     if (!(await requireParticipant(req, res, chatId))) return;
@@ -929,7 +931,7 @@ router.get("/chats/:chatId/pinned-for-me", requireAuth(), async (req, res) => {
   }
 });
 
-router.get("/chats/:chatId/messages/:messageId/readers", requireAuth(), async (req, res) => {
+router.get("/chats/:chatId/messages/:messageId/readers", requireAuth(), requireSectionRead("messenger"), async (req, res) => {
   try {
     const chatId = Number(req.params.chatId);
     const messageId = Number(req.params.messageId);
@@ -954,7 +956,7 @@ router.get("/chats/:chatId/messages/:messageId/readers", requireAuth(), async (r
 });
 
 // POST /api/chats/:chatId/read  — mark messages read
-router.post("/chats/:chatId/read", requireAuth(), async (req, res) => {
+router.post("/chats/:chatId/read", requireAuth(), requireSectionRead("messenger"), async (req, res) => {
   try {
     const chatId   = Number(req.params.chatId);
     const messageId = Number(req.body?.messageId);
@@ -980,7 +982,7 @@ router.post("/chats/:chatId/read", requireAuth(), async (req, res) => {
   }
 });
 
-router.get("/messenger/sync", requireAuth(), async (req, res) => {
+router.get("/messenger/sync", requireAuth(), requireSectionRead("messenger"), async (req, res) => {
   try {
     const after = Number(req.query.after || 0);
     if (!Number.isFinite(after) || after < 0) return res.status(400).json({ error: "Некорректный cursor" });
@@ -991,7 +993,7 @@ router.get("/messenger/sync", requireAuth(), async (req, res) => {
   }
 });
 
-router.post("/messenger/devices", requireAuth(), async (req, res) => {
+router.post("/messenger/devices", requireAuth(), requireSectionRead("messenger"), async (req, res) => {
   try {
     const body = req.body || {};
     const { deviceId } = body;
@@ -1023,7 +1025,7 @@ router.post("/messenger/devices", requireAuth(), async (req, res) => {
 });
 
 // GET /api/messenger/devices — list my push-enabled devices
-router.get("/messenger/devices", requireAuth(), async (req, res) => {
+router.get("/messenger/devices", requireAuth(), requireSectionRead("messenger"), async (req, res) => {
   try {
     const devices = await listMessengerDevicesForUser(pool, req.user.id);
     res.json({ devices });
@@ -1032,7 +1034,7 @@ router.get("/messenger/devices", requireAuth(), async (req, res) => {
   }
 });
 
-router.delete("/messenger/devices/:deviceId", requireAuth(), async (req, res) => {
+router.delete("/messenger/devices/:deviceId", requireAuth(), requireSectionRead("messenger"), async (req, res) => {
   try {
     if (!isNonEmptyString(req.params.deviceId, 160)) return res.status(400).json({ error: "Некорректный deviceId" });
     const deviceId = req.params.deviceId.trim();
@@ -1054,9 +1056,9 @@ router.delete("/messenger/devices/:deviceId", requireAuth(), async (req, res) =>
 // ── Participants ──────────────────────────────────────────────────────────────
 
 // POST /api/chats/:chatId/participants  — add participant (owner only)
-router.post("/chats/:chatId/participants", requireAuth(), async (req, res) => {
+router.post("/chats/:chatId/participants", requireAuth(), requireSectionWrite("messenger"), async (req, res) => {
   try {
-    if (isClientRole(req.user?.role)) {
+    if (await isClientRoleName(req.user?.role)) {
       return res.status(403).json({ error: "Клиент не может добавлять участников" });
     }
 
@@ -1110,7 +1112,7 @@ router.post("/chats/:chatId/participants", requireAuth(), async (req, res) => {
 });
 
 // DELETE /api/chats/:chatId/participants/:userId  — remove participant (owner only)
-router.delete("/chats/:chatId/participants/:userId", requireAuth(), async (req, res) => {
+router.delete("/chats/:chatId/participants/:userId", requireAuth(), requireSectionRead("messenger"), async (req, res) => {
   try {
     const chatId = Number(req.params.chatId);
     const targetUserId = Number(req.params.userId);
@@ -1120,7 +1122,7 @@ router.delete("/chats/:chatId/participants/:userId", requireAuth(), async (req, 
     const chat = await getChatById(chatId);
     if (!chat) return res.status(404).json({ error: "Чат не найден" });
 
-    if (isClientRole(req.user?.role) && req.user.id !== targetUserId) {
+    if ((await isClientRoleName(req.user?.role)) && req.user.id !== targetUserId) {
       return res.status(403).json({ error: "Клиент не может управлять участниками чата" });
     }
 
@@ -1157,7 +1159,7 @@ router.delete("/chats/:chatId/participants/:userId", requireAuth(), async (req, 
 // ── File upload / download ────────────────────────────────────────────────────
 
 // POST /api/chats/:chatId/files  — upload encrypted file blob
-router.post("/chats/:chatId/files", requireAuth(), upload.single("file"), async (req, res) => {
+router.post("/chats/:chatId/files", requireAuth(), requireSectionWrite("messenger"), upload.single("file"), async (req, res) => {
   try {
     const chatId = Number(req.params.chatId);
     if (!(await requireParticipant(req, res, chatId))) {
@@ -1184,7 +1186,7 @@ router.post("/chats/:chatId/files", requireAuth(), upload.single("file"), async 
 });
 
 // GET /api/chats/:chatId/files/:fileId  — download encrypted file blob
-router.get("/chats/:chatId/files/:fileId", requireAuth(), async (req, res) => {
+router.get("/chats/:chatId/files/:fileId", requireAuth(), requireSectionRead("messenger"), async (req, res) => {
   try {
     const chatId = Number(req.params.chatId);
     if (!(await requireParticipant(req, res, chatId))) return;
@@ -1221,14 +1223,14 @@ router.get("/chats/:chatId/files/:fileId", requireAuth(), async (req, res) => {
 // { id, username, displayName, role } for active users only. Client roles receive 403.
 router.get("/users", requireAuth(), async (req, res) => {
   try {
-    if (isClientRole(req.user?.role)) {
+    if (await isClientRoleName(req.user?.role)) {
       return res.status(403).json({ error: "Недостаточно прав" });
     }
 
     const users = await listUsers();
     const activeUsers = users
       .filter((u) => u.active !== false)
-      .map((u) => ({ id: u.id, username: u.username, displayName: u.display_name || null, role: u.role }))
+      .map((u) => ({ id: u.id, username: u.username, displayName: u.display_name || null, role: u.role, is_client: !!u.is_client }))
       .sort((a, b) => a.username.localeCompare(b.username, "ru"));
     res.json({ users: activeUsers });
   } catch (e) {

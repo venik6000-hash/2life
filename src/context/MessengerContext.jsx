@@ -98,7 +98,13 @@ const removeChatMessagesFromCache = (chatId, scope) => {
 };
 
 export function MessengerProvider({ children }) {
-  const { token, user, authFetch, updateUser, logout } = useAuth();
+  const { token, user, authFetch, updateUser, logout, permissions } = useAuth();
+  // Live revocation: when permissions are known and messenger read is off,
+  // the messenger must shut down (close WS, drop chats) without a reload.
+  // Unknown permissions (null, e.g. slow /me) keep the old allow behavior.
+  const messengerBlocked = permissions
+    ? !(permissions.isAdmin || permissions.sections?.messenger?.read || permissions.sections?.messenger?.write)
+    : false;
   const cacheScope = user?.id ? `user_${user.id}` : "anonymous";
   const cursorKey = `${CURSOR_KEY}_${cacheScope}`;
   const [ready, setReady] = useState(false);
@@ -176,7 +182,7 @@ export function MessengerProvider({ children }) {
   }, [cacheScope, cursorKey, user?.id]);
 
   useEffect(() => {
-    if (!token || !user) {
+    if (!token || !user || messengerBlocked) {
       setReady(false);
       setChats([]);
       setChatsLoaded(false);
@@ -187,7 +193,7 @@ export function MessengerProvider({ children }) {
     }
     setCryptoError("");
     setReady(true);
-  }, [token, user]);
+  }, [token, user, messengerBlocked]);
 
   const persistPendingQueue = useCallback((updater) => {
     setPendingQueue((prev) => {
@@ -594,7 +600,7 @@ export function MessengerProvider({ children }) {
   }, [clearRemovedChatLocalState, clearRetryTimer, loadPinnedForAll, loadPinnedForMe, logout, patchMessage, persistPendingQueue, removeMessage, upsertMessage, user?.id]);
 
   useEffect(() => {
-    if (!token || !user) return undefined;
+    if (!token || !user || messengerBlocked) return undefined;
     const sock = new MsgSocket({
       getTicket,
       onOpen: () => {
@@ -611,7 +617,7 @@ export function MessengerProvider({ children }) {
       wsRef.current = null;
       setWsConnected(false);
     };
-  }, [getTicket, handleWsEvent, token, user]);
+  }, [getTicket, handleWsEvent, token, user, messengerBlocked]);
 
   const setReplyTarget = useCallback((chatId, message) => {
     setReplyTargets((prev) => ({ ...prev, [chatId]: message || null }));

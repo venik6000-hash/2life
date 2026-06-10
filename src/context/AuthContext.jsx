@@ -152,8 +152,22 @@ export function AuthProvider({ children }) {
     return res;
   }, [token, clearSessionCache]);
 
+  // Re-fetch the current user + permissions without reload (used when the
+  // server pushes a "permissions-updated" event). A 401 is handled inside
+  // authFetch (session cleared → login screen).
+  const refreshAuth = useCallback(async () => {
+    const res = await authFetch("/api/auth/me");
+    if (!res.ok) return false;
+    const data = await res.json().catch(() => null);
+    if (!data?.user) return false;
+    setUser(data.user);
+    try { localStorage.setItem(USER_KEY, JSON.stringify(data.user)); } catch (_) {}
+    setPermissions(data.permissions || null);
+    return true;
+  }, [authFetch]);
+
   return (
-    <AuthContext.Provider value={{ token, user, permissions, checking, login, logout, authFetch, applySession, updateUser, getOrCreateDeviceId }}>
+    <AuthContext.Provider value={{ token, user, permissions, checking, login, logout, authFetch, applySession, updateUser, refreshAuth, getOrCreateDeviceId }}>
       {children}
     </AuthContext.Provider>
   );

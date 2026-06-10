@@ -1,11 +1,6 @@
 const {
   pool, withTransaction,
   deleteClient, getClientById,
-  getStagesByClient,
-  getCategoriesByClient, getMarkersByCategory, getValuesByMarker,
-  getJournalByStage,
-  getProtocolByStage,
-  getNutritionByStage,
   listDoctors,
   getAssignmentsByUser, hasAllClientsAccess
 } = require("./db");
@@ -30,130 +25,167 @@ const toReal = (v) => { const n = Number(v); return isFinite(n) ? n : 0; };
 const toInt  = (v) => { const n = parseInt(v, 10); return isFinite(n) ? n : 0; };
 
 // ─── Read (PostgreSQL → JS objects) ─────────────────────────────────────────
+//
+// Loading is BATCHED: a fixed 7 queries for any number of clients (clients ×
+// stages × categories × markers × values used to be one query per row — an
+// N+1 explosion). Output shape is identical to the old per-row loaders.
 
-const readAnalyticsForClient = async (clientId) => {
-  const cats = await getCategoriesByClient(clientId);
-  const result = [];
-  for (const cat of cats) {
-    const markers = await getMarkersByCategory(cat.id);
-    const markerResults = [];
-    for (const m of markers) {
-      const values = await getValuesByMarker(m.id);
-      markerResults.push({
+const mapValueRow = (v) => {
+  const entry = { date: v.date, value: v.value };
+  if (v.flag_off) entry.flagOff = true;
+  return entry;
+};
+
+const mapStageRow = (row, { protocolRows, nutritionRows, journalRows, analyticsCategories }) => ({
+  id:                   row.stage_num,
+  title:                row.title,
+  subtitle:             row.subtitle,
+  doctor:               row.doctor,
+  doctorRole:           row.doctor_role,
+  dateStart:            row.date_start,
+  dateEnd:              row.date_end,
+  status:               row.status,
+  email:                row.email,
+  phone:                row.phone,
+  city:                 row.city,
+  height:               row.height,
+  weightCurrent:        row.weight_current,
+  weightGoal:           row.weight_goal,
+  bmi:                  row.bmi,
+  waist:                row.waist,
+  tasks:                jArr(row.tasks_json),
+  syndromes:            jArr(row.syndromes_json),
+  diagnoses:            jArr(row.diagnoses_json),
+  deficits:             jArr(row.deficits_json),
+  autoDeficitSelection: jArr(row.auto_deficit_selection_json),
+  labOrderSelected:     jObj(row.lab_order_selected_json),
+  labOrderGroupOrder:   jArr(row.lab_order_group_order_json),
+  nutrition:            jObj(row.nutrition_json),
+  injections:           jArr(row.injections_json),
+  injectionSchedule:    normalizeInjectionSchedule(jObj(row.injection_schedule_json)),
+  questionnaire:        jObj(row.questionnaire_json),
+  protocolRevisions:    protocolRows.map(pr => ({
+    id:     pr.revision_num,
+    date:   pr.date,
+    label:  pr.label,
+    groups: jArr(pr.groups_json)
+  })),
+  nutritionRevisions:   nutritionRows.map(nr => {
+    const data = jObj(nr.data_json);
+    return Object.assign({ id: nr.revision_num, date: nr.date, label: nr.label, comment: nr.comment }, data);
+  }),
+  journal:              journalRows.map(je => ({
+    date:   je.date,
+    type:   je.type,
+    text:   je.text,
+    author: je.author
+  })),
+  analyticsCategories
+});
+
+const groupBy = (rows, key) => {
+  const map = new Map();
+  for (const row of rows) {
+    const k = row[key];
+    if (!map.has(k)) map.set(k, []);
+    map.get(k).push(row);
+  }
+  return map;
+};
+
+// Assemble full client objects for the given `clients` rows in 6 batched
+// queries (analytics: 3, stages + revisions + journal: 3).
+const buildClientsBatch = async (clientRows) => {
+  if (!clientRows.length) return [];
+  const clientIds = clientRows.map((row) => row.id);
+
+  const [catsRes, markersRes, valuesRes, stagesRes] = await Promise.all([
+    pool.query(
+      "SELECT * FROM analytics_categories WHERE client_id = ANY($1) ORDER BY sort_order, id",
+      [clientIds]
+    ),
+    pool.query(
+      `SELECT m.* FROM analytics_markers m
+       JOIN analytics_categories c ON c.id = m.category_id
+       WHERE c.client_id = ANY($1)
+       ORDER BY m.sort_order, m.id`,
+      [clientIds]
+    ),
+    pool.query(
+      `SELECT v.* FROM analytics_values v
+       JOIN analytics_markers m ON m.id = v.marker_id
+       JOIN analytics_categories c ON c.id = m.category_id
+       WHERE c.client_id = ANY($1)
+       ORDER BY v.id`,
+      [clientIds]
+    ),
+    pool.query(
+      "SELECT * FROM stages WHERE client_id = ANY($1) ORDER BY stage_num",
+      [clientIds]
+    ),
+  ]);
+
+  const stageIds = stagesRes.rows.map((row) => row.id);
+  const [protoRes, nutriRes, journalRes] = stageIds.length
+    ? await Promise.all([
+        pool.query("SELECT * FROM protocol_revisions WHERE stage_id = ANY($1) ORDER BY revision_num", [stageIds]),
+        pool.query("SELECT * FROM nutrition_revisions WHERE stage_id = ANY($1) ORDER BY revision_num", [stageIds]),
+        pool.query("SELECT * FROM journal_entries WHERE stage_id = ANY($1) ORDER BY entry_num", [stageIds]),
+      ])
+    : [{ rows: [] }, { rows: [] }, { rows: [] }];
+
+  const catsByClient    = groupBy(catsRes.rows, "client_id");
+  const markersByCat    = groupBy(markersRes.rows, "category_id");
+  const valuesByMarker  = groupBy(valuesRes.rows, "marker_id");
+  const stagesByClient  = groupBy(stagesRes.rows, "client_id");
+  const protoByStage    = groupBy(protoRes.rows, "stage_id");
+  const nutriByStage    = groupBy(nutriRes.rows, "stage_id");
+  const journalByStage  = groupBy(journalRes.rows, "stage_id");
+
+  return clientRows.map((row) => {
+    const analyticsCategories = (catsByClient.get(row.id) || []).map((cat) => ({
+      name: cat.name,
+      markers: (markersByCat.get(cat.id) || []).map((m) => ({
         name:    m.name,
         unit:    m.unit,
         refMin:  m.ref_min,
         refMax:  m.ref_max,
         optimal: m.optimal,
-        values:  values.map(v => {
-          const entry = { date: v.date, value: v.value };
-          if (v.flag_off) entry.flagOff = true;
-          return entry;
-        })
-      });
-    }
-    result.push({ name: cat.name, markers: markerResults });
-  }
-  return result;
-};
-
-const readStagesForClient = async (clientId, analyticsCategories) => {
-  const rows = await getStagesByClient(clientId);
-  const stages = [];
-  for (const row of rows) {
-    const stageDbId = row.id;
-
-    // Protocol revisions
-    const prRows = await getProtocolByStage(stageDbId);
-    const protocolRevisions = prRows.map(pr => ({
-      id:     pr.revision_num,
-      date:   pr.date,
-      label:  pr.label,
-      groups: jArr(pr.groups_json)
+        values:  (valuesByMarker.get(m.id) || []).map(mapValueRow)
+      }))
     }));
 
-    // Nutrition revisions
-    const nrRows = await getNutritionByStage(stageDbId);
-    const nutritionRevisions = nrRows.map(nr => {
-      const data = jObj(nr.data_json);
-      return Object.assign({ id: nr.revision_num, date: nr.date, label: nr.label, comment: nr.comment }, data);
-    });
-
-    // Journal for this stage
-    const jRows = await getJournalByStage(stageDbId);
-    const journal = jRows.map(je => ({
-      date:   je.date,
-      type:   je.type,
-      text:   je.text,
-      author: je.author
+    const stages = (stagesByClient.get(row.id) || []).map((stageRow) => mapStageRow(stageRow, {
+      protocolRows:  protoByStage.get(stageRow.id) || [],
+      nutritionRows: nutriByStage.get(stageRow.id) || [],
+      journalRows:   journalByStage.get(stageRow.id) || [],
+      analyticsCategories,
     }));
 
-    stages.push({
-      id:                   row.stage_num,
-      title:                row.title,
-      subtitle:             row.subtitle,
-      doctor:               row.doctor,
-      doctorRole:           row.doctor_role,
-      dateStart:            row.date_start,
-      dateEnd:              row.date_end,
-      status:               row.status,
-      email:                row.email,
-      phone:                row.phone,
-      city:                 row.city,
-      height:               row.height,
-      weightCurrent:        row.weight_current,
-      weightGoal:           row.weight_goal,
-      bmi:                  row.bmi,
-      waist:                row.waist,
-      tasks:                jArr(row.tasks_json),
-      syndromes:            jArr(row.syndromes_json),
-      diagnoses:            jArr(row.diagnoses_json),
-      deficits:             jArr(row.deficits_json),
-      autoDeficitSelection: jArr(row.auto_deficit_selection_json),
-      labOrderSelected:     jObj(row.lab_order_selected_json),
-      labOrderGroupOrder:   jArr(row.lab_order_group_order_json),
-      nutrition:            jObj(row.nutrition_json),
-      injections:           jArr(row.injections_json),
-      injectionSchedule:    normalizeInjectionSchedule(jObj(row.injection_schedule_json)),
-      questionnaire:        jObj(row.questionnaire_json),
-      protocolRevisions:    protocolRevisions,
-      nutritionRevisions:   nutritionRevisions,
-      journal:              journal,
-      analyticsCategories:  analyticsCategories
-    });
-  }
-  return stages;
-};
-
-const rowToClient = async (row) => {
-  const analyticsCategories = await readAnalyticsForClient(row.id);
-  const stages = await readStagesForClient(row.id, analyticsCategories);
-  return {
-    id:        row.id,
-    name:      row.name,
-    shortName: row.short_name,
-    dob:       row.dob,
-    age:       row.age,
-    sex:       row.sex,
-    avatar:    row.avatar,
-    color:     row.color,
-    stages:    stages
-  };
+    return {
+      id:        row.id,
+      name:      row.name,
+      shortName: row.short_name,
+      dob:       row.dob,
+      age:       row.age,
+      sex:       row.sex,
+      avatar:    row.avatar,
+      color:     row.color,
+      stages:    stages
+    };
+  });
 };
 
 const getClients = async () => {
   const r = await pool.query("SELECT * FROM clients ORDER BY id");
-  const clients = [];
-  for (const row of r.rows) {
-    clients.push(await rowToClient(row));
-  }
-  return clients;
+  return buildClientsBatch(r.rows);
 };
 
 const getOneClient = async (clientId) => {
   const row = await getClientById(clientId);
   if (!row) return null;
-  return rowToClient(row);
+  const [client] = await buildClientsBatch([row]);
+  return client || null;
 };
 
 const getClientsForUser = async (userId, role) => {
@@ -161,13 +193,7 @@ const getClientsForUser = async (userId, role) => {
   const assignedRows = await getAssignmentsByUser(userId);
   const assignedIds = new Set(assignedRows.map(r => r.client_id));
   const r = await pool.query("SELECT * FROM clients ORDER BY id");
-  const clients = [];
-  for (const row of r.rows) {
-    if (assignedIds.has(row.id)) {
-      clients.push(await rowToClient(row));
-    }
-  }
-  return clients;
+  return buildClientsBatch(r.rows.filter((row) => assignedIds.has(row.id)));
 };
 
 // ─── Write (JS objects → PostgreSQL) ────────────────────────────────────────

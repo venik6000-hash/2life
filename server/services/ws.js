@@ -8,6 +8,7 @@ const {
   getLastMessageForChat,
 } = require("./db");
 const { encryptText, encryptJson } = require("./messengerCrypto");
+const { getPermissionsForRoleCached } = require("./permissions");
 const { createSyncEvent } = require("./messengerStore");
 const { sendPrivateMessagePush } = require("./messengerPush");
 
@@ -238,6 +239,14 @@ const handleMessage = async (ws, raw) => {
     return;
   }
 
+  // WS mirrors the HTTP enforcement: sending/editing/deleting messages needs
+  // messenger WRITE permission (admin always passes).
+  const canWriteMessenger = async () => {
+    if (user.role === "admin") return true;
+    const perms = await getPermissionsForRoleCached(user.role);
+    return !!perms?.sections?.messenger?.write;
+  };
+
   // ── send_message ──────────────────────────────────────────────────────────
   if (type === "send_message") {
     const chatId = safeId(msg.chatId);
@@ -259,6 +268,10 @@ const handleMessage = async (ws, raw) => {
 
     const allowed = await isParticipant(chatId, user.id);
     if (!allowed) return;
+    if (!(await canWriteMessenger())) {
+      try { ws.send(JSON.stringify({ type: "send_error", error: "Нет прав на отправку сообщений", clientMessageId })); } catch {}
+      return;
+    }
 
     try {
       const { replyParentId, mergedMeta } = await validateReplyAndMentions(
@@ -320,6 +333,7 @@ const handleMessage = async (ws, raw) => {
 
     const allowed = await isParticipant(chatId, user.id);
     if (!allowed) return;
+    if (!(await canWriteMessenger())) return;
 
     const original = await getMessageById(chatId, messageId);
     if (!original || original.deleted_for_all) return;
@@ -361,6 +375,7 @@ const handleMessage = async (ws, raw) => {
 
     const allowed = await isParticipant(chatId, user.id);
     if (!allowed) return;
+    if (!(await canWriteMessenger())) return;
 
     const existing = await getMessageById(chatId, messageId);
     if (!existing) return;

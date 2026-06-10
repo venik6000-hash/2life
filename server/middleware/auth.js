@@ -1,6 +1,6 @@
 const jwt  = require("jsonwebtoken");
 const crypto = require("crypto");
-const { getPermissionsForRole } = require("../services/permissions");
+const { getPermissionsForRoleCached } = require("../services/permissions");
 const { isBlacklisted } = require("../services/tokenBlacklist");
 const { pool } = require("../services/db");
 
@@ -158,7 +158,7 @@ const hasSectionWrite = (permissions, sectionId) => {
 
 const attachPermissions = async (req) => {
   if (req.rolePermissions) return req.rolePermissions;
-  const perms = await getPermissionsForRole(req.user?.role);
+  const perms = await getPermissionsForRoleCached(req.user?.role);
   req.rolePermissions = perms || null;
   return req.rolePermissions;
 };
@@ -234,6 +234,9 @@ module.exports = {
   requireSectionWrite,
   requireAnySectionRead,
   requireAnySectionWrite,
+  hasSectionRead,
+  hasSectionWrite,
+  attachPermissions,
   signToken,
   TOKEN_TTL,
 };

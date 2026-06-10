@@ -54,7 +54,7 @@ async function oldGetPermissionsForRole(roleName) {
     const sections = ["overview","questionnaire","nutrition","menu","protocol","injections","analytics","lab","journal","messenger"];
     const sectionsObj = {};
     for (const s of sections) sectionsObj[s] = { read: true, write: true };
-    return { sections: sectionsObj, canDeleteClient: true, canCreateClient: true, canImportData: true, isAdmin: true };
+    return { sections: sectionsObj, canDeleteClient: true, canCreateClient: true, canImportData: true, isAdmin: true, isClient: false };
   }
   let role = await getRoleByName(roleName);
   if (!role && roleName === "client") role = await getRoleByName("viewer");
@@ -78,6 +78,7 @@ async function oldGetPermissionsForRole(roleName) {
     canCreateClient: !!perms["create_client"],
     canImportData:   !!perms["import_data"],
     isAdmin: false,
+    isClient: !!role.is_client,
   };
 }
 

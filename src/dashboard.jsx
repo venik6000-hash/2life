@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, lazy, Suspense } from "react";
 import { sanitizePrintHtml } from "./utils/helpers";
 import { useDashboard, SECTIONS, isClientRole } from "./context/DashboardContext";
 import { useAuth } from "./context/AuthContext";
@@ -8,14 +8,14 @@ import JournalSection from "./sections/Journal";
 import LabOrderSection from "./sections/LabOrder";
 import OverviewSection from "./sections/Overview";
 import NutritionSection from "./sections/Nutrition";
-import MenuSection from "./sections/Menu";
+const MenuSection = lazy(() => import("./sections/Menu"));
 import InjectionsSection from "./sections/Injections";
 import ProtocolSection from "./sections/Protocol";
-import AnalyticsSection from "./sections/Analytics";
+const AnalyticsSection = lazy(() => import("./sections/Analytics"));
 import QuestionnaireSection from "./sections/Questionnaire";
 import ModalsSection from "./sections/Modals";
-import AdminSection from "./sections/AdminSection";
-import MessengerSection from "./sections/Messenger";
+const AdminSection = lazy(() => import("./sections/AdminSection"));
+const MessengerSection = lazy(() => import("./sections/Messenger"));
 import LoadingScreen from "./components/LoadingScreen";
 import NoClientsScreen from "./components/NoClientsScreen";
 import DashboardShell from "./components/DashboardShell";
@@ -65,7 +65,7 @@ export default function Dashboard() {
     reloadJournalBadges,
   } = useDashboard();
   const { user } = useAuth();
-  const isClient = isClientRole(user?.role);
+  const isClient = isClientRole(user);
   const [isDeficitPickerOpen, setIsDeficitPickerOpen] = useState(false);
   const [analyticsJumpTarget, setAnalyticsJumpTarget] = useState(null);
   const [protocolMode, setProtocolMode] = useState("builder");
@@ -265,7 +265,9 @@ export default function Dashboard() {
         }
       }}
     >
-      {(sectionRenderers[activeSectionId] || renderOverviewSection)()}
+      <Suspense fallback={<div style={{ padding: 24, fontSize: 13, opacity: .6 }}>Загрузка раздела…</div>}>
+        {(sectionRenderers[activeSectionId] || renderOverviewSection)()}
+      </Suspense>
     </DashboardShell>
   );
 }

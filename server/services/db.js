@@ -159,7 +159,8 @@ const initSchema = async () => {
       id           SERIAL PRIMARY KEY,
       name         TEXT NOT NULL UNIQUE,
       display_name TEXT NOT NULL DEFAULT '',
-      is_system    BOOLEAN NOT NULL DEFAULT false
+      is_system    BOOLEAN NOT NULL DEFAULT false,
+      is_client    BOOLEAN NOT NULL DEFAULT false
     );
 
     CREATE TABLE IF NOT EXISTS role_sections (
@@ -445,6 +446,34 @@ const initSchema = async () => {
 
   const { ensureMigrationsTable, runOnce } = require("./migrations");
   await ensureMigrationsTable();
+
+  // Additive column for existing DBs (CREATE TABLE IF NOT EXISTS won't add it).
+  // Idempotent catalog no-op after the first boot, so it's safe outside runOnce.
+  await pool.query(`ALTER TABLE roles ADD COLUMN IF NOT EXISTS is_client BOOLEAN NOT NULL DEFAULT false`);
+
+  // One-time backfill: the legacy client roles were identified by NAME
+  // ('viewer'/'client'); mark them with the explicit flag. Behind runOnce so an
+  // admin can later untick the flag without it being re-applied on every boot.
+  await runOnce("2026-06_roles_is_client_backfill", async (c) => {
+    await c.query(`UPDATE roles SET is_client = true WHERE LOWER(TRIM(name)) IN ('viewer', 'client')`);
+  });
+
+  // Messenger section permissions become ENFORCED in this release (they were
+  // decorative before). Force-enable messenger read+write for every existing
+  // staff (non-client) role so staff messaging keeps working after upgrade.
+  // Overriding blindly is safe: the messenger checkbox was never shown in the
+  // admin UI before this release, so no deliberate admin choice can be lost.
+  // Client roles are left untouched (the seeded viewer role already has
+  // messenger read+write). MUST run after the is_client backfill above.
+  await runOnce("2026-06_messenger_enable_staff_roles", async (c) => {
+    await c.query(`
+      INSERT INTO role_sections (role_id, section_id, can_read, can_write)
+      SELECT r.id, 'messenger', true, true
+      FROM roles r
+      WHERE r.is_client = false
+      ON CONFLICT (role_id, section_id) DO UPDATE SET can_read = true, can_write = true
+    `);
+  });
 
   // One-time cleanup: journal checklist subsystem was removed in 2026-05-28.
   // Wrapped in runOnce so the LIKE '%"checklist":true%' operator only runs while
@@ -827,8 +856,14 @@ const getUser = async (username) => {
 };
 
 const listUsers = async () => {
+  // is_client comes from the roles table — a user with an unknown role gets
+  // false (treated as staff), same as the explicit-flag default.
   const r = await pool.query(
-    "SELECT id, username, display_name, role, created_at, active, all_clients_access FROM users ORDER BY id"
+    `SELECT u.id, u.username, u.display_name, u.role, u.created_at, u.active, u.all_clients_access,
+            COALESCE(ro.is_client, false) AS is_client
+     FROM users u
+     LEFT JOIN roles ro ON ro.name = u.role
+     ORDER BY u.id`
   );
   return r.rows;
 };
@@ -1061,16 +1096,20 @@ const countUsersByRole = async (roleName) => {
   return r.rows[0]?.n || 0;
 };
 
-const insertRole = async (name, displayName, isSystem, db = pool) => {
+const insertRole = async (name, displayName, isSystem, db = pool, isClient = false) => {
   const r = await db.query(
-    "INSERT INTO roles (name, display_name, is_system) VALUES ($1, $2, $3) RETURNING id",
-    [name, displayName, isSystem]
+    "INSERT INTO roles (name, display_name, is_system, is_client) VALUES ($1, $2, $3, $4) RETURNING id",
+    [name, displayName, isSystem, !!isClient]
   );
   return { id: r.rows[0].id };
 };
 
 const updateRoleDisplayName = async (displayName, id) => {
   await pool.query("UPDATE roles SET display_name = $1 WHERE id = $2", [displayName, id]);
+};
+
+const updateRoleIsClient = async (isClient, id) => {
+  await pool.query("UPDATE roles SET is_client = $1 WHERE id = $2", [!!isClient, id]);
 };
 
 const deleteRole = async (id) => {
@@ -1150,10 +1189,10 @@ const listDistinctAnalyticsMarkers = async () => {
 const normalizeAssignmentSource = (source) => (source === "doctor" ? "doctor" : "manual");
 const hasAssignmentSource = (value, source) => String(value || "").split("_").includes(source);
 
-const upsertClientAssignment = async (userId, clientId, assignedBy, source = "manual") => {
+const upsertClientAssignment = async (userId, clientId, assignedBy, source = "manual", db = pool) => {
   const assignmentSource = normalizeAssignmentSource(source);
   if (assignmentSource === "manual") {
-    await pool.query(
+    await db.query(
       `INSERT INTO client_assignments (user_id, client_id, assigned_by, assignment_source)
        VALUES ($1, $2, $3, 'manual')
        ON CONFLICT (user_id, client_id) DO UPDATE
@@ -1166,7 +1205,7 @@ const upsertClientAssignment = async (userId, clientId, assignedBy, source = "ma
     );
     return;
   }
-  await pool.query(
+  await db.query(
     `INSERT INTO client_assignments (user_id, client_id, assigned_by, assignment_source)
      VALUES ($1, $2, $3, 'doctor')
      ON CONFLICT (user_id, client_id) DO UPDATE
@@ -1186,8 +1225,7 @@ const getClientAssignment = async (userId, clientId) => {
   return r.rows[0] || null;
 };
 
-const deleteClientAssignment = async (userId, clientId) => {
-  return withTransaction(async (pgClient) => {
+const deleteClientAssignmentCore = async (pgClient, userId, clientId) => {
     const current = await pgClient.query(
       "SELECT assignment_source FROM client_assignments WHERE user_id = $1 AND client_id = $2 FOR UPDATE",
       [userId, clientId]
@@ -1206,13 +1244,15 @@ const deleteClientAssignment = async (userId, clientId) => {
       [userId, clientId]
     );
     return { rowCount: r.rowCount };
-  });
 };
 
-const deleteDoctorClientAssignments = async (userId, doctorName) => {
-  const safeName = String(doctorName || "").trim();
-  if (!safeName) return [];
-  return withTransaction(async (pgClient) => {
+// db: pass a transaction client to run inside a caller-owned transaction.
+const deleteClientAssignment = async (userId, clientId, db = null) => {
+  if (db) return deleteClientAssignmentCore(db, userId, clientId);
+  return withTransaction((pgClient) => deleteClientAssignmentCore(pgClient, userId, clientId));
+};
+
+const deleteDoctorClientAssignmentsCore = async (pgClient, userId, safeName) => {
     const candidates = await pgClient.query(
       `SELECT ca.client_id, ca.assignment_source
          FROM client_assignments ca
@@ -1249,16 +1289,17 @@ const deleteDoctorClientAssignments = async (userId, doctorName) => {
       }
     }
     return touched;
-  });
 };
 
-const replaceDoctorClientAssignments = async (clientId, userIds, assignedBy) => {
-  const safeClientId = String(clientId || "").trim();
-  if (!safeClientId) return [];
-  const safeUserIds = Array.from(new Set(
-    (Array.isArray(userIds) ? userIds : []).map(Number).filter((id) => Number.isInteger(id) && id > 0)
-  ));
-  return withTransaction(async (pgClient) => {
+// db: pass a transaction client to run inside a caller-owned transaction.
+const deleteDoctorClientAssignments = async (userId, doctorName, db = null) => {
+  const safeName = String(doctorName || "").trim();
+  if (!safeName) return [];
+  if (db) return deleteDoctorClientAssignmentsCore(db, userId, safeName);
+  return withTransaction((pgClient) => deleteDoctorClientAssignmentsCore(pgClient, userId, safeName));
+};
+
+const replaceDoctorClientAssignmentsCore = async (pgClient, safeClientId, safeUserIds, assignedBy) => {
     const touched = new Set(safeUserIds);
     const doctorRemoved = await pgClient.query(
       `UPDATE client_assignments
@@ -1291,7 +1332,17 @@ const replaceDoctorClientAssignments = async (clientId, userIds, assignedBy) => 
       );
     }
     return Array.from(touched);
-  });
+};
+
+// db: pass a transaction client to run inside a caller-owned transaction.
+const replaceDoctorClientAssignments = async (clientId, userIds, assignedBy, db = null) => {
+  const safeClientId = String(clientId || "").trim();
+  if (!safeClientId) return [];
+  const safeUserIds = Array.from(new Set(
+    (Array.isArray(userIds) ? userIds : []).map(Number).filter((id) => Number.isInteger(id) && id > 0)
+  ));
+  if (db) return replaceDoctorClientAssignmentsCore(db, safeClientId, safeUserIds, assignedBy);
+  return withTransaction((pgClient) => replaceDoctorClientAssignmentsCore(pgClient, safeClientId, safeUserIds, assignedBy));
 };
 
 const getAssignmentsByUser = async (userId) => {
@@ -2151,7 +2202,7 @@ module.exports = {
   // doctors
   insertDoctor, listDoctors, getDoctorByName,
   // roles
-  listRoles, getRoleByName, getRoleById, countUsersByRole, insertRole, updateRoleDisplayName, deleteRole,
+  listRoles, getRoleByName, getRoleById, countUsersByRole, insertRole, updateRoleDisplayName, updateRoleIsClient, deleteRole,
   // role sections
   getRoleSections, upsertRoleSection,
   // role permissions

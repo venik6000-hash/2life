@@ -12,8 +12,16 @@ export const SECTIONS = [
   {id:"messenger",ic:"💬",lb:"Мессенджер"},
 ];
 
-export const isClientRole = (role) => {
-  const normalized = String(role || "").trim().toLowerCase();
+// Accepts a user-like object carrying the explicit is_client flag (set by the
+// admin per role), or a bare role-name string. The name check survives only as
+// a fallback for stale cached sessions saved before the flag existed.
+export const isClientRole = (userOrRole) => {
+  if (userOrRole && typeof userOrRole === "object") {
+    if (typeof userOrRole.is_client === "boolean") return userOrRole.is_client;
+    if (typeof userOrRole.isClient === "boolean") return userOrRole.isClient;
+  }
+  const name = typeof userOrRole === "string" ? userOrRole : String(userOrRole?.role || "");
+  const normalized = name.trim().toLowerCase();
   return normalized === "viewer" || normalized === "client";
 };
 
@@ -135,7 +143,7 @@ const collapsePatchOps = (ops = []) => {
 };
 
 export function DashboardProvider({ children }) {
-  const { authFetch, user, permissions } = useAuth();
+  const { authFetch, user, permissions, refreshAuth } = useAuth();
   const [cls, setCls] = useState([]);
   const [cid, setCid] = useState(()=>localStorage.getItem("dash_cid") || null);
   const [si, setSi] = useState(()=>Number(localStorage.getItem("dash_si") || 0));
@@ -155,17 +163,18 @@ export function DashboardProvider({ children }) {
   const allowEmptyDoctorsSaveRef = useRef(false);
 
   const isAdmin = useMemo(() => !!(permissions?.isAdmin || user?.role === "admin"), [permissions, user?.role]);
+  // Messenger is no longer force-shown to client roles: the admin's messenger
+  // read/write checkboxes are now enforced server-side and govern visibility
+  // for everyone (admin excepted).
   const canReadSection = useCallback((sectionId) => {
     if (isAdmin) return true;
-    if (sectionId === "messenger" && isClientRole(user?.role)) return true;
     const p = permissions?.sections?.[sectionId];
     return !!(p?.read || p?.write);
-  }, [isAdmin, permissions, user?.role]);
+  }, [isAdmin, permissions]);
   const canWriteSection = useCallback((sectionId) => {
     if (isAdmin) return true;
-    if (sectionId === "messenger" && isClientRole(user?.role)) return true;
     return !!permissions?.sections?.[sectionId]?.write;
-  }, [isAdmin, permissions, user?.role]);
+  }, [isAdmin, permissions]);
   const canCreateClient = useMemo(() => !!(isAdmin || permissions?.canCreateClient), [isAdmin, permissions]);
   const canDeleteClient = useMemo(() => !!(isAdmin || permissions?.canDeleteClient), [isAdmin, permissions]);
   const canImportData = useMemo(() => !!(isAdmin || permissions?.canImportData), [isAdmin, permissions]);
@@ -529,6 +538,13 @@ export function DashboardProvider({ children }) {
     return () => clearTimeout(saveTimer.current);
   }, [cls, loaded, enqueueClientSave]);
 
+  // Identity ref so the SSE listener below can match events against the
+  // current user without re-subscribing on every auth refresh.
+  const userIdentityRef = useRef({ id: null, role: "" });
+  useEffect(() => {
+    userIdentityRef.current = { id: user?.id ?? null, role: String(user?.role || "") };
+  }, [user]);
+
   // ─── Реальное время: SSE-подписка на обновления от других пользователей ───────
   // Когда другой сотрудник сохраняет изменения — сервер присылает событие "client-updated".
   // Если у нас нет несохранённых правок по этому клиенту — тихо обновляем данные на экране.
@@ -563,6 +579,18 @@ export function DashboardProvider({ children }) {
             setCls(prev => prev.map(c => c.id === fresh.id ? fresh : c));
           } catch (_) {}
         });
+        // Живой отзыв доступа: если админ изменил права нашей роли (или нас
+        // лично) — перечитываем права без перезагрузки; закрытые разделы
+        // исчезают с экрана сразу (visibleSections пересчитывается).
+        es.addEventListener("permissions-updated", (e) => {
+          try {
+            const data = JSON.parse(e.data || "{}");
+            const me = userIdentityRef.current;
+            const matchesRole = data.roleName && String(data.roleName) === me.role;
+            const matchesUser = data.userId != null && Number(data.userId) === Number(me.id);
+            if (matchesRole || matchesUser) refreshAuth?.();
+          } catch (_) {}
+        });
         es.onerror = () => {};
       } catch (_) {}
     };
@@ -573,7 +601,7 @@ export function DashboardProvider({ children }) {
       cancelled = true;
       es?.close();
     };
-  }, [loaded, authFetch]);
+  }, [loaded, authFetch, refreshAuth]);
 
   const doctorsSaveTimer = useRef(null);
   useEffect(() => {

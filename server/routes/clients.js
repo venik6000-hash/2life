@@ -6,7 +6,7 @@ const { buildActionLogs, appendActivityLog } = require("../services/logger");
 const { createBackupSnapshot } = require("../services/backup");
 const { requireAuth, requirePermission, requireSectionWrite, requireAnySectionRead, requireAnySectionWrite } = require("../middleware/auth");
 const { getPermissionsForRole } = require("../services/permissions");
-const { pool, upsertClientAssignment, deleteClientAssignment, getClientAssignment, getAssignmentsByClient, getAssignmentsByUser, getDoctorByName, hasAllClientsAccess, replaceDoctorClientAssignments } = require("../services/db");
+const { pool, withTransaction, upsertClientAssignment, deleteClientAssignment, getClientAssignment, getAssignmentsByClient, getAssignmentsByUser, getDoctorByName, hasAllClientsAccess, replaceDoctorClientAssignments } = require("../services/db");
 const { syncUserChatAccessByClientPermissions } = require("../services/chatAccessSync");
 const { notifyUserChatAccessChanges } = require("../services/messengerAccessNotifications");
 const { addConnection, removeConnection, broadcast } = require("../services/sse");
@@ -268,8 +268,12 @@ router.post("/clients/:clientId/assignments", requireAuth("admin"), async (req, 
     if (!Number.isInteger(safeUserId) || safeUserId <= 0) {
       return res.status(400).json({ error: "userId обязателен" });
     }
-    await upsertClientAssignment(safeUserId, req.params.clientId, req.user.id);
-    const syncResult = await syncUserChatAccessByClientPermissions(pool, safeUserId);
+    // Assignment + chat-access sync commit atomically; notifications go out
+    // only after the transaction is committed.
+    const syncResult = await withTransaction(async (db) => {
+      await upsertClientAssignment(safeUserId, req.params.clientId, req.user.id, "manual", db);
+      return syncUserChatAccessByClientPermissions(db, safeUserId);
+    });
     await notifyUserChatAccessChanges(pool, safeUserId, syncResult);
     res.json({ ok: true });
   } catch (e) {
@@ -291,8 +295,12 @@ router.delete("/clients/:clientId/assignments/:userId", requireAuth("admin"), as
         code: "DOCTOR_DERIVED_ASSIGNMENT"
       });
     }
-    await deleteClientAssignment(targetUserId, req.params.clientId);
-    const syncResult = await syncUserChatAccessByClientPermissions(pool, targetUserId);
+    // Removal + chat-access sync commit atomically: a failure between them
+    // can't leave the removed doctor still holding chat access.
+    const syncResult = await withTransaction(async (db) => {
+      await deleteClientAssignment(targetUserId, req.params.clientId, db);
+      return syncUserChatAccessByClientPermissions(db, targetUserId);
+    });
     await notifyUserChatAccessChanges(pool, targetUserId, syncResult);
     res.json({ ok: true });
   } catch (e) {
@@ -300,19 +308,24 @@ router.delete("/clients/:clientId/assignments/:userId", requireAuth("admin"), as
   }
 });
 
-// Список клиентов, назначенных на врача (для admin-панели)
+// Список клиентов, назначенных на врача (для admin-панели).
+// Лёгкий SELECT id+name — раньше тут собирались ПОЛНЫЕ карточки клиентов
+// (этапы, анализы, ревизии) ради двух полей.
 router.get("/admin/users/:userId/clients", requireAuth("admin"), async (req, res) => {
   try {
-    const allClients = await getClients();
     const targetUserId = Number(req.params.userId);
     if (await hasAllClientsAccess(targetUserId)) {
-      const clients = allClients.map(c => ({ id: c.id, name: c.name }));
-      return res.json({ ok: true, clients });
+      const r = await pool.query("SELECT id, name FROM clients ORDER BY id");
+      return res.json({ ok: true, clients: r.rows });
     }
-    const rows = await getAssignmentsByUser(targetUserId);
-    const ids = new Set(rows.map(r => r.client_id));
-    const clients = allClients.filter(c => ids.has(c.id)).map(c => ({ id: c.id, name: c.name }));
-    res.json({ ok: true, clients });
+    const r = await pool.query(
+      `SELECT c.id, c.name
+       FROM clients c
+       JOIN client_assignments ca ON ca.client_id = c.id AND ca.user_id = $1
+       ORDER BY c.id`,
+      [targetUserId]
+    );
+    res.json({ ok: true, clients: r.rows });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -333,9 +346,19 @@ const autoAssignDoctors = async (clientId, assignedByUserId) => {
       nextDoctorUserIds.push(Number(doctor.user_id));
     }
   }
-  const touchedUserIds = await replaceDoctorClientAssignments(clientId, nextDoctorUserIds, assignedByUserId || null);
-  for (const userId of touchedUserIds) {
-    const syncResult = await syncUserChatAccessByClientPermissions(pool, userId);
+  // Doctor-assignment replacement + chat-access sync for every touched user
+  // commit atomically: a failure rolls back both, so an old doctor can't keep
+  // chat access while assignments already point elsewhere. Notifications go
+  // out only after commit.
+  const syncResults = await withTransaction(async (db) => {
+    const touchedUserIds = await replaceDoctorClientAssignments(clientId, nextDoctorUserIds, assignedByUserId || null, db);
+    const results = [];
+    for (const userId of touchedUserIds) {
+      results.push({ userId, syncResult: await syncUserChatAccessByClientPermissions(db, userId) });
+    }
+    return results;
+  });
+  for (const { userId, syncResult } of syncResults) {
     await notifyUserChatAccessChanges(pool, userId, syncResult);
   }
 };
