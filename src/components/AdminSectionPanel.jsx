@@ -244,18 +244,26 @@ export default function AdminSection() {
 
   const handleAssignClient = async (userId, clientId) => {
     if (!clientId) return;
-    await authFetch(`/api/clients/${clientId}/assignments`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId })
-    });
-    setAddClientSelect("");
-    fetchUserClients(userId);
+    try {
+      const r = await authFetch(`/api/clients/${clientId}/assignments`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId })
+      });
+      const d = await readResponseSafe(r);
+      if (!r.ok) { alert(d.error || "Не удалось назначить клиента"); return; }
+      setAddClientSelect("");
+      fetchUserClients(userId);
+    } catch { alert("Сетевая ошибка при назначении клиента"); }
   };
 
   const handleUnassignClient = async (userId, clientId) => {
-    await authFetch(`/api/clients/${clientId}/assignments/${userId}`, { method: "DELETE" });
-    fetchUserClients(userId);
+    try {
+      const r = await authFetch(`/api/clients/${clientId}/assignments/${userId}`, { method: "DELETE" });
+      const d = await readResponseSafe(r);
+      if (!r.ok) { alert(d.error || "Не удалось снять клиента"); return; }
+      fetchUserClients(userId);
+    } catch { alert("Сетевая ошибка при снятии клиента"); }
   };
 
   const handleToggleUserClients = (userId) => {
@@ -325,8 +333,12 @@ export default function AdminSection() {
   };
 
   const handleChangeUserRole = async (u, newRole) => {
-    await authFetch(`/api/admin/users/${u.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ role: newRole }) });
-    fetchUsers();
+    try {
+      const r = await authFetch(`/api/admin/users/${u.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ role: newRole }) });
+      const d = await readResponseSafe(r);
+      if (!r.ok) { alert(d.error || "Не удалось сменить роль"); }
+    } catch { alert("Сетевая ошибка при смене роли"); }
+    finally { fetchUsers(); }
   };
 
   const readResponseSafe = async (res) => {
@@ -475,7 +487,11 @@ export default function AdminSection() {
     setPendingRoleChanges(prev => {
       const cur = prev[roleId] || {};
       const curSec = (cur.sections || {})[secId] || {};
-      return { ...prev, [roleId]: { ...cur, sections: { ...(cur.sections || {}), [secId]: { ...curSec, [field]: val } } } };
+      const nextSec = { ...curSec, [field]: val };
+      // Write implies read: enabling write forces read on; disabling read forces write off.
+      if (field === "write" && val) nextSec.read = true;
+      if (field === "read" && !val) nextSec.write = false;
+      return { ...prev, [roleId]: { ...cur, sections: { ...(cur.sections || {}), [secId]: nextSec } } };
     });
   };
 
@@ -515,7 +531,8 @@ export default function AdminSection() {
   const getRoleSectionVal = (role, secId, field) => {
     const pending = getPendingRole(role.id);
     if (pending.sections?.[secId]?.[field] !== undefined) return pending.sections[secId][field];
-    return role.sections?.[secId]?.[field] ?? true;
+    // A section row that doesn't exist means "not granted" — default to false, not true.
+    return role.sections?.[secId]?.[field] ?? false;
   };
 
   const getRolePermVal = (role, perm) => {
@@ -811,7 +828,7 @@ export default function AdminSection() {
                 </FormField>
                 <FormField label="Пароль">
                   <Wrapper width={140}>
-                    <Input type="password" value={userForm.password} onChange={e => setUserForm(f => ({ ...f, password: e.target.value }))} placeholder="минимум 6 символов" />
+                    <Input type="password" value={userForm.password} onChange={e => setUserForm(f => ({ ...f, password: e.target.value }))} placeholder="минимум 8 символов" />
                   </Wrapper>
                 </FormField>
                 <FormField label="Роль">
@@ -1049,41 +1066,50 @@ export default function AdminSection() {
                   </Wrapper>
                 </Wrapper>
 
-                <div style={{ fontSize: 12, fontWeight: 600, color: $.txM, textTransform: "uppercase", letterSpacing: .5, marginBottom: 8 }}>Разделы</div>
-                <Wrapper overflowX="auto" marginBottom={14}>
-                  <table style={{ borderCollapse: "collapse", fontSize: 12 }}>
-                    <thead>
-                      <tr>
-                        <th style={{ padding: "4px 10px", textAlign: "left", color: $.txM, fontWeight: 600 }}>Раздел</th>
-                        <th style={{ padding: "4px 10px", textAlign: "center", color: $.txM, fontWeight: 600 }}>Чтение</th>
-                        <th style={{ padding: "4px 10px", textAlign: "center", color: $.txM, fontWeight: 600 }}>Запись</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {ALL_SECTIONS.map(sec => (
-                        <tr key={sec} style={{ borderBottom: `1px solid ${$.brd}` }}>
-                          <td style={{ padding: "5px 10px" }}>{SECTION_LABELS[sec]}</td>
-                          <td style={{ padding: "5px 10px", textAlign: "center" }}>
-                            <input type="checkbox" checked={getRoleSectionVal(role, sec, "read")} onChange={e => setRoleSectionPerm(role.id, sec, "read", e.target.checked)} />
-                          </td>
-                          <td style={{ padding: "5px 10px", textAlign: "center" }}>
-                            <input type="checkbox" checked={getRoleSectionVal(role, sec, "write")} onChange={e => setRoleSectionPerm(role.id, sec, "write", e.target.checked)} />
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </Wrapper>
+                {role.name === "admin" ? (
+                  <div style={{ fontSize: 13, color: $.txM, lineHeight: 1.5, padding: "4px 2px" }}>
+                    Администратор всегда имеет полный доступ ко всем разделам, функциям и данным.
+                    Права для этой роли не настраиваются.
+                  </div>
+                ) : (
+                  <>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: $.txM, textTransform: "uppercase", letterSpacing: .5, marginBottom: 8 }}>Разделы</div>
+                    <Wrapper overflowX="auto" marginBottom={14}>
+                      <table style={{ borderCollapse: "collapse", fontSize: 12 }}>
+                        <thead>
+                          <tr>
+                            <th style={{ padding: "4px 10px", textAlign: "left", color: $.txM, fontWeight: 600 }}>Раздел</th>
+                            <th style={{ padding: "4px 10px", textAlign: "center", color: $.txM, fontWeight: 600 }}>Чтение</th>
+                            <th style={{ padding: "4px 10px", textAlign: "center", color: $.txM, fontWeight: 600 }}>Запись</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {ALL_SECTIONS.map(sec => (
+                            <tr key={sec} style={{ borderBottom: `1px solid ${$.brd}` }}>
+                              <td style={{ padding: "5px 10px" }}>{SECTION_LABELS[sec]}</td>
+                              <td style={{ padding: "5px 10px", textAlign: "center" }}>
+                                <input type="checkbox" checked={getRoleSectionVal(role, sec, "read")} onChange={e => setRoleSectionPerm(role.id, sec, "read", e.target.checked)} />
+                              </td>
+                              <td style={{ padding: "5px 10px", textAlign: "center" }}>
+                                <input type="checkbox" checked={getRoleSectionVal(role, sec, "write")} onChange={e => setRoleSectionPerm(role.id, sec, "write", e.target.checked)} />
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </Wrapper>
 
-                <div style={{ fontSize: 12, fontWeight: 600, color: $.txM, textTransform: "uppercase", letterSpacing: .5, marginBottom: 8 }}>Права</div>
-                <Wrapper dir="row" gap={16} wrap>
-                  {ALL_PERMISSIONS.map(perm => (
-                    <label key={perm} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, cursor: "pointer" }}>
-                      <input type="checkbox" checked={getRolePermVal(role, perm)} onChange={e => setRolePermission(role.id, perm, e.target.checked)} />
-                      {PERM_LABELS[perm]}
-                    </label>
-                  ))}
-                </Wrapper>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: $.txM, textTransform: "uppercase", letterSpacing: .5, marginBottom: 8 }}>Права</div>
+                    <Wrapper dir="row" gap={16} wrap>
+                      {ALL_PERMISSIONS.map(perm => (
+                        <label key={perm} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, cursor: "pointer" }}>
+                          <input type="checkbox" checked={getRolePermVal(role, perm)} onChange={e => setRolePermission(role.id, perm, e.target.checked)} />
+                          {PERM_LABELS[perm]}
+                        </label>
+                      ))}
+                    </Wrapper>
+                  </>
+                )}
               </Card>
             ))}
           </Wrapper>

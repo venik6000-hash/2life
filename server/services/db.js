@@ -1050,8 +1050,19 @@ const getRoleByName = async (name) => {
   return r.rows[0] ?? null;
 };
 
-const insertRole = async (name, displayName, isSystem) => {
-  const r = await pool.query(
+const getRoleById = async (id) => {
+  const r = await pool.query("SELECT * FROM roles WHERE id = $1", [id]);
+  return r.rows[0] ?? null;
+};
+
+// How many users currently carry this role name (used to block unsafe role deletion).
+const countUsersByRole = async (roleName) => {
+  const r = await pool.query("SELECT COUNT(*)::int AS n FROM users WHERE role = $1", [roleName]);
+  return r.rows[0]?.n || 0;
+};
+
+const insertRole = async (name, displayName, isSystem, db = pool) => {
+  const r = await db.query(
     "INSERT INTO roles (name, display_name, is_system) VALUES ($1, $2, $3) RETURNING id",
     [name, displayName, isSystem]
   );
@@ -1069,13 +1080,13 @@ const deleteRole = async (id) => {
 
 // ─── Role sections ──────────────────────────────────────────────────────────
 
-const getRoleSections = async (roleId) => {
-  const r = await pool.query("SELECT * FROM role_sections WHERE role_id = $1", [roleId]);
+const getRoleSections = async (roleId, db = pool) => {
+  const r = await db.query("SELECT * FROM role_sections WHERE role_id = $1", [roleId]);
   return r.rows;
 };
 
-const upsertRoleSection = async (roleId, sectionId, canRead, canWrite) => {
-  await pool.query(
+const upsertRoleSection = async (roleId, sectionId, canRead, canWrite, db = pool) => {
+  await db.query(
     `INSERT INTO role_sections (role_id, section_id, can_read, can_write) VALUES ($1, $2, $3, $4)
      ON CONFLICT (role_id, section_id) DO UPDATE SET can_read = EXCLUDED.can_read, can_write = EXCLUDED.can_write`,
     [roleId, sectionId, canRead, canWrite]
@@ -1089,8 +1100,8 @@ const getRolePermissions = async (roleId) => {
   return r.rows;
 };
 
-const upsertRolePermission = async (roleId, permission, granted) => {
-  await pool.query(
+const upsertRolePermission = async (roleId, permission, granted, db = pool) => {
+  await db.query(
     `INSERT INTO role_permissions (role_id, permission, granted) VALUES ($1, $2, $3)
      ON CONFLICT (role_id, permission) DO UPDATE SET granted = EXCLUDED.granted`,
     [roleId, permission, granted]
@@ -2140,7 +2151,7 @@ module.exports = {
   // doctors
   insertDoctor, listDoctors, getDoctorByName,
   // roles
-  listRoles, getRoleByName, insertRole, updateRoleDisplayName, deleteRole,
+  listRoles, getRoleByName, getRoleById, countUsersByRole, insertRole, updateRoleDisplayName, deleteRole,
   // role sections
   getRoleSections, upsertRoleSection,
   // role permissions

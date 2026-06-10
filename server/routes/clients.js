@@ -11,13 +11,26 @@ const { syncUserChatAccessByClientPermissions } = require("../services/chatAcces
 const { notifyUserChatAccessChanges } = require("../services/messengerAccessNotifications");
 const { addConnection, removeConnection, broadcast } = require("../services/sse");
 const { canAccessClient } = require("../services/clientAccess");
+const {
+  CLIENT_OVERVIEW_FIELD_SET,
+  STAGE_FIELD_SECTION_MAP,
+  STAGE_FIELDS_BY_SECTION,
+  PROTECTED_SECTIONS,
+  sectionsForClient,
+  filterClientForPermissions,
+} = require("../services/sectionMap");
 
 // ─── Clients list ────────────────────────────────────────────────────────────
 
 router.get("/clients", requireAuth(), requireAnySectionRead(), async (req, res) => {
   try {
     const clients = await getClientsForUser(req.user.id, req.user.role);
-    res.json(clients);
+    const permissions = req.rolePermissions || await getPermissionsForRole(req.user?.role);
+    // Strip sections the role may not read; clients without "overview" read disappear entirely.
+    const visible = clients
+      .map((c) => filterClientForPermissions(c, permissions))
+      .filter(Boolean);
+    res.json(visible);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -57,7 +70,10 @@ router.get("/clients/:clientId", requireAuth(), requireAnySectionRead(), async (
     }
     const client = await getOneClient(req.params.clientId);
     if (!client) return res.status(404).json({ error: "Клиент не найден" });
-    res.json(client);
+    const permissions = req.rolePermissions || await getPermissionsForRole(req.user?.role);
+    const visible = filterClientForPermissions(client, permissions);
+    if (!visible) return res.status(403).json({ error: "Нет доступа к этому клиенту" });
+    res.json(visible);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -106,8 +122,11 @@ router.put("/clients/:clientId", requireAuth(), requireAnySectionWrite(), async 
       if (!hasRoleActionPermission(permissions, "create_client")) {
         return res.status(403).json({ error: "Недостаточно прав", code: "PUT_FORBIDDEN_CREATE" });
       }
-      if (!hasSectionWritePermission(permissions, "overview")) {
-        return res.status(403).json({ error: "Недостаточно прав на создание клиента", code: "PUT_FORBIDDEN_SECTIONS", deniedSections: ["overview"] });
+      // Require write on every section the new client actually populates, not just overview.
+      const requiredSections = Array.from(sectionsForClient(client));
+      const deniedSections = requiredSections.filter((sectionId) => !hasSectionWritePermission(permissions, sectionId));
+      if (deniedSections.length) {
+        return res.status(403).json({ error: "Недостаточно прав на создание клиента", code: "PUT_FORBIDDEN_SECTIONS", deniedSections });
       }
     } else {
       const touchedSections = collectTouchedSectionsForPut(prev, client);
@@ -341,48 +360,8 @@ const ALLOWED_CLIENT_PATCH_ROOTS = new Set([
   "stages"
 ]);
 
-const SECTION_IDS = ["overview", "questionnaire", "nutrition", "protocol", "injections", "analytics", "lab", "journal"];
-const CLIENT_OVERVIEW_FIELDS = new Set(["name", "shortName", "dob", "age", "sex", "avatar", "color"]);
-const STAGE_FIELD_SECTION_MAP = {
-  id: "overview",
-  title: "overview",
-  subtitle: "overview",
-  doctor: "overview",
-  doctorRole: "overview",
-  dateStart: "overview",
-  dateEnd: "overview",
-  status: "overview",
-  email: "overview",
-  phone: "overview",
-  city: "overview",
-  height: "overview",
-  weightCurrent: "overview",
-  weightGoal: "overview",
-  bmi: "overview",
-  waist: "overview",
-  tasks: "overview",
-  syndromes: "overview",
-  diagnoses: "overview",
-  deficits: "overview",
-  autoDeficitSelection: "overview",
-  questionnaire: "questionnaire",
-  nutrition: "nutrition",
-  nutritionRevisions: "nutrition",
-  protocolRevisions: "protocol",
-  injections: "injections",
-  injectionSchedule: "injections",
-  analyticsCategories: "analytics",
-  labOrderSelected: "lab",
-  labOrderGroupOrder: "lab",
-  journal: "journal"
-};
-const STAGE_FIELDS_BY_SECTION = SECTION_IDS.reduce((acc, sectionId) => {
-  acc[sectionId] = [];
-  return acc;
-}, {});
-for (const [field, sectionId] of Object.entries(STAGE_FIELD_SECTION_MAP)) {
-  if (STAGE_FIELDS_BY_SECTION[sectionId]) STAGE_FIELDS_BY_SECTION[sectionId].push(field);
-}
+// Section/field maps live in services/sectionMap.js (shared with read-filtering).
+const CLIENT_OVERVIEW_FIELDS = CLIENT_OVERVIEW_FIELD_SET;
 
 const isDeepEqual = (a, b) => {
   if (Object.is(a, b)) return true;
@@ -440,10 +419,9 @@ const getSectionForPatchPath = (path) => {
   if (root !== "stages") {
     return CLIENT_OVERVIEW_FIELDS.has(root) ? "overview" : null;
   }
-  if (path.length <= 2) {
-    // Stage array size/order updates are considered overview-level operations.
-    return "overview";
-  }
+  // Whole-array (["stages"]) and whole-stage (["stages", i]) ops are handled
+  // separately in collectPatchPermissionViolations — they touch every section.
+  if (path.length <= 2) return null;
   const stageField = String(path[2] || "");
   return STAGE_FIELD_SECTION_MAP[stageField] || null;
 };
@@ -452,8 +430,24 @@ const collectPatchPermissionViolations = (ops, permissions) => {
   const unknownPaths = [];
   const deniedPaths = [];
   for (const op of ops) {
-    const sectionId = getSectionForPatchPath(op.path);
     const strPath = pathToString(op.path);
+    const root = String(op.path?.[0] || "");
+
+    // Replacing/deleting a whole stage object or the whole stages array rewrites
+    // ALL sections inside it (questionnaire, nutrition, protocol, …). Setting one
+    // stage replaces every field; deleting one drops every field. Either way the
+    // caller must hold write on every protected section — this closes the bypass
+    // where "overview"-only write could rewrite closed sections via a stage object.
+    if (root === "stages" && Array.isArray(op.path) && op.path.length <= 2) {
+      for (const sectionId of PROTECTED_SECTIONS) {
+        if (!hasSectionWritePermission(permissions, sectionId)) {
+          deniedPaths.push({ path: strPath, section: sectionId });
+        }
+      }
+      continue;
+    }
+
+    const sectionId = getSectionForPatchPath(op.path);
     if (!sectionId) {
       unknownPaths.push(strPath);
       continue;
@@ -475,14 +469,19 @@ const collectTouchedSectionsForPut = (prevClient, nextClient) => {
 
   const prevStages = Array.isArray(prevClient?.stages) ? prevClient.stages : [];
   const nextStages = Array.isArray(nextClient?.stages) ? nextClient.stages : [];
-  if (prevStages.length !== nextStages.length) touched.add("overview");
+
+  const markAllSections = () => { for (const sectionId of PROTECTED_SECTIONS) touched.add(sectionId); };
+
+  // Adding or removing a stage shifts every section's data — require write on all.
+  if (prevStages.length !== nextStages.length) markAllSections();
 
   const maxLen = Math.max(prevStages.length, nextStages.length);
   for (let i = 0; i < maxLen; i += 1) {
     const prevStage = prevStages[i] || null;
     const nextStage = nextStages[i] || null;
     if (!prevStage || !nextStage) {
-      touched.add("overview");
+      // A stage appearing or disappearing creates/destroys all of its sections.
+      markAllSections();
       continue;
     }
     for (const [sectionId, fields] of Object.entries(STAGE_FIELDS_BY_SECTION)) {

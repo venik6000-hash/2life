@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const { requireAuth } = require("../middleware/auth");
-const { pool, listRoles, insertRole, updateRoleDisplayName, deleteRole,
+const { pool, withTransaction, listRoles, getRoleById, countUsersByRole, insertRole, updateRoleDisplayName, deleteRole,
         getRoleSections, upsertRoleSection,
         getRolePermissions, upsertRolePermission,
         listRefData, insertRefData, updateRefData, deleteRefData, listDistinctAnalyticsMarkers,
@@ -65,14 +65,16 @@ router.post("/admin/roles", requireAuth("admin"), async (req, res) => {
     const { name, displayName } = req.body || {};
     if (!name || !displayName) return res.status(400).json({ error: "name и displayName обязательны" });
     const safeName = String(name).trim().toLowerCase().replace(/[^a-z0-9_]/g, '_');
-    const res2 = await insertRole(safeName, String(displayName).trim(), false);
-    const roleId = res2.id;
     const ALL_SECTIONS = ['overview','questionnaire','nutrition','menu','protocol','injections','analytics','lab','journal','messenger'];
     const ALL_PERMISSIONS = ['delete_client','create_client','import_data'];
-    await Promise.all([
-      ...ALL_SECTIONS.map((sec) => upsertRoleSection(roleId, sec, true, false)),
-      ...ALL_PERMISSIONS.map((perm) => upsertRolePermission(roleId, perm, false)),
-    ]);
+    // Role + its sections/permissions are created atomically: a failure rolls back
+    // the whole role instead of leaving a half-configured one behind.
+    const roleId = await withTransaction(async (db) => {
+      const res2 = await insertRole(safeName, String(displayName).trim(), false, db);
+      for (const sec of ALL_SECTIONS) await upsertRoleSection(res2.id, sec, true, false, db);
+      for (const perm of ALL_PERMISSIONS) await upsertRolePermission(res2.id, perm, false, db);
+      return res2.id;
+    });
     res.json({ ok: true, id: roleId, name: safeName, displayName });
   } catch (e) {
     if (e.code === '23505') return res.status(409).json({ error: "Роль с таким именем уже существует" });
@@ -95,7 +97,21 @@ router.patch("/admin/roles/:id", requireAuth("admin"), async (req, res) => {
 // DELETE /api/admin/roles/:id - delete non-system role
 router.delete("/admin/roles/:id", requireAuth("admin"), async (req, res) => {
   try {
-    const result = await deleteRole(Number(req.params.id));
+    const roleId = Number(req.params.id);
+    const role = await getRoleById(roleId);
+    if (!role) return res.status(404).json({ error: "Роль не найдена" });
+    if (role.is_system) return res.status(400).json({ error: "Системную роль нельзя удалить" });
+    // Block deletion while users still carry this role — otherwise they'd be left
+    // with a non-existent role (no permissions resolve → silently locked out).
+    const assigned = await countUsersByRole(role.name);
+    if (assigned > 0) {
+      return res.status(409).json({
+        error: `Роль назначена ${assigned} пользовател${assigned === 1 ? "ю" : "ям"}. Сначала переназначьте их на другую роль.`,
+        code: "ROLE_IN_USE",
+        assigned
+      });
+    }
+    const result = await deleteRole(roleId);
     if (result.rowCount === 0) return res.status(400).json({ error: "Системную роль нельзя удалить" });
     res.json({ ok: true });
   } catch (e) {
@@ -108,25 +124,29 @@ router.put("/admin/roles/:id/sections", requireAuth("admin"), async (req, res) =
   try {
     const roleId = Number(req.params.id);
     const { sections, permissions } = req.body || {};
-    const writes = [];
-    if (sections && typeof sections === "object") {
-      const existingSections = await getRoleSections(roleId);
-      const existingById = {};
-      for (const row of existingSections) existingById[row.section_id] = row;
-      for (const [secId, perms] of Object.entries(sections)) {
-        if (!perms || typeof perms !== "object") continue;
-        const prev = existingById[secId];
-        const canRead = perms.read === undefined ? !!prev?.can_read : !!perms.read;
-        const canWrite = perms.write === undefined ? !!prev?.can_write : !!perms.write;
-        writes.push(upsertRoleSection(roleId, secId, canRead, canWrite));
+    // Sections + permissions are saved atomically (all-or-nothing) so a partial
+    // failure can't leave half the checkboxes saved and half not.
+    await withTransaction(async (db) => {
+      if (sections && typeof sections === "object") {
+        const existingSections = await getRoleSections(roleId, db);
+        const existingById = {};
+        for (const row of existingSections) existingById[row.section_id] = row;
+        for (const [secId, perms] of Object.entries(sections)) {
+          if (!perms || typeof perms !== "object") continue;
+          const prev = existingById[secId];
+          let canRead = perms.read === undefined ? !!prev?.can_read : !!perms.read;
+          const canWrite = perms.write === undefined ? !!prev?.can_write : !!perms.write;
+          // Write implies read — never persist write=true with read=false.
+          if (canWrite) canRead = true;
+          await upsertRoleSection(roleId, secId, canRead, canWrite, db);
+        }
       }
-    }
-    if (permissions) {
-      for (const [perm, granted] of Object.entries(permissions)) {
-        writes.push(upsertRolePermission(roleId, perm, granted ? true : false));
+      if (permissions) {
+        for (const [perm, granted] of Object.entries(permissions)) {
+          await upsertRolePermission(roleId, perm, granted ? true : false, db);
+        }
       }
-    }
-    await Promise.all(writes);
+    });
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
