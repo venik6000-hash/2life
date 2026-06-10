@@ -957,8 +957,16 @@ router.get("/chats/:chatId/messages/:messageId/readers", requireAuth(), async (r
 router.post("/chats/:chatId/read", requireAuth(), async (req, res) => {
   try {
     const chatId   = Number(req.params.chatId);
-    const { messageId } = req.body;
+    const messageId = Number(req.body?.messageId);
+    if (!Number.isInteger(chatId) || chatId <= 0 || !Number.isInteger(messageId) || messageId <= 0) {
+      return res.status(400).json({ error: "Некорректный id сообщения" });
+    }
     if (!(await requireParticipant(req, res, chatId))) return;
+
+    const message = await getMessageById(chatId, messageId);
+    if (!message || Number(message.chat_id) !== chatId) {
+      return res.status(404).json({ error: "Сообщение не найдено", code: "READ_MESSAGE_NOT_FOUND" });
+    }
 
     await upsertReceipt(chatId, req.user.id, messageId);
     const receipts = await getReceiptsByChat(chatId);

@@ -71,7 +71,9 @@ git pull && docker compose up -d --build
 ./dev.sh
 ```
 
-Скрипт поднимает dev-БД через Docker (порт 5434), останавливает production-контейнеры если они запущены, и запускает Vite + nodemon параллельно через `concurrently`.
+Скрипт поднимает dev-БД через Docker (порт 5434) и запускает Vite + nodemon параллельно через `concurrently`.
+Production-контейнеры по умолчанию не останавливаются; если нужно освободить порт 3001 именно таким способом, запустите `ALLOW_STOP_PROD_CONTAINERS=1 ./dev.sh`.
+Dev-БД запускается в отдельном Docker Compose project `2life-dashboard-dev` с отдельным volume, чтобы не переиспользовать production-хранилище.
 
 - Frontend: **http://localhost:3000**
 - API: **http://localhost:3001**

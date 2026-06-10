@@ -20,6 +20,7 @@ const initSchema = async () => {
       role          TEXT NOT NULL DEFAULT 'doctor',
       all_clients_access BOOLEAN NOT NULL DEFAULT false,
       active        BOOLEAN NOT NULL DEFAULT true,
+      token_version INTEGER NOT NULL DEFAULT 0,
       created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
@@ -191,6 +192,7 @@ const initSchema = async () => {
       user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       client_id   TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
       assigned_by INTEGER,
+      assignment_source TEXT NOT NULL DEFAULT 'manual',
       UNIQUE(user_id, client_id)
     );
 
@@ -576,6 +578,34 @@ const initSchema = async () => {
   if (!userCols.includes("display_name")) {
     try { await pool.query("ALTER TABLE users ADD COLUMN display_name TEXT NOT NULL DEFAULT ''"); } catch (_) {}
   }
+  if (!userCols.includes("token_version")) {
+    try { await pool.query("ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0"); } catch (_) {}
+  }
+
+  const assignmentColsRes = await pool.query(
+    `SELECT column_name FROM information_schema.columns WHERE table_name = 'client_assignments'`
+  );
+  const assignmentCols = assignmentColsRes.rows.map(r => r.column_name);
+  if (!assignmentCols.includes("assignment_source")) {
+    try { await pool.query("ALTER TABLE client_assignments ADD COLUMN assignment_source TEXT NOT NULL DEFAULT 'manual'"); } catch (_) {}
+  }
+
+  await runOnce("2026-06_backfill_doctor_assignment_source", async (c) => {
+    await c.query(`
+      UPDATE client_assignments ca
+         SET assignment_source = 'doctor'
+        FROM doctors d
+       WHERE d.user_id = ca.user_id
+         AND d.user_id IS NOT NULL
+         AND EXISTS (
+           SELECT 1
+             FROM stages s
+            WHERE s.client_id = ca.client_id
+              AND NULLIF(BTRIM(s.doctor), '') IS NOT NULL
+              AND LOWER(BTRIM(s.doctor)) = LOWER(BTRIM(d.name))
+         )
+    `);
+  });
 
   try { await pool.query("ALTER TABLE dishes ALTER COLUMN calories DROP NOT NULL"); } catch (_) {}
   try { await pool.query("ALTER TABLE dishes ALTER COLUMN calories DROP DEFAULT"); } catch (_) {}
@@ -1106,15 +1136,151 @@ const listDistinctAnalyticsMarkers = async () => {
 
 // ─── Client assignments ─────────────────────────────────────────────────────
 
-const upsertClientAssignment = async (userId, clientId, assignedBy) => {
+const normalizeAssignmentSource = (source) => (source === "doctor" ? "doctor" : "manual");
+const hasAssignmentSource = (value, source) => String(value || "").split("_").includes(source);
+
+const upsertClientAssignment = async (userId, clientId, assignedBy, source = "manual") => {
+  const assignmentSource = normalizeAssignmentSource(source);
+  if (assignmentSource === "manual") {
+    await pool.query(
+      `INSERT INTO client_assignments (user_id, client_id, assigned_by, assignment_source)
+       VALUES ($1, $2, $3, 'manual')
+       ON CONFLICT (user_id, client_id) DO UPDATE
+         SET assigned_by = EXCLUDED.assigned_by,
+             assignment_source = CASE
+               WHEN client_assignments.assignment_source LIKE '%doctor%' THEN 'manual_doctor'
+               ELSE 'manual'
+             END`,
+      [userId, clientId, assignedBy]
+    );
+    return;
+  }
   await pool.query(
-    "INSERT INTO client_assignments (user_id, client_id, assigned_by) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
+    `INSERT INTO client_assignments (user_id, client_id, assigned_by, assignment_source)
+     VALUES ($1, $2, $3, 'doctor')
+     ON CONFLICT (user_id, client_id) DO UPDATE
+       SET assignment_source = CASE
+             WHEN client_assignments.assignment_source LIKE '%manual%' THEN 'manual_doctor'
+             ELSE 'doctor'
+           END`,
     [userId, clientId, assignedBy]
   );
 };
 
+const getClientAssignment = async (userId, clientId) => {
+  const r = await pool.query(
+    "SELECT user_id, client_id, assignment_source FROM client_assignments WHERE user_id = $1 AND client_id = $2 LIMIT 1",
+    [userId, clientId]
+  );
+  return r.rows[0] || null;
+};
+
 const deleteClientAssignment = async (userId, clientId) => {
-  await pool.query("DELETE FROM client_assignments WHERE user_id = $1 AND client_id = $2", [userId, clientId]);
+  return withTransaction(async (pgClient) => {
+    const current = await pgClient.query(
+      "SELECT assignment_source FROM client_assignments WHERE user_id = $1 AND client_id = $2 FOR UPDATE",
+      [userId, clientId]
+    );
+    const source = current.rows[0]?.assignment_source || "";
+    if (!source) return { rowCount: 0 };
+    if (hasAssignmentSource(source, "doctor")) {
+      const r = await pgClient.query(
+        "UPDATE client_assignments SET assignment_source = 'doctor' WHERE user_id = $1 AND client_id = $2 AND assignment_source LIKE '%manual%' RETURNING user_id",
+        [userId, clientId]
+      );
+      return { rowCount: r.rowCount };
+    }
+    const r = await pgClient.query(
+      "DELETE FROM client_assignments WHERE user_id = $1 AND client_id = $2 AND assignment_source = 'manual' RETURNING user_id",
+      [userId, clientId]
+    );
+    return { rowCount: r.rowCount };
+  });
+};
+
+const deleteDoctorClientAssignments = async (userId, doctorName) => {
+  const safeName = String(doctorName || "").trim();
+  if (!safeName) return [];
+  return withTransaction(async (pgClient) => {
+    const candidates = await pgClient.query(
+      `SELECT ca.client_id, ca.assignment_source
+         FROM client_assignments ca
+         JOIN stages old_stage ON old_stage.client_id = ca.client_id
+        WHERE ca.user_id = $1
+          AND ca.assignment_source LIKE '%doctor%'
+          AND NULLIF(BTRIM(old_stage.doctor), '') IS NOT NULL
+          AND LOWER(BTRIM(old_stage.doctor)) = LOWER(BTRIM($2))
+          AND NOT EXISTS (
+            SELECT 1
+              FROM stages s
+              JOIN doctors d ON d.user_id = ca.user_id
+             WHERE s.client_id = ca.client_id
+               AND NULLIF(BTRIM(s.doctor), '') IS NOT NULL
+               AND LOWER(BTRIM(s.doctor)) = LOWER(BTRIM(d.name))
+               AND LOWER(BTRIM(d.name)) <> LOWER(BTRIM($2))
+          )
+        FOR UPDATE OF ca`,
+      [userId, safeName]
+    );
+    const touched = [];
+    for (const row of candidates.rows) {
+      touched.push({ client_id: row.client_id });
+      if (hasAssignmentSource(row.assignment_source, "manual")) {
+        await pgClient.query(
+          "UPDATE client_assignments SET assignment_source = 'manual' WHERE user_id = $1 AND client_id = $2",
+          [userId, row.client_id]
+        );
+      } else {
+        await pgClient.query(
+          "DELETE FROM client_assignments WHERE user_id = $1 AND client_id = $2 AND assignment_source = 'doctor'",
+          [userId, row.client_id]
+        );
+      }
+    }
+    return touched;
+  });
+};
+
+const replaceDoctorClientAssignments = async (clientId, userIds, assignedBy) => {
+  const safeClientId = String(clientId || "").trim();
+  if (!safeClientId) return [];
+  const safeUserIds = Array.from(new Set(
+    (Array.isArray(userIds) ? userIds : []).map(Number).filter((id) => Number.isInteger(id) && id > 0)
+  ));
+  return withTransaction(async (pgClient) => {
+    const touched = new Set(safeUserIds);
+    const doctorRemoved = await pgClient.query(
+      `UPDATE client_assignments
+          SET assignment_source = 'manual'
+        WHERE client_id = $1
+          AND assignment_source = 'manual_doctor'
+          AND NOT (user_id = ANY($2::int[]))
+        RETURNING user_id`,
+      [safeClientId, safeUserIds]
+    );
+    const deleted = await pgClient.query(
+      `DELETE FROM client_assignments
+        WHERE client_id = $1
+          AND assignment_source = 'doctor'
+          AND NOT (user_id = ANY($2::int[]))
+        RETURNING user_id`,
+      [safeClientId, safeUserIds]
+    );
+    for (const row of [...doctorRemoved.rows, ...deleted.rows]) touched.add(Number(row.user_id));
+    for (const userId of safeUserIds) {
+      await pgClient.query(
+        `INSERT INTO client_assignments (user_id, client_id, assigned_by, assignment_source)
+         VALUES ($1, $2, $3, 'doctor')
+         ON CONFLICT (user_id, client_id) DO UPDATE
+           SET assignment_source = CASE
+                 WHEN client_assignments.assignment_source LIKE '%manual%' THEN 'manual_doctor'
+                 ELSE 'doctor'
+               END`,
+        [userId, safeClientId, assignedBy]
+      );
+    }
+    return Array.from(touched);
+  });
 };
 
 const getAssignmentsByUser = async (userId) => {
@@ -1982,7 +2148,7 @@ module.exports = {
   // reference data
   listRefData, insertRefData, updateRefData, deleteRefData, listDistinctAnalyticsMarkers,
   // client assignments
-  upsertClientAssignment, deleteClientAssignment,
+  upsertClientAssignment, deleteClientAssignment, getClientAssignment, deleteDoctorClientAssignments, replaceDoctorClientAssignments,
   getAssignmentsByUser, getAssignmentsByClient,
   // messenger: public keys
   upsertPublicKey, getPublicKey,

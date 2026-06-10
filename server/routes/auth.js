@@ -76,6 +76,28 @@ const rewrapMessengerFromCurrentPassword = async (db, keyRow, userId, currentPas
   );
 };
 
+const ensureCanDemoteAdmin = async (db, targetId, nextRole, nextActive) => {
+  await db.query("SELECT pg_advisory_xact_lock(221948731)");
+  const targetRes = await db.query("SELECT id, role, active FROM users WHERE id = $1 FOR UPDATE", [targetId]);
+  const target = targetRes.rows[0] || null;
+  if (!target) return { ok: false, status: 404, error: "Пользователь не найден" };
+
+  const willRemainAdmin = nextRole == null ? target.role === "admin" : nextRole === "admin";
+  const willRemainActive = nextActive == null ? !!target.active : !!nextActive;
+  const removesActiveAdmin = target.role === "admin" && target.active && (!willRemainAdmin || !willRemainActive);
+  if (!removesActiveAdmin) return { ok: true, target };
+
+  const activeAdminsLeftRes = await db.query(
+    "SELECT COUNT(*)::int AS n FROM users WHERE role = 'admin' AND active = true AND id <> $1",
+    [targetId]
+  );
+  const activeAdminsLeft = Number(activeAdminsLeftRes.rows[0]?.n || 0);
+  if (activeAdminsLeft < 1) {
+    return { ok: false, status: 400, error: "Нельзя убрать последнего активного администратора" };
+  }
+  return { ok: true, target };
+};
+
 // Rate limiter: макс. 5 попыток входа в минуту с одного IP+логина
 const loginLimiter = rateLimit({
   windowMs: 60 * 1000,
@@ -100,7 +122,7 @@ router.post("/auth/login", loginLimiter, async (req, res) => {
     if (!user || !(await bcrypt.compare(password, user.password_hash))) {
       return res.status(401).json({ error: "Неверный логин или пароль" });
     }
-    const token = signToken({ id: user.id, username: user.username, role: user.role });
+    const token = signToken({ id: user.id, username: user.username, role: user.role, token_version: Number(user.token_version || 0) });
     const permissions = await getPermissionsForRole(user.role);
     res.json({
       ok: true,
@@ -116,7 +138,10 @@ router.post("/auth/login", loginLimiter, async (req, res) => {
 
 // POST /api/auth/logout — серверная инвалидация токена
 router.post("/auth/logout", requireAuth(), (req, res) => {
-  if (req.user?.jti) blacklistToken(req.user.jti);
+  if (req.user?.jti) {
+    blacklistToken(req.user.jti);
+    try { require("../services/ws").forceLogoutJti(req.user.jti); } catch (_) {}
+  }
   res.json({ ok: true });
 });
 
@@ -124,18 +149,19 @@ router.post("/auth/logout", requireAuth(), (req, res) => {
 router.get("/auth/me", requireAuth(), async (req, res) => {
   try {
     const userRes = await pool.query(
-      "SELECT id, username, role, all_clients_access, display_name FROM users WHERE id = $1 LIMIT 1",
+      "SELECT id, username, role, all_clients_access, display_name, token_version FROM users WHERE id = $1 AND active = true LIMIT 1",
       [req.user.id]
     );
-    const currentUser = userRes.rows[0]
-      ? {
-          ...req.user,
-          all_clients_access: !!userRes.rows[0].all_clients_access,
-          username: userRes.rows[0].username,
-          role: userRes.rows[0].role,
-          display_name: userRes.rows[0].display_name || "",
-        }
-      : req.user;
+    const row = userRes.rows[0] || null;
+    if (!row) return res.status(401).json({ error: "Пользователь отключён или удалён" });
+    const currentUser = {
+      ...req.user,
+      all_clients_access: !!row.all_clients_access,
+      username: row.username,
+      role: row.role,
+      display_name: row.display_name || "",
+      token_version: Number(row.token_version || 0),
+    };
     const permissions = await getPermissionsForRole(currentUser.role);
     res.json({ ok: true, user: currentUser, permissions });
   } catch (e) {
@@ -178,6 +204,7 @@ router.post("/auth/change-password", requireAuth(), async (req, res) => {
   const client = await pool.connect();
   try {
     const { currentPassword, newPassword, messengerKeys, forceResetMessenger } = req.body || {};
+    const safeCurrentPassword = hasText(currentPassword) ? String(currentPassword) : null;
     if (!newPassword) {
       return res.status(400).json({ error: "Укажите новый пароль" });
     }
@@ -196,6 +223,7 @@ router.post("/auth/change-password", requireAuth(), async (req, res) => {
     }
 
     await client.query("BEGIN");
+    let messengerReset = !!forceResetMessenger;
     const userRes = await client.query("SELECT * FROM users WHERE id = $1 FOR UPDATE", [req.user.id]);
     const user = userRes.rows[0] ?? null;
     if (!user) {
@@ -203,11 +231,16 @@ router.post("/auth/change-password", requireAuth(), async (req, res) => {
       return res.status(404).json({ error: "Пользователь не найден" });
     }
 
-    if (currentPassword != null) {
-      const passwordOk = await bcrypt.compare(String(currentPassword), user.password_hash);
+    if (req.user.role !== "admin" && safeCurrentPassword == null) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: "Укажите текущий пароль" });
+    }
+
+    if (safeCurrentPassword != null) {
+      const passwordOk = await bcrypt.compare(safeCurrentPassword, user.password_hash);
       if (!passwordOk) {
         await client.query("ROLLBACK");
-        return res.status(401).json({ error: "Неверный текущий пароль" });
+        return res.status(400).json({ error: "Неверный текущий пароль" });
       }
     }
 
@@ -222,7 +255,7 @@ router.post("/auth/change-password", requireAuth(), async (req, res) => {
     const keyRow = keyRes.rows[0] ?? null;
     const hasMessengerKey = hasMessengerBundle(keyRow);
 
-    await client.query("UPDATE users SET password_hash = $1 WHERE id = $2", [
+    await client.query("UPDATE users SET password_hash = $1, token_version = token_version + 1 WHERE id = $2", [
       await bcrypt.hash(newPassword, BCRYPT_ROUNDS),
       req.user.id
     ]);
@@ -247,9 +280,9 @@ router.post("/auth/change-password", requireAuth(), async (req, res) => {
       if (hasRecoveryBundle(keyRow)) {
         await rewrapMessengerFromRecovery(client, keyRow, req.user.id, newPassword);
       } else {
-        if (currentPassword != null) {
+        if (safeCurrentPassword != null) {
           try {
-            await rewrapMessengerFromCurrentPassword(client, keyRow, req.user.id, currentPassword, newPassword);
+            await rewrapMessengerFromCurrentPassword(client, keyRow, req.user.id, safeCurrentPassword, newPassword);
           } catch (_) {
             await client.query("ROLLBACK");
             return res.status(409).json({
@@ -257,24 +290,24 @@ router.post("/auth/change-password", requireAuth(), async (req, res) => {
             });
           }
         } else {
-          await client.query("ROLLBACK");
-          return res.status(409).json({
-            error: "Не удалось синхронизировать ключи мессенджера без recovery-ключа. Откройте мессенджер в этом сеансе и повторите смену пароля."
-          });
+          await resetMessengerCredentials(client, req.user.id);
+          messengerReset = true;
         }
       }
     }
 
     await client.query("COMMIT");
+    if (req.user?.jti) blacklistToken(req.user.jti);
+    try { require("../services/ws").forceLogoutUser(req.user.id, "password_changed"); } catch (_) {}
     const nextUser = {
       id: user.id,
       username: user.username,
       role: user.role,
       all_clients_access: !!user.all_clients_access,
     };
-    const nextToken = signToken({ id: nextUser.id, username: nextUser.username, role: nextUser.role });
+    const nextToken = signToken({ id: nextUser.id, username: nextUser.username, role: nextUser.role, token_version: Number(user.token_version || 0) + 1 });
     const permissions = await getPermissionsForRole(nextUser.role);
-    res.json({ ok: true, messengerReset: !!forceResetMessenger, token: nextToken, user: nextUser, permissions });
+    res.json({ ok: true, messengerReset, token: nextToken, user: nextUser, permissions });
   } catch (e) {
     try { await client.query("ROLLBACK"); } catch (_) {}
     console.error("[auth] change-password error:", e);
@@ -334,11 +367,23 @@ router.patch("/admin/users/:id", requireAuth("admin"), async (req, res) => {
     const { password, role, active, all_clients_access, display_name } = req.body || {};
     let shouldSyncChatAccess = false;
     let syncResult = null;
+    let forceLogoutReason = null;
     if (!Number.isInteger(id) || id <= 0) {
       return res.status(400).json({ error: "Некорректный id пользователя" });
     }
 
     await client.query("BEGIN");
+
+    const adminGuard = await ensureCanDemoteAdmin(
+      client,
+      id,
+      role == null ? null : role,
+      active == null ? null : !!active
+    );
+    if (!adminGuard.ok) {
+      await client.query("ROLLBACK");
+      return res.status(adminGuard.status).json({ error: adminGuard.error });
+    }
 
     if (password != null) {
       if (String(password).length < 8) {
@@ -364,19 +409,18 @@ router.patch("/admin/users/:id", requireAuth("admin"), async (req, res) => {
       const keyRow = keyRes.rows[0] ?? null;
       const hasMessengerKey = hasMessengerBundle(keyRow);
 
-      await client.query("UPDATE users SET password_hash = $1 WHERE id = $2", [
+      await client.query("UPDATE users SET password_hash = $1, token_version = token_version + 1 WHERE id = $2", [
         await bcrypt.hash(password, BCRYPT_ROUNDS),
         id
       ]);
+      forceLogoutReason = "password_reset";
 
       if (hasMessengerKey) {
         if (!hasRecoveryBundle(keyRow)) {
-          await client.query("ROLLBACK");
-          return res.status(409).json({
-            error: "Нельзя безопасно синхронизировать мессенджер для этого пользователя: отсутствует recovery-ключ."
-          });
+          await resetMessengerCredentials(client, id);
+        } else {
+          await rewrapMessengerFromRecovery(client, keyRow, id, password);
         }
-        await rewrapMessengerFromRecovery(client, keyRow, id, password);
       }
     }
 
@@ -392,8 +436,13 @@ router.patch("/admin/users/:id", requireAuth("admin"), async (req, res) => {
       shouldSyncChatAccess = true;
     }
     if (active != null) {
-      await client.query("UPDATE users SET active = $1 WHERE id = $2", [active ? true : false, id]);
+      if (active) {
+        await client.query("UPDATE users SET active = true WHERE id = $1", [id]);
+      } else {
+        await client.query("UPDATE users SET active = false, token_version = token_version + 1 WHERE id = $1", [id]);
+      }
       shouldSyncChatAccess = true;
+      if (!active) forceLogoutReason = "user_inactive";
     }
     if (all_clients_access != null) {
       await client.query("UPDATE users SET all_clients_access = $1 WHERE id = $2", [all_clients_access ? true : false, id]);
@@ -410,6 +459,9 @@ router.patch("/admin/users/:id", requireAuth("admin"), async (req, res) => {
     await client.query("COMMIT");
     committed = true;
     await notifyUserChatAccessChanges(pool, id, syncResult);
+    if (forceLogoutReason) {
+      try { require("../services/ws").forceLogoutUser(id, forceLogoutReason); } catch (_) {}
+    }
     res.json({ ok: true });
   } catch (e) {
     if (!committed) {
@@ -435,27 +487,16 @@ router.delete("/admin/users/:id", requireAuth("admin"), async (req, res) => {
     }
 
     await client.query("BEGIN");
-    const targetRes = await client.query("SELECT id, role, active FROM users WHERE id = $1", [id]);
-    const target = targetRes.rows[0] || null;
-    if (!target) {
+    const adminGuard = await ensureCanDemoteAdmin(client, id, null, false);
+    if (!adminGuard.ok) {
       await client.query("ROLLBACK");
-      return res.status(404).json({ error: "Пользователь не найден" });
+      return res.status(adminGuard.status).json({ error: adminGuard.error });
     }
-
-    if (target.role === "admin" && target.active) {
-      const activeAdminsLeftRes = await client.query(
-        "SELECT COUNT(*)::int AS n FROM users WHERE role = 'admin' AND active = true AND id <> $1",
-        [id]
-      );
-      const activeAdminsLeft = Number(activeAdminsLeftRes.rows[0]?.n || 0);
-      if (activeAdminsLeft < 1) {
-        await client.query("ROLLBACK");
-        return res.status(400).json({ error: "Нельзя удалить последнего активного администратора" });
-      }
-    }
-
-    await client.query("DELETE FROM users WHERE id = $1", [id]);
+    await client.query("UPDATE users SET active = false, token_version = token_version + 1 WHERE id = $1", [id]);
+    const syncResult = await syncUserChatAccessByClientPermissions(client, id);
     await client.query("COMMIT");
+    await notifyUserChatAccessChanges(pool, id, syncResult);
+    try { require("../services/ws").forceLogoutUser(id, "user_inactive"); } catch (_) {}
     res.json({ ok: true });
   } catch (e) {
     try { await client.query("ROLLBACK"); } catch (_) {}

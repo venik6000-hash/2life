@@ -18,5 +18,3 @@ services:
 
 volumes:
   postgres_data:
-    external: true
-    name: 2life-dashboard_postgres_data

@@ -12,6 +12,7 @@ const createWsTicket = (user, deviceId = null) => {
     username: user.username,
     role: user.role,
     jti: user.jti || null,
+    token_version: Number(user.token_version || 0),
     deviceId: deviceId || null,
     expiry: Date.now() + TICKET_TTL_MS,
   });

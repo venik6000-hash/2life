@@ -6,12 +6,19 @@ if [ -f .env ]; then
   export $(grep -v '^#' .env | xargs)
 fi
 
-# Dev DB runs on port 5434 to avoid conflicts with other projects
+# Dev DB runs on port 5434 to avoid conflicts with other projects.
+# COMPOSE_PROJECT_NAME from .env may point to production, so dev uses its own explicit name.
+export PROD_COMPOSE_PROJECT_NAME="${PROD_COMPOSE_PROJECT_NAME:-${COMPOSE_PROJECT_NAME:-2life-dashboard}}"
+export DEV_COMPOSE_PROJECT_NAME="${DEV_COMPOSE_PROJECT_NAME:-2life-dashboard-dev}"
+export COMPOSE_PROJECT_NAME="$DEV_COMPOSE_PROJECT_NAME"
 export DATABASE_URL="postgresql://postgres:${POSTGRES_PASSWORD}@localhost:5434/2life"
 
-# Stop production server/frontend containers so port 3001 is free for local nodemon
-echo "Stopping production containers (freeing port 3001)..."
-docker compose stop server frontend 2>/dev/null || true
+# Production containers are left alone by default. On a shared checkout or VPS,
+# stopping them from a dev helper can interrupt real users.
+if [ "${ALLOW_STOP_PROD_CONTAINERS:-0}" = "1" ]; then
+  echo "Stopping production containers (freeing port 3001)..."
+  COMPOSE_PROJECT_NAME="$PROD_COMPOSE_PROJECT_NAME" docker compose stop server frontend 2>/dev/null || true
+fi
 
 echo "Starting dev database..."
 docker compose -f docker-compose.dev.yml up -d

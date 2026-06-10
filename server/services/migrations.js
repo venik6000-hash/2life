@@ -16,12 +16,18 @@ async function isApplied(id) {
 // Runs `fn` once, ever. `fn` receives a dedicated client inside a transaction.
 // Records the id only if fn succeeds. Throws on failure (caller decides fatality).
 async function runOnce(id, fn) {
-  if (await isApplied(id)) return { id, ran: false };
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    const claim = await client.query(
+      "INSERT INTO schema_migrations (id) VALUES ($1) ON CONFLICT DO NOTHING RETURNING id",
+      [id]
+    );
+    if (claim.rowCount < 1) {
+      await client.query("ROLLBACK");
+      return { id, ran: false };
+    }
     await fn(client);
-    await client.query("INSERT INTO schema_migrations (id) VALUES ($1) ON CONFLICT DO NOTHING", [id]);
     await client.query("COMMIT");
     return { id, ran: true };
   } catch (err) {

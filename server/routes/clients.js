@@ -6,7 +6,7 @@ const { buildActionLogs, appendActivityLog } = require("../services/logger");
 const { createBackupSnapshot } = require("../services/backup");
 const { requireAuth, requirePermission, requireSectionWrite, requireAnySectionRead, requireAnySectionWrite } = require("../middleware/auth");
 const { getPermissionsForRole } = require("../services/permissions");
-const { pool, upsertClientAssignment, deleteClientAssignment, getAssignmentsByClient, getAssignmentsByUser, getDoctorByName, hasAllClientsAccess } = require("../services/db");
+const { pool, upsertClientAssignment, deleteClientAssignment, getClientAssignment, getAssignmentsByClient, getAssignmentsByUser, getDoctorByName, hasAllClientsAccess, replaceDoctorClientAssignments } = require("../services/db");
 const { syncUserChatAccessByClientPermissions } = require("../services/chatAccessSync");
 const { notifyUserChatAccessChanges } = require("../services/messengerAccessNotifications");
 const { addConnection, removeConnection, broadcast } = require("../services/sse");
@@ -65,13 +65,20 @@ router.get("/clients/:clientId", requireAuth(), requireAnySectionRead(), async (
 
 // ─── Bulk save (migration / import / restore) ────────────────────────────────
 
-router.post("/clients", requireAuth(), requirePermission("create_client"), async (req, res) => {
+router.post("/clients", requireAuth("admin"), requirePermission("delete_client"), async (req, res) => {
   try {
-    const nextClients = Array.isArray(req.body) ? req.body : [];
+    if (!Array.isArray(req.body)) {
+      return res.status(400).json({ error: "Ожидался массив клиентов", code: "BULK_CLIENT_REPLACE_INVALID_BODY" });
+    }
+    const nextClients = req.body;
+    if (nextClients.length < 1) {
+      return res.status(400).json({ error: "Пустая полная замена клиентов запрещена", code: "BULK_CLIENT_REPLACE_EMPTY" });
+    }
     const prevClients = await getClients();
     const actionEntries = buildActionLogs(prevClients, nextClients, req);
     await createBackupSnapshot("before-save");
     await saveClients(nextClients);
+    await syncBulkDoctorAssignments(nextClients, req.user.id);
     await appendActivityLog(actionEntries);
     res.json({ ok: true, saved: nextClients.length, loggedActions: actionEntries.length });
   } catch (e) {
@@ -258,6 +265,13 @@ router.delete("/clients/:clientId/assignments/:userId", requireAuth("admin"), as
     if (!Number.isInteger(targetUserId) || targetUserId <= 0) {
       return res.status(400).json({ error: "Некорректный userId" });
     }
+    const assignment = await getClientAssignment(targetUserId, req.params.clientId);
+    if (assignment?.assignment_source === "doctor") {
+      return res.status(409).json({
+        error: "Этот доступ выдан автоматически через врача этапа",
+        code: "DOCTOR_DERIVED_ASSIGNMENT"
+      });
+    }
     await deleteClientAssignment(targetUserId, req.params.clientId);
     const syncResult = await syncUserChatAccessByClientPermissions(pool, targetUserId);
     await notifyUserChatAccessChanges(pool, targetUserId, syncResult);
@@ -293,17 +307,23 @@ const autoAssignDoctors = async (clientId, assignedByUserId) => {
   const client = await getOneClient(clientId);
   if (!client) return;
   const doctorNames = [...new Set((client.stages || []).map(s => s.doctor).filter(Boolean))];
-  const touchedUserIds = new Set();
+  const nextDoctorUserIds = [];
   for (const name of doctorNames) {
     const doctor = await getDoctorByName(name);
     if (doctor?.user_id) {
-      await upsertClientAssignment(doctor.user_id, clientId, assignedByUserId || null);
-      touchedUserIds.add(Number(doctor.user_id));
+      nextDoctorUserIds.push(Number(doctor.user_id));
     }
   }
+  const touchedUserIds = await replaceDoctorClientAssignments(clientId, nextDoctorUserIds, assignedByUserId || null);
   for (const userId of touchedUserIds) {
     const syncResult = await syncUserChatAccessByClientPermissions(pool, userId);
     await notifyUserChatAccessChanges(pool, userId, syncResult);
+  }
+};
+
+const syncBulkDoctorAssignments = async (clients, assignedByUserId) => {
+  for (const client of clients) {
+    if (client?.id) await autoAssignDoctors(client.id, assignedByUserId);
   }
 };
 

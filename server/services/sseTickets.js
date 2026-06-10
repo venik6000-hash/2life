@@ -11,6 +11,8 @@ const createTicket = (user) => {
     id: user.id,
     username: user.username,
     role: user.role,
+    jti: user.jti || null,
+    token_version: Number(user.token_version || 0),
     expiry: Date.now() + TICKET_TTL_MS,
   });
   return ticket;

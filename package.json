@@ -29,6 +29,7 @@
     "verify:journal-kanban-static": "node scripts/verifyJournalKanbanStatic.mjs",
     "verify:journal-notifications": "node scripts/verifyJournalNotifications.mjs",
     "verify:client-role-perms": "node scripts/verifyClientRolePermissionsPersist.mjs",
+    "verify:security-hardening": "node scripts/verifySecurityHardening.mjs",
     "build": "vite build",
     "preview": "vite preview"
   },

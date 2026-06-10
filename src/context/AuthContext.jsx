@@ -51,21 +51,27 @@ export function AuthProvider({ children }) {
 
   useEffect(() => {
     if (!token) { setChecking(false); return; }
+    const requestToken = token;
     const controller = (typeof AbortController !== "undefined") ? new AbortController() : null;
     const timer = controller ? setTimeout(() => controller.abort(), 10000) : null;
-    fetch("/api/auth/me", withNoStoreCache({ headers: { Authorization: `Bearer ${token}`, "X-Messenger-Device-Id": getOrCreateDeviceId() }, signal: controller?.signal }))
+    fetch("/api/auth/me", withNoStoreCache({ headers: { Authorization: `Bearer ${requestToken}`, "X-Messenger-Device-Id": getOrCreateDeviceId() }, signal: controller?.signal }))
       .then(r => r.ok ? r.json() : Promise.reject(new Error("unauthorized")))
       .then(data => {
+        if (localStorage.getItem(TOKEN_KEY) !== requestToken) return;
         setUser(data.user);
         try { localStorage.setItem(USER_KEY, JSON.stringify(data.user)); } catch (_) {}
         setPermissions(data.permissions);
       })
       .catch((err) => {
         if (err?.name === "AbortError") return; // timeout: keep cached session, just stop checking (finally runs)
-        // real failure (401/invalid): clear, as before
+        if (localStorage.getItem(TOKEN_KEY) !== requestToken) return;
+        // real failure (401/invalid) for the same token: clear, as before
         setToken(null); setUser(null); setPermissions(null); clearSessionCache();
       })
-      .finally(() => { if (timer) clearTimeout(timer); setChecking(false); });
+      .finally(() => {
+        if (timer) clearTimeout(timer);
+        if (localStorage.getItem(TOKEN_KEY) === requestToken) setChecking(false);
+      });
   }, [token, clearSessionCache]);
 
   const login = useCallback(async (username, password) => {
@@ -121,8 +127,9 @@ export function AuthProvider({ children }) {
 
   const authFetch = useCallback(async (url, opts = {}) => {
     const { timeoutMs = 10000, headers: optHeaders, signal: optSignal, ...rest } = opts;
+    const requestToken = token;
     const headers = { ...(optHeaders || {}) };
-    if (token) headers["Authorization"] = `Bearer ${token}`;
+    if (requestToken) headers["Authorization"] = `Bearer ${requestToken}`;
     headers["X-Messenger-Device-Id"] = getOrCreateDeviceId();
     const controller = (timeoutMs > 0 && typeof AbortController !== "undefined" && !optSignal) ? new AbortController() : null;
     const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
@@ -135,19 +142,12 @@ export function AuthProvider({ children }) {
     } finally {
       if (timer) clearTimeout(timer);
     }
-    // Если сервер сообщает, что наш токен отозван — мгновенно разлогиниваемся.
-    if (res.status === 401 && token) {
-      try {
-        const cloned = res.clone();
-        const data = await cloned.json().catch(() => null);
-        const msg = String(data?.error || "");
-        if (/отозван|revoked|устарел|истёк|истек|invalid/i.test(msg)) {
-          clearSessionCache();
-          setToken(null);
-          setUser(null);
-          setPermissions(null);
-        }
-      } catch (_) {}
+    // 401 от старого запроса не должен стирать уже обновлённую сессию.
+    if (res.status === 401 && requestToken && localStorage.getItem(TOKEN_KEY) === requestToken) {
+      clearSessionCache();
+      setToken(null);
+      setUser(null);
+      setPermissions(null);
     }
     return res;
   }, [token, clearSessionCache]);

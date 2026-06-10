@@ -5,7 +5,7 @@ const { pool, listRoles, insertRole, updateRoleDisplayName, deleteRole,
         getRoleSections, upsertRoleSection,
         getRolePermissions, upsertRolePermission,
         listRefData, insertRefData, updateRefData, deleteRefData, listDistinctAnalyticsMarkers,
-        insertDoctor, listDoctors, listClientIdsByDoctorName, upsertClientAssignment } = require("../services/db");
+        insertDoctor, listDoctors, listClientIdsByDoctorName, upsertClientAssignment, deleteDoctorClientAssignments } = require("../services/db");
 const { syncUserChatAccessByClientPermissions } = require("../services/chatAccessSync");
 const { notifyUserChatAccessChanges } = require("../services/messengerAccessNotifications");
 
@@ -21,8 +21,17 @@ const syncDoctorUserAssignments = async ({ doctorName, userId, assignedBy }) => 
   if (!safeName || !safeUserId) return;
   const clientIds = await listClientIdsByDoctorName(safeName);
   await Promise.all(clientIds.map((clientId) =>
-    upsertClientAssignment(safeUserId, clientId, toSafeInt(assignedBy))
+    upsertClientAssignment(safeUserId, clientId, toSafeInt(assignedBy), "doctor")
   ));
+  const syncResult = await syncUserChatAccessByClientPermissions(pool, safeUserId);
+  await notifyUserChatAccessChanges(pool, safeUserId, syncResult);
+};
+
+const cleanupDoctorUserAssignments = async ({ doctorName, userId }) => {
+  const safeName = String(doctorName || "").trim();
+  const safeUserId = toSafeInt(userId);
+  if (!safeName || !safeUserId) return;
+  await deleteDoctorClientAssignments(safeUserId, safeName);
   const syncResult = await syncUserChatAccessByClientPermissions(pool, safeUserId);
   await notifyUserChatAccessChanges(pool, safeUserId, syncResult);
 };
@@ -234,11 +243,19 @@ router.patch("/admin/doctors/:id", requireAuth("admin"), async (req, res) => {
 
     const nextName = name != null ? String(name).trim() : String(existing.name || "").trim();
     const nextUserId = user_id !== undefined ? toSafeInt(user_id) : toSafeInt(existing.user_id);
+    const prevName = String(existing.name || "").trim();
+    const prevUserId = toSafeInt(existing.user_id);
+    const doctorLinkChanged =
+      prevUserId &&
+      (prevUserId !== nextUserId || prevName.toLowerCase() !== nextName.toLowerCase());
 
     if (name != null) await pool.query("UPDATE doctors SET name = $1 WHERE id = $2", [nextName, id]);
     if (role != null) await pool.query("UPDATE doctors SET role = $1 WHERE id = $2", [String(role).trim(), id]);
     if (user_id !== undefined) await pool.query("UPDATE doctors SET user_id = $1 WHERE id = $2", [nextUserId, id]);
 
+    if (doctorLinkChanged) {
+      await cleanupDoctorUserAssignments({ doctorName: prevName, userId: prevUserId });
+    }
     await syncDoctorUserAssignments({ doctorName: nextName, userId: nextUserId, assignedBy: req.user?.id });
     res.json({ ok: true });
   } catch (e) {
@@ -249,7 +266,12 @@ router.patch("/admin/doctors/:id", requireAuth("admin"), async (req, res) => {
 // DELETE /api/admin/doctors/:id
 router.delete("/admin/doctors/:id", requireAuth("admin"), async (req, res) => {
   try {
-    await pool.query("DELETE FROM doctors WHERE id = $1", [Number(req.params.id)]);
+    const id = Number(req.params.id);
+    const existingRes = await pool.query("SELECT id, name, user_id FROM doctors WHERE id = $1", [id]);
+    const existing = existingRes.rows[0] || null;
+    if (!existing) return res.status(404).json({ error: "Врач не найден" });
+    await pool.query("DELETE FROM doctors WHERE id = $1", [id]);
+    await cleanupDoctorUserAssignments({ doctorName: existing.name, userId: existing.user_id });
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: e.message });

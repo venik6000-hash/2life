@@ -40,6 +40,7 @@ export function MessengerSettingsPanelContent({
   user,
   logout,
   authFetch,
+  applySession,
   notificationStatus,
   enableNotifications,
   fontSize,
@@ -84,15 +85,20 @@ export function MessengerSettingsPanelContent({
 
   const handlePwSubmit = async () => {
     if (pwNew !== pwConfirm) { setPwMsg("Новый пароль не совпадает"); return; }
-    if (pwNew.length < 6) { setPwMsg("Минимум 6 символов"); return; }
+    if (pwNew.length < 8) { setPwMsg("Минимум 8 символов"); return; }
     try {
+      const currentPassword = pwCurrent.trim();
+      const body = currentPassword
+        ? { currentPassword, newPassword: pwNew }
+        : { newPassword: pwNew };
       const res = await authFetch("/api/auth/change-password", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ currentPassword: pwCurrent, newPassword: pwNew }),
+        body: JSON.stringify(body),
       });
       const data = await res.json().catch(() => null);
       if (!res.ok) { setPwMsg(data?.error || "Ошибка"); return; }
+      if (data?.token && data?.user) applySession(data.token, data.user, data.permissions);
       setPwMsg("Пароль изменён"); setPwCurrent(""); setPwNew(""); setPwConfirm("");
       setTimeout(() => { setPwOpen(false); setPwMsg(""); }, 1200);
     } catch (e) { setPwMsg(e.message); }
@@ -266,7 +272,7 @@ export function MessengerSettingsPanelContent({
 }
 
 export default function MessengerSettingsPanel({ onClose }) {
-  const { user, logout, authFetch } = useAuth();
+  const { user, logout, authFetch, applySession } = useAuth();
   const { $, dk, setDk } = useTheme();
   const {
     notificationStatus, enableNotifications,
@@ -282,6 +288,7 @@ export default function MessengerSettingsPanel({ onClose }) {
       user={user}
       logout={logout}
       authFetch={authFetch}
+      applySession={applySession}
       notificationStatus={notificationStatus}
       enableNotifications={enableNotifications}
       fontSize={fontSize}

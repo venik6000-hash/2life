@@ -145,11 +145,14 @@ export function DashboardProvider({ children }) {
   const [md, setMd] = useState(null);
   const [pri, setPri] = useState(0);
   const [nri, setNri] = useState(0);
-  const [doctors, setDoctors] = useState([]);
+  const [doctors, setDoctorsState] = useState([]);
+  const [doctorsLoaded, setDoctorsLoaded] = useState(false);
+  const [doctorsDirty, setDoctorsDirty] = useState(false);
   const [deficitPresets, setDeficitPresets] = useState([]);
   const [labOrderTemplates, setLabOrderTemplates] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const [journalBadges, setJournalBadges] = useState({});
+  const allowEmptyDoctorsSaveRef = useRef(false);
 
   const isAdmin = useMemo(() => !!(permissions?.isAdmin || user?.role === "admin"), [permissions, user?.role]);
   const canReadSection = useCallback((sectionId) => {
@@ -213,12 +216,26 @@ export function DashboardProvider({ children }) {
     return Array.from(byKey.values());
   }, []);
 
+  const setDoctors = useCallback((next) => {
+    setDoctorsDirty(true);
+    setDoctorsState((prev) => {
+      const resolved = typeof next === "function" ? next(prev) : next;
+      allowEmptyDoctorsSaveRef.current = Array.isArray(resolved) && resolved.length === 0;
+      return resolved;
+    });
+  }, []);
+
   const reloadDoctors = useCallback(async () => {
     try {
       const res = await authFetch("/api/doctors");
       if (!res.ok) return;
       const list = await res.json().catch(() => null);
-      if (Array.isArray(list)) setDoctors(normalizeDoctors(list));
+      if (Array.isArray(list)) {
+        setDoctorsState(normalizeDoctors(list));
+        setDoctorsLoaded(true);
+        setDoctorsDirty(false);
+        allowEmptyDoctorsSaveRef.current = false;
+      }
     } catch (_) {
       // ignore transient errors
     }
@@ -286,14 +303,26 @@ export function DashboardProvider({ children }) {
         ? fetchReferenceItems("lab_order_item")
         : Promise.resolve([]);
 
+      const doctorsPromise = withTimeout((async () => {
+        const res = await authFetch("/api/doctors");
+        if (!res?.ok) return null;
+        const data = await res.json().catch(() => null);
+        return Array.isArray(data) ? data : null;
+      })(), null, BOOTSTRAP_REQUEST_TIMEOUT_MS).catch(() => null);
+
       const [doctorsList, deficitItems, labItems] = await Promise.all([
-        withTimeout(fetchJsonArray(authFetch("/api/doctors")).catch(() => []), [], BOOTSTRAP_REQUEST_TIMEOUT_MS),
+        doctorsPromise,
         withTimeout(deficitPresetsPromise, [], BOOTSTRAP_REQUEST_TIMEOUT_MS),
         withTimeout(labOrderPromise, [], BOOTSTRAP_REQUEST_TIMEOUT_MS),
       ]);
 
       if (cancelled) return;
-      setDoctors(normalizeDoctors(doctorsList));
+      if (Array.isArray(doctorsList)) {
+        setDoctorsState(normalizeDoctors(doctorsList));
+        setDoctorsLoaded(true);
+        setDoctorsDirty(false);
+        allowEmptyDoctorsSaveRef.current = false;
+      }
       setDeficitPresets(deficitItems || []);
       setLabOrderTemplates(labItems || []);
     };
@@ -315,7 +344,9 @@ export function DashboardProvider({ children }) {
         await loadOptionalData();
       } catch (_) {
         if (!cancelled) {
-          setDoctors([]);
+          setDoctorsLoaded(false);
+          setDoctorsDirty(false);
+          allowEmptyDoctorsSaveRef.current = false;
           setDeficitPresets([]);
           setLabOrderTemplates([]);
         }
@@ -548,16 +579,27 @@ export function DashboardProvider({ children }) {
   useEffect(() => {
     if (!loaded) return;
     if (user?.role !== "admin") return;
+    if (!doctorsLoaded || !doctorsDirty) return;
     clearTimeout(doctorsSaveTimer.current);
     doctorsSaveTimer.current = setTimeout(() => {
-      authFetch("/api/doctors", {
+      const url = doctors.length === 0 && allowEmptyDoctorsSaveRef.current
+        ? "/api/doctors?confirmEmpty=1"
+        : "/api/doctors";
+      authFetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(doctors)
-      }).catch(e => console.error("Doctors save error:", e));
+      })
+        .then((res) => {
+          if (res?.ok) {
+            setDoctorsDirty(false);
+            allowEmptyDoctorsSaveRef.current = false;
+          }
+        })
+        .catch(e => console.error("Doctors save error:", e));
     }, 600);
     return () => clearTimeout(doctorsSaveTimer.current);
-  }, [doctors, loaded, authFetch, user?.role]);
+  }, [doctors, doctorsDirty, doctorsLoaded, loaded, authFetch, user?.role]);
 
   const cl = useMemo(() => cls.find(c=>c.id===cid), [cls, cid]);
   const st = cl?.stages?.[si];

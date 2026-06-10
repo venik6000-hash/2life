@@ -2,6 +2,7 @@ const jwt  = require("jsonwebtoken");
 const crypto = require("crypto");
 const { getPermissionsForRole } = require("../services/permissions");
 const { isBlacklisted } = require("../services/tokenBlacklist");
+const { pool } = require("../services/db");
 
 const JWT_SECRET = process.env.JWT_SECRET;
 if (!JWT_SECRET) {
@@ -19,51 +20,116 @@ const TOKEN_TTL = "8h";
 const signToken = (payload) =>
   jwt.sign({ ...payload, jti: crypto.randomUUID() }, JWT_SECRET, { expiresIn: TOKEN_TTL });
 
+const loadCurrentUser = async (userId) => {
+  const id = Number(userId);
+  if (!Number.isInteger(id) || id <= 0) return null;
+  const r = await pool.query(
+    `SELECT id, username, role, all_clients_access, display_name, token_version
+       FROM users
+      WHERE id = $1 AND active = true
+      LIMIT 1`,
+    [id]
+  );
+  const row = r.rows[0] || null;
+  if (!row) return null;
+  return {
+    id: row.id,
+    username: row.username,
+    role: row.role,
+    all_clients_access: !!row.all_clients_access,
+    display_name: row.display_name || "",
+    token_version: Number(row.token_version || 0),
+  };
+};
+
+const mergeTokenContext = (tokenUser, currentUser) => ({
+  ...tokenUser,
+  id: currentUser.id,
+  username: currentUser.username,
+  role: currentUser.role,
+  all_clients_access: currentUser.all_clients_access,
+  display_name: currentUser.display_name,
+  token_version: currentUser.token_version,
+});
+
+const isSseTicketRequest = (req) => {
+  const path = String(req.path || "").split("?")[0];
+  const originalPath = String(req.originalUrl || "").split("?")[0];
+  return path === "/events" || originalPath === "/api/events";
+};
+
 // requireAuth(...roles) — middleware. Без roles: любой авторизованный.
 // requireAuth("admin") — только admin. requireAuth("admin","doctor") — admin или doctor.
-const requireAuth = (...roles) => (req, res, next) => {
+const requireAuth = (...roles) => async (req, res, next) => {
   const header = req.headers["authorization"] || "";
   const token  = header.startsWith("Bearer ") ? header.slice(7) : null;
 
-  // EventSource не поддерживает заголовки — для SSE принимаем одноразовый тикет из query-параметра
+  // EventSource не поддерживает заголовки — для SSE принимаем одноразовый тикет только на /events.
   if (!token && req.query.ticket) {
+    if (!isSseTicketRequest(req)) {
+      return res.status(401).json({ error: "Требуется авторизация" });
+    }
     const { consumeTicket } = require("../services/sseTickets");
     const user = consumeTicket(req.query.ticket);
     if (!user) return res.status(401).json({ error: "Недействительный или просроченный SSE-тикет" });
-    if (roles.length && !roles.includes(user.role)) {
-      return res.status(403).json({ error: "Недостаточно прав" });
+    try {
+      const currentUser = await loadCurrentUser(user.id);
+      if (!currentUser) return res.status(401).json({ error: "Пользователь отключён или удалён" });
+      if (user.jti && isBlacklisted(user.jti)) return res.status(401).json({ error: "Токен отозван" });
+      if (Number(user.token_version || 0) !== Number(currentUser.token_version || 0)) {
+        return res.status(401).json({ error: "Сессия отозвана" });
+      }
+      const authUser = mergeTokenContext(user, currentUser);
+      if (roles.length && !roles.includes(authUser.role)) {
+        return res.status(403).json({ error: "Недостаточно прав" });
+      }
+      req.user = authUser;
+      return next();
+    } catch (_) {
+      return res.status(500).json({ error: "Ошибка проверки авторизации" });
     }
-    req.user = user;
-    return next();
   }
 
   if (!token) return res.status(401).json({ error: "Требуется авторизация" });
 
+  let payload;
   try {
-    const payload = jwt.verify(token, JWT_SECRET);
+    payload = jwt.verify(token, JWT_SECRET);
+  } catch (_) {
+    return res.status(401).json({ error: "Токен недействителен или истёк" });
+  }
 
-    // Проверяем, не был ли токен отозван (logout)
-    if (payload.jti && isBlacklisted(payload.jti)) {
-      return res.status(401).json({ error: "Токен отозван" });
+  // Проверяем, не был ли токен отозван (logout)
+  if (payload.jti && isBlacklisted(payload.jti)) {
+    return res.status(401).json({ error: "Токен отозван" });
+  }
+
+  try {
+    const currentUser = await loadCurrentUser(payload.id);
+    if (!currentUser) {
+      return res.status(401).json({ error: "Пользователь отключён или удалён" });
     }
-
-    if (roles.length && !roles.includes(payload.role)) {
+    if (Number(payload.token_version || 0) !== Number(currentUser.token_version || 0)) {
+      return res.status(401).json({ error: "Сессия отозвана" });
+    }
+    const authUser = mergeTokenContext(payload, currentUser);
+    if (roles.length && !roles.includes(currentUser.role)) {
       return res.status(403).json({ error: "Недостаточно прав" });
     }
-    req.user = payload;
+    req.user = authUser;
 
     // Fire-and-forget: записываем (user_id, device_id) → jti для возможности отзыва сессии устройства.
     const deviceId = req.headers["x-messenger-device-id"];
-    if (deviceId && typeof deviceId === "string" && deviceId.length > 0 && deviceId.length <= 160 && payload.jti) {
+    if (deviceId && typeof deviceId === "string" && deviceId.length > 0 && deviceId.length <= 160 && authUser.jti) {
       try {
         const { recordDeviceSession } = require("../services/messengerStore");
-        recordDeviceSession(payload.id, deviceId, payload.jti, req.headers["user-agent"] || "").catch(() => {});
+        recordDeviceSession(authUser.id, deviceId, authUser.jti, req.headers["user-agent"] || "").catch(() => {});
       } catch (_) { /* best-effort */ }
     }
 
     next();
   } catch (_) {
-    res.status(401).json({ error: "Токен недействителен или истёк" });
+    res.status(500).json({ error: "Ошибка проверки авторизации" });
   }
 };
 

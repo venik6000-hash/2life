@@ -33,7 +33,30 @@ const sendTo = (userId, payload) => {
   if (!set) return;
   const data = JSON.stringify(payload);
   for (const ws of set) {
+    if (ws.user?.jti && isBlacklisted(ws.user.jti)) {
+      try { ws.close(4401, "token_revoked"); } catch (_) {}
+      continue;
+    }
     if (ws.readyState === 1 /* OPEN */) ws.send(data);
+  }
+};
+
+const forceLogoutJti = (jti, reason = "token_revoked") => {
+  if (!jti) return;
+  for (const set of connections.values()) {
+    for (const ws of set) {
+      if (ws.user?.jti === jti) {
+        try { ws.close(4401, reason); } catch (_) {}
+      }
+    }
+  }
+};
+
+const forceLogoutUser = (userId, reason = "session_revoked") => {
+  const set = connections.get(userId);
+  if (!set) return;
+  for (const ws of set) {
+    try { ws.close(4401, reason); } catch (_) {}
   }
 };
 
@@ -115,8 +138,58 @@ const messagePayload = (row, user, { text = "", meta = {} } = {}) => ({
   edited_at: row.edited_at || null,
 });
 
+const loadCurrentWsUser = async (userId) => {
+  const id = safeId(userId);
+  if (!id) return null;
+  const r = await pool.query(
+    `SELECT id, username, role, all_clients_access, display_name, token_version
+       FROM users
+      WHERE id = $1 AND active = true
+      LIMIT 1`,
+    [id]
+  );
+  const row = r.rows[0] || null;
+  if (!row) return null;
+  return {
+    id: row.id,
+    username: row.username,
+    role: row.role,
+    all_clients_access: !!row.all_clients_access,
+    display_name: row.display_name || "",
+    token_version: Number(row.token_version || 0),
+  };
+};
+
+const mergeWsUser = (tokenUser, currentUser) => ({
+  ...tokenUser,
+  id: currentUser.id,
+  username: currentUser.username,
+  role: currentUser.role,
+  all_clients_access: currentUser.all_clients_access,
+  display_name: currentUser.display_name,
+  token_version: currentUser.token_version,
+});
+
+const refreshWsUser = async (ws) => {
+  if (ws.user?.jti && isBlacklisted(ws.user?.jti)) {
+    try { ws.close(4401, "token_revoked"); } catch (_) {}
+    return null;
+  }
+  const currentUser = await loadCurrentWsUser(ws.user?.id);
+  if (!currentUser) {
+    try { ws.close(4401, "user_inactive"); } catch (_) {}
+    return null;
+  }
+  if (Number(ws.user?.token_version || 0) !== Number(currentUser.token_version || 0)) {
+    try { ws.close(4401, "token_revoked"); } catch (_) {}
+    return null;
+  }
+  ws.user = mergeWsUser(ws.user || {}, currentUser);
+  return ws.user;
+};
+
 // Authenticate an upgrade request: Bearer token or ?ticket= (one-time WS ticket)
-const authenticateUpgrade = (req) => {
+const authenticateUpgrade = async (req) => {
   // Try Authorization header first (not common in browser WS, but useful for testing)
   const authHeader = req.headers["authorization"] || "";
   let token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
@@ -127,7 +200,12 @@ const authenticateUpgrade = (req) => {
     const ticket = url.searchParams.get("ticket");
     if (ticket) {
       const { consumeWsTicket } = require("./wsTickets");
-      return consumeWsTicket(ticket); // returns user object or null
+      const ticketUser = consumeWsTicket(ticket); // returns user object or null
+      if (!ticketUser) return null;
+      if (ticketUser.jti && isBlacklisted(ticketUser.jti)) return null;
+      const currentUser = await loadCurrentWsUser(ticketUser.id);
+      if (currentUser && Number(ticketUser.token_version || 0) !== Number(currentUser.token_version || 0)) return null;
+      return currentUser ? mergeWsUser(ticketUser, currentUser) : null;
     }
     return null;
   }
@@ -135,17 +213,21 @@ const authenticateUpgrade = (req) => {
   try {
     const payload = jwt.verify(token, JWT_SECRET);
     if (payload.jti && isBlacklisted(payload.jti)) return null;
-    return payload;
+    const currentUser = await loadCurrentWsUser(payload.id);
+    if (currentUser && Number(payload.token_version || 0) !== Number(currentUser.token_version || 0)) return null;
+    return currentUser ? mergeWsUser(payload, currentUser) : null;
   } catch {
     return null;
   }
 };
 
-const handleMessage = async (ws, user, raw) => {
+const handleMessage = async (ws, raw) => {
   let msg;
   try { msg = JSON.parse(raw); } catch { return; }
   if (!msg || typeof msg !== "object" || Array.isArray(msg)) return;
 
+  const user = await refreshWsUser(ws);
+  if (!user) return;
   const { type } = msg;
 
   // ── ping/pong heartbeat ──────────────────────────────────────────────────
@@ -313,6 +395,12 @@ const handleMessage = async (ws, user, raw) => {
     const allowed = await isParticipant(chatId, user.id);
     if (!allowed) return;
 
+    const message = await getMessageById(chatId, messageId);
+    if (!message || Number(message.chat_id) !== chatId) {
+      try { ws.send(JSON.stringify({ type: "read_error", chatId, code: "READ_MESSAGE_NOT_FOUND" })); } catch (_) {}
+      return;
+    }
+
     await upsertReceipt(chatId, user.id, messageId);
 
     const receipts = await getReceiptsByChat(chatId);
@@ -333,14 +421,19 @@ const handleMessage = async (ws, user, raw) => {
 const initWebSocket = (httpServer) => {
   const wss = new WebSocketServer({ noServer: true });
 
-  httpServer.on("upgrade", (req, socket, head) => {
+  httpServer.on("upgrade", async (req, socket, head) => {
     const url = new URL(req.url, "http://localhost");
     if (url.pathname !== "/ws") {
       socket.destroy();
       return;
     }
 
-    const user = authenticateUpgrade(req);
+    let user = null;
+    try {
+      user = await authenticateUpgrade(req);
+    } catch (_) {
+      user = null;
+    }
     if (!user) {
       socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
       socket.destroy();
@@ -360,7 +453,7 @@ const initWebSocket = (httpServer) => {
     addConn(user.id, ws);
 
     ws.on("message", (raw) => {
-      handleMessage(ws, user, raw.toString()).catch(() => {});
+      handleMessage(ws, raw.toString()).catch(() => {});
     });
 
     ws.on("close", () => removeConn(user.id, ws));
@@ -370,4 +463,4 @@ const initWebSocket = (httpServer) => {
   return wss;
 };
 
-module.exports = { initWebSocket, sendTo, broadcastToChat, forceLogoutDevice, connections };
+module.exports = { initWebSocket, sendTo, broadcastToChat, forceLogoutDevice, forceLogoutJti, forceLogoutUser, connections };
