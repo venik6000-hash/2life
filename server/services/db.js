@@ -1,15 +1,77 @@
 const { Pool } = require("pg");
+const crypto = require("crypto");
 const { decryptText } = require("./messengerCrypto");
 
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL || "postgresql://postgres:postgres@localhost:5432/2life",
-});
+const ADMIN_URL = process.env.DATABASE_URL || "postgresql://postgres:postgres@localhost:5432/2life";
+
+const adminPool = new Pool({ connectionString: ADMIN_URL });
 
 // pg emits 'error' on an IDLE pooled client dying out-of-band (Postgres restart,
 // network blip). Log and swallow it: without this listener the event would surface
 // as an uncaughtException (see server/index.js) and bounce the whole container for a
 // transient drop. The pool transparently reconnects on the next query.
-pool.on("error", (err) => console.error("[pg pool] idle client error:", err.message));
+adminPool.on("error", (err) => console.error("[pg pool] idle client error:", err.message));
+
+// Runtime queries run as a least-privilege role; the configured (admin)
+// connection is only used for boot-time schema/seeds and stays available as
+// a fallback. The swap happens behind this facade because every module
+// destructures { pool } at require-time.
+let activePool = adminPool;
+
+const pool = {
+  query: (...args) => activePool.query(...args),
+  connect: (...args) => activePool.connect(...args),
+  on: (...args) => activePool.on(...args),
+  end: async () => {
+    if (activePool !== adminPool) await activePool.end();
+    await adminPool.end();
+  },
+};
+
+// Creates/refreshes the DML-only role and switches the runtime pool to it.
+// Called once at boot AFTER all schema/seed work (which needs the admin
+// connection). The password is random per boot and never stored — only this
+// process uses the role. Any failure (no superuser on a managed PG, etc.)
+// logs and keeps the admin connection so boot never breaks.
+const APP_DB_ROLE = "app_2life";
+const quoteAppIdent = (s) => '"' + String(s).replace(/"/g, '""') + '"';
+
+const ensureAppDbRole = async () => {
+  if (process.env.APP_DB_ROLE === "off") {
+    console.log("[db] least-privilege role disabled via APP_DB_ROLE=off");
+    return { switched: false, reason: "disabled by APP_DB_ROLE=off" };
+  }
+  try {
+    const url = new URL(ADMIN_URL);
+    const dbName = decodeURIComponent(url.pathname.slice(1));
+    const password = crypto.randomBytes(24).toString("base64url"); // URL-safe, no quotes
+    const ident = quoteAppIdent(APP_DB_ROLE);
+
+    const exists = await adminPool.query("SELECT 1 FROM pg_roles WHERE rolname = $1", [APP_DB_ROLE]);
+    if (!exists.rows.length) await adminPool.query(`CREATE ROLE ${ident} LOGIN`);
+    await adminPool.query(
+      `ALTER ROLE ${ident} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS PASSWORD '${password}'`
+    );
+    await adminPool.query(`GRANT CONNECT ON DATABASE ${quoteAppIdent(dbName)} TO ${ident}`);
+    await adminPool.query(`GRANT USAGE ON SCHEMA public TO ${ident}`);
+    // TRUNCATE: the messenger full-reset uses it; same blast radius as DELETE.
+    await adminPool.query(`GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE ON ALL TABLES IN SCHEMA public TO ${ident}`);
+    await adminPool.query(`GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO ${ident}`);
+
+    const appUrl = new URL(ADMIN_URL);
+    appUrl.username = APP_DB_ROLE;
+    appUrl.password = password;
+    const candidate = new Pool({ connectionString: appUrl.toString() });
+    await candidate.query("SELECT 1"); // smoke-test before switching
+    candidate.on("error", (err) => console.error("[pg pool] idle client error:", err.message));
+    activePool = candidate;
+    console.log(`[db] runtime pool switched to least-privilege role '${APP_DB_ROLE}' (DML-only)`);
+    return { switched: true };
+  } catch (e) {
+    console.warn("[db] least-privilege role unavailable, staying on admin connection:", e.message);
+    return { switched: false, reason: e.message };
+  }
+};
 
 const initSchema = async () => {
   await pool.query(`
@@ -2182,7 +2244,7 @@ const getChatFile = async (fileId) => {
 };
 
 module.exports = {
-  pool, withTransaction,
+  pool, withTransaction, ensureAppDbRole,
   initSchema,
   // users
   getUser, listUsers, createUser, updatePass, setActive, setAllClientsAccess, hasAllClientsAccess,

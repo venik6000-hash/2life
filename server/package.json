@@ -19,7 +19,8 @@
     "start": "node index.js",
     "verify:journal-reminder-perms": "node scripts/verifyJournalReminderPerms.js",
     "verify:messenger-read-delivery": "node scripts/verifyMessengerReadDelivery.js",
-    "verify:client-role-hard-limits": "node scripts/verifyClientRoleHardLimits.js"
+    "verify:client-role-hard-limits": "node scripts/verifyClientRoleHardLimits.js",
+    "verify:app-db-role": "node scripts/verifyAppDbRole.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

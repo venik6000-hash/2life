@@ -73,6 +73,10 @@ async function start() {
   await initDefaultAdmin();
   await initDefaultRoles();
   await initDefaultDeficitPresets();
+  // All schema/seed work is done — drop runtime queries to the DML-only DB
+  // role (non-fatal: falls back to the admin connection on failure).
+  const { ensureAppDbRole } = require("./services/db");
+  await ensureAppDbRole();
   appReady = true;
   console.log(`2life API готов: http://localhost:${PORT}`);
   const { initWebSocket } = require("./services/ws");

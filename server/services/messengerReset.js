@@ -139,7 +139,16 @@ async function resetMessengerData({ removeFiles = false } = {}) {
   await withTransaction(async (client) => {
     const existingTables = await getExistingMessengerTables(client);
     if (existingTables.length > 0) {
-      await client.query(`TRUNCATE TABLE ${existingTables.map(quoteIdentifier).join(", ")} RESTART IDENTITY`);
+      // No RESTART IDENTITY: that needs sequence ownership the runtime
+      // app role lacks. setval (UPDATE on sequences) resets ids instead.
+      await client.query(`TRUNCATE TABLE ${existingTables.map(quoteIdentifier).join(", ")}`);
+      for (const tableName of existingTables) {
+        await client.query(
+          `SELECT setval(pg_get_serial_sequence($1, 'id'), 1, false)
+           WHERE pg_get_serial_sequence($1, 'id') IS NOT NULL`,
+          [tableName]
+        );
+      }
     }
   });
 
