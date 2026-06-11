@@ -17,7 +17,8 @@
     "verify:migrations": "node scripts/verifyMigrations.js",
     "verify:permissions": "node scripts/verifyPermissions.js",
     "start": "node index.js",
-    "verify:journal-reminder-perms": "node scripts/verifyJournalReminderPerms.js"
+    "verify:journal-reminder-perms": "node scripts/verifyJournalReminderPerms.js",
+    "verify:messenger-read-delivery": "node scripts/verifyMessengerReadDelivery.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

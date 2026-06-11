@@ -76,11 +76,35 @@ const forceLogoutDevice = (userId, deviceId) => {
   }
 };
 
+const canRoleReadMessenger = async (role) => {
+  if (role === "admin") return true;
+  const perms = await getPermissionsForRoleCached(role);
+  return !!perms?.sections?.messenger?.read;
+};
+
+// Chat-content payloads only — control frames (force logout, pong, self-echo
+// after the user's own gated action) keep using sendTo. Mirrors the HTTP
+// requireSectionRead("messenger") gate: a role with messenger disabled must
+// not keep receiving live messages in an open tab.
+const sendChatPayloadTo = async (userId, payload) => {
+  const set = connections.get(userId);
+  if (!set) return;
+  const data = JSON.stringify(payload);
+  for (const ws of set) {
+    if (ws.user?.jti && isBlacklisted(ws.user.jti)) {
+      try { ws.close(4401, "token_revoked"); } catch (_) {}
+      continue;
+    }
+    if (!(await canRoleReadMessenger(ws.user?.role))) continue;
+    if (ws.readyState === 1 /* OPEN */) ws.send(data);
+  }
+};
+
 const broadcastToChat = async (chatId, payload, exceptUserId) => {
   const participants = await getChatParticipants(chatId);
   for (const p of participants) {
     if (p.user_id === exceptUserId) continue;
-    sendTo(p.user_id, payload);
+    await sendChatPayloadTo(p.user_id, payload);
   }
 };
 
@@ -478,4 +502,4 @@ const initWebSocket = (httpServer) => {
   return wss;
 };
 
-module.exports = { initWebSocket, sendTo, broadcastToChat, forceLogoutDevice, forceLogoutJti, forceLogoutUser, connections };
+module.exports = { initWebSocket, sendTo, sendChatPayloadTo, broadcastToChat, forceLogoutDevice, forceLogoutJti, forceLogoutUser, connections };

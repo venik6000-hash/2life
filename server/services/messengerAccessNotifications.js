@@ -4,7 +4,8 @@ const {
   getReceiptsByChat,
 } = require("./db");
 const { createSyncEvent } = require("./messengerStore");
-const { broadcastToChat, sendTo } = require("./ws");
+// sendChatPayloadTo: chat-content deliveries honor messenger.read (admin bypass)
+const { broadcastToChat, sendChatPayloadTo } = require("./ws");
 
 const uniquePositiveIds = (ids) => {
   const seen = new Set();
@@ -73,7 +74,7 @@ async function notifyUserChatAccessChanges(db, userId, syncResult = {}, override
     getReceiptsByChat,
     createSyncEvent,
     broadcastToChat,
-    sendTo,
+    sendTo: sendChatPayloadTo,
     ...overrides,
   };
 

@@ -1,5 +1,24 @@
 const webpush = require("web-push");
 const { listPushDevicesForUsers } = require("./messengerStore");
+const { getPermissionsForRoleCached } = require("./permissions");
+const { pool } = require("./db");
+
+// Drop recipients whose role has messenger.read disabled (admin always passes).
+// Mirrors the HTTP requireSectionRead("messenger") gate for push delivery.
+async function filterMessengerReadUserIds(userIds) {
+  const ids = Array.from(new Set(
+    Array.from(userIds || []).map(Number).filter((n) => Number.isInteger(n) && n > 0)
+  ));
+  if (!ids.length) return [];
+  const r = await pool.query("SELECT id, role FROM users WHERE id = ANY($1) AND active = true", [ids]);
+  const out = [];
+  for (const row of r.rows) {
+    if (row.role === "admin") { out.push(row.id); continue; }
+    const perms = await getPermissionsForRoleCached(row.role);
+    if (perms?.sections?.messenger?.read) out.push(row.id);
+  }
+  return out;
+}
 
 const PUSH_STATUS = (() => {
   const subject = process.env.VAPID_SUBJECT || "";
@@ -61,8 +80,10 @@ async function sendPushToUsers({ userIds, title, body, url, exceptDeviceId = "" 
 }
 
 async function sendPrivateMessagePush({ userIds, chatTitle, url = "/app/messenger", exceptDeviceId = "", msgType = "text" }) {
+  const allowedUserIds = await filterMessengerReadUserIds(userIds);
+  if (!allowedUserIds.length) return { ok: true, results: [] };
   return sendPushToUsers({
-    userIds,
+    userIds: allowedUserIds,
     title: "Новое сообщение",
     body: pickPushBody(msgType, chatTitle),
     url,
@@ -70,4 +91,4 @@ async function sendPrivateMessagePush({ userIds, chatTitle, url = "/app/messenge
   });
 }
 
-module.exports = { getPushConfigStatus, sendPrivateMessagePush, sendPushToUsers };
+module.exports = { getPushConfigStatus, sendPrivateMessagePush, sendPushToUsers, filterMessengerReadUserIds };

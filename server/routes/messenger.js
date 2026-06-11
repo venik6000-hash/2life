@@ -29,7 +29,7 @@ const {
 } = require("../services/chatAccessSync");
 const { matchAndSnippet } = require("../services/messengerSearch");
 const { sendPrivateMessagePush } = require("../services/messengerPush");
-const { broadcastToChat, sendTo, forceLogoutDevice } = require("../services/ws");
+const { broadcastToChat, sendTo, sendChatPayloadTo, forceLogoutDevice } = require("../services/ws");
 const { blacklistToken } = require("../services/tokenBlacklist");
 const { getDeviceJti } = require("../services/messengerStore");
 const { ensureDir } = require("../services/storage");
@@ -260,7 +260,7 @@ router.post("/chats", requireAuth(), requireSectionWrite("messenger"), async (re
 
     // Notify all participants via WS with personal pin-state.
     for (const p of chatParticipants) {
-      sendTo(p.user_id, {
+      await sendChatPayloadTo(p.user_id, {
         type: "chat_created",
         chat: {
           ...chat,
@@ -1100,7 +1100,7 @@ router.post("/chats/:chatId/participants", requireAuth(), requireSectionWrite("m
     // Ensure the newly added user receives the full chat payload right away.
     // Without this, their UI may not have this chat in local state yet.
     const newParticipant = participants.find((p) => p.user_id === userId);
-    sendTo(userId, {
+    await sendChatPayloadTo(userId, {
       type: "chat_created",
       chat: { ...chat, is_pinned: !!newParticipant?.is_pinned, participants, receipts },
     });
