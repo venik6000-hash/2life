@@ -272,13 +272,6 @@ export function DashboardProvider({ children }) {
     return adminItems || [];
   }, [authFetch]);
 
-  const fetchJsonArray = useCallback(async (request) => {
-    const res = await request;
-    if (!res?.ok) return [];
-    const data = await res.json().catch(() => null);
-    return Array.isArray(data) ? data : [];
-  }, []);
-
   useEffect(()=>{ if(cid!==null) localStorage.setItem("dash_cid", cid); },[cid]);
   useEffect(()=>{ localStorage.setItem("dash_si", String(si)); },[si]);
   useEffect(()=>{ setNri(0); },[cid, si]);
@@ -338,13 +331,28 @@ export function DashboardProvider({ children }) {
 
     const loadInitialData = async () => {
       try {
-        const clients = await withTimeout(
-          fetchJsonArray(authFetch("/api/clients")).catch(() => []),
-          [],
+        // Distinguish a transient failure (timeout / network drop / 5xx) from an
+        // authoritative response. On a transient failure we keep any already-loaded
+        // client list instead of blanking the dashboard. An authoritative 4xx (e.g.
+        // 403 "no readable section") still yields [] so revoked access clears the
+        // list as before; a 401 already cleared the session inside authFetch.
+        // The .catch on authFetch maps a network error to `null` (transient) and
+        // absorbs a late rejection if its own 10s abort fires after this 8s timeout.
+        let clients; // undefined ⇒ transient failure ⇒ keep current list
+        const res = await withTimeout(
+          authFetch("/api/clients").catch(() => null),
+          null,
           BOOTSTRAP_REQUEST_TIMEOUT_MS
         );
+        if (res && res.ok) {
+          const data = await res.json().catch(() => null);
+          clients = Array.isArray(data) ? data : [];
+        } else if (res && res.status < 500) {
+          clients = []; // authoritative no-access → clear
+        }
+        // res === null (timeout / network) or res.status >= 500 → leave undefined (transient)
         if (cancelled) return;
-        applyClients(clients);
+        if (clients !== undefined) applyClients(clients);
       } finally {
         if (!cancelled) setLoaded(true);
       }
@@ -366,7 +374,7 @@ export function DashboardProvider({ children }) {
       if (!cancelled) setLoaded(true);
     });
     return () => { cancelled = true; };
-  }, [authFetch, fetchReferenceItems, fetchJsonArray, normalizeDoctors, canReadSection]);
+  }, [authFetch, fetchReferenceItems, normalizeDoctors, canReadSection]);
 
   useEffect(() => {
     if (!loaded) return;

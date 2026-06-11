@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useEffect, useCallback } from "react";
 import { clearPendingPassword } from "../utils/cryptoSession";
 import { withNoStoreCache, TimeoutError } from "../utils/fetchOptions";
+import { deepEqual } from "../utils/deepEqual";
 
 const AuthContext = createContext(null);
 const TOKEN_KEY = "dash_token";
@@ -58,9 +59,15 @@ export function AuthProvider({ children }) {
       .then(r => r.ok ? r.json() : Promise.reject(new Error("unauthorized")))
       .then(data => {
         if (localStorage.getItem(TOKEN_KEY) !== requestToken) return;
-        setUser(data.user);
+        // Preserve referential identity when the content is unchanged. The token
+        // re-validation that fires right after login returns byte-identical
+        // permissions; handing back a NEW object reference would needlessly rebuild
+        // permission-derived callbacks (canReadSection, …) and re-fire the dashboard
+        // bootstrap — the root cause of the "no clients until refresh" race. Security
+        // is unaffected: any real change still replaces the value.
+        setUser(prev => deepEqual(prev, data.user) ? prev : data.user);
         try { localStorage.setItem(USER_KEY, JSON.stringify(data.user)); } catch (_) {}
-        setPermissions(data.permissions);
+        setPermissions(prev => deepEqual(prev, data.permissions) ? prev : data.permissions);
       })
       .catch((err) => {
         if (err?.name === "AbortError") return; // timeout: keep cached session, just stop checking (finally runs)
@@ -160,9 +167,13 @@ export function AuthProvider({ children }) {
     if (!res.ok) return false;
     const data = await res.json().catch(() => null);
     if (!data?.user) return false;
-    setUser(data.user);
+    // Same identity-preserving guard as the /me effect: a no-op refresh (server
+    // pushed "permissions-updated" but nothing actually changed for this role)
+    // must not churn references and re-fire permission-keyed effects.
+    setUser(prev => deepEqual(prev, data.user) ? prev : data.user);
     try { localStorage.setItem(USER_KEY, JSON.stringify(data.user)); } catch (_) {}
-    setPermissions(data.permissions || null);
+    const nextPermissions = data.permissions || null;
+    setPermissions(prev => deepEqual(prev, nextPermissions) ? prev : nextPermissions);
     return true;
   }, [authFetch]);
 
