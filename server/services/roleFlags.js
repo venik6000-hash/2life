@@ -40,4 +40,4 @@ const invalidateRoleFlagsCache = () => {
   cache = { at: 0, names: new Set() };
 };
 
-module.exports = { isClientRoleName, invalidateRoleFlagsCache };
+module.exports = { isClientRoleName, invalidateRoleFlagsCache, LEGACY_ALIASES };

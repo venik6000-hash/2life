@@ -36,13 +36,23 @@ const getPermissionsForRole = async (roleName) => {
     if (row.section_id != null) sectionsObj[row.section_id] = { read: row.can_read, write: row.can_write };
     if (row.permission != null) perms[row.permission] = row.granted;
   }
+  const isClient = !!r.rows[0].is_client;
+  if (isClient) {
+    // Hard floor for client (patient) roles: even if DB rows grant these
+    // (stale data, direct edit), the resolved permission object never
+    // exposes the staff-only journal or admin-grade action permissions.
+    delete sectionsObj.journal;
+    perms['create_client'] = false;
+    perms['delete_client'] = false;
+    perms['import_data'] = false;
+  }
   return {
     sections: sectionsObj,
     canDeleteClient: !!perms['delete_client'],
     canCreateClient: !!perms['create_client'],
     canImportData:   !!perms['import_data'],
     isAdmin: false,
-    isClient: !!r.rows[0].is_client,
+    isClient,
   };
 };
 

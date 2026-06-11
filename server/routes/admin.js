@@ -11,6 +11,7 @@ const { notifyUserChatAccessChanges } = require("../services/messengerAccessNoti
 const { invalidateRoleFlagsCache } = require("../services/roleFlags");
 const { invalidatePermissionsCache } = require("../services/permissions");
 const { broadcast: sseBroadcast } = require("../services/sse");
+const { stripClientRoleDangerousGrants, BLOCKED_CLIENT_SECTIONS, BLOCKED_CLIENT_PERMISSIONS } = require("../services/clientRoleGuard");
 
 const normalizeAnalyticsKey = (value) => String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
 const toSafeInt = (value) => {
@@ -127,9 +128,22 @@ router.patch("/admin/roles/:id", requireAuth("admin"), async (req, res) => {
       if (role.name === "admin") {
         return res.status(400).json({ error: "Роль администратора нельзя сделать клиентской" });
       }
-      await updateRoleIsClient(isClient, roleId);
+      // Flagging a role as client strips grants it must never hold (journal,
+      // action permissions, users' all_clients_access) in one transaction.
+      let revokedAllAccessUserIds = [];
+      await withTransaction(async (db) => {
+        if (isClient) {
+          revokedAllAccessUserIds = await stripClientRoleDangerousGrants(db, role);
+        }
+        await db.query("UPDATE roles SET is_client = $1 WHERE id = $2", [isClient, roleId]);
+      });
       invalidateRoleFlagsCache();
       invalidatePermissionsCache();
+      // Users who lost all_clients_access also lose the derived chat access.
+      for (const affectedUserId of revokedAllAccessUserIds) {
+        const syncResult = await withTransaction((db) => syncUserChatAccessByClientPermissions(db, affectedUserId));
+        await notifyUserChatAccessChanges(pool, affectedUserId, syncResult);
+      }
       try { sseBroadcast("permissions-updated", { roleName: role.name }); } catch (_) {}
     }
     if (hasDisplayName) {
@@ -175,6 +189,24 @@ router.put("/admin/roles/:id/sections", requireAuth("admin"), async (req, res) =
     const role = await getRoleById(roleId);
     if (!role) return res.status(404).json({ error: "Роль не найдена" });
     const { sections, permissions } = req.body || {};
+    if (role.is_client) {
+      // Hidden in the UI; anything arriving here is a stale tab or a crafted
+      // request — refuse rather than silently drop.
+      const badSections = Object.keys(sections || {}).filter(
+        (sec) => BLOCKED_CLIENT_SECTIONS.has(sec) && (sections[sec]?.read || sections[sec]?.write)
+      );
+      const badPerms = Object.keys(permissions || {}).filter(
+        (perm) => BLOCKED_CLIENT_PERMISSIONS.has(perm) && permissions[perm]
+      );
+      if (badSections.length || badPerms.length) {
+        return res.status(400).json({
+          error: "Эти права недоступны клиентской роли",
+          code: "CLIENT_ROLE_RESTRICTED",
+          badSections,
+          badPerms,
+        });
+      }
+    }
     // Sections + permissions are saved atomically (all-or-nothing) so a partial
     // failure can't leave half the checkboxes saved and half not.
     await withTransaction(async (db) => {

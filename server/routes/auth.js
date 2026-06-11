@@ -7,6 +7,7 @@ const { ipKeyGenerator } = rateLimit;
 const { getUser, listUsers, createUser, pool } = require("../services/db");
 const { syncUserChatAccessByClientPermissions } = require("../services/chatAccessSync");
 const { notifyUserChatAccessChanges } = require("../services/messengerAccessNotifications");
+const { isClientRoleName } = require("../services/roleFlags");
 const { broadcast: sseBroadcast } = require("../services/sse");
 const { requireAuth, signToken }   = require("../middleware/auth");
 const { blacklistToken }           = require("../services/tokenBlacklist");
@@ -435,7 +436,13 @@ router.patch("/admin/users/:id", requireAuth("admin"), async (req, res) => {
         await client.query("ROLLBACK");
         return res.status(400).json({ error: "Недопустимая роль" });
       }
-      await client.query("UPDATE users SET role = $1 WHERE id = $2", [role, id]);
+      const newRoleIsClient = await isClientRoleName(role);
+      // Switching a user onto a client role must not let them inherit
+      // all-clients access from their staff days.
+      await client.query(
+        "UPDATE users SET role = $1, all_clients_access = CASE WHEN $3 THEN false ELSE all_clients_access END WHERE id = $2",
+        [role, id, newRoleIsClient]
+      );
       shouldSyncChatAccess = true;
     }
     if (active != null) {
@@ -448,6 +455,17 @@ router.patch("/admin/users/:id", requireAuth("admin"), async (req, res) => {
       if (!active) forceLogoutReason = "user_inactive";
     }
     if (all_clients_access != null) {
+      if (all_clients_access) {
+        const effRoleRow = await client.query("SELECT role FROM users WHERE id = $1", [id]);
+        const effectiveRole = role != null ? role : effRoleRow.rows[0]?.role;
+        if (await isClientRoleName(effectiveRole)) {
+          await client.query("ROLLBACK");
+          return res.status(400).json({
+            error: "Клиентской роли нельзя выдать доступ ко всем клиентам",
+            code: "CLIENT_ROLE_RESTRICTED",
+          });
+        }
+      }
       await client.query("UPDATE users SET all_clients_access = $1 WHERE id = $2", [all_clients_access ? true : false, id]);
       shouldSyncChatAccess = true;
     }
