@@ -1,30 +1,10 @@
-const crypto = require("crypto");
+const { createOneTimeAuthTicketStore } = require("./oneTimeAuthTicketStore");
 
-const TICKET_TTL_MS = 30_000;
+const ticketStore = createOneTimeAuthTicketStore({
+  decorateEntry: (_user, deviceId) => ({ deviceId: deviceId || null }),
+});
 
-// ticket -> { id, username, role, expiry }
-const tickets = new Map();
-
-const createWsTicket = (user, deviceId = null) => {
-  const ticket = crypto.randomBytes(32).toString("hex");
-  tickets.set(ticket, {
-    id: user.id,
-    username: user.username,
-    role: user.role,
-    jti: user.jti || null,
-    token_version: Number(user.token_version || 0),
-    deviceId: deviceId || null,
-    expiry: Date.now() + TICKET_TTL_MS,
-  });
-  return ticket;
-};
-
-const consumeWsTicket = (ticket) => {
-  const entry = tickets.get(ticket);
-  if (!entry) return null;
-  tickets.delete(ticket);
-  if (Date.now() > entry.expiry) return null;
-  return entry;
-};
+const createWsTicket = (user, deviceId = null) => ticketStore.create(user, deviceId);
+const consumeWsTicket = (ticket) => ticketStore.consume(ticket);
 
 module.exports = { createWsTicket, consumeWsTicket };

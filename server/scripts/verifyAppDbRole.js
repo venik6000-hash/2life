@@ -41,6 +41,12 @@ const { pool, initSchema, ensureAppDbRole } = require("../services/db");
   const sel = await pool.query("SELECT 1 FROM roles WHERE name = 't3db_role'");
   assert.equal(sel.rows.length, 1, "INSERT+SELECT must work for the app role");
   await pool.query("DELETE FROM roles WHERE name = 't3db_role'");
+  await pool.query(
+    "INSERT INTO revoked_auth_tokens (jti, expires_at) VALUES ('t3db-jti', NOW() + INTERVAL '1 minute') ON CONFLICT (jti) DO NOTHING"
+  );
+  const revoked = await pool.query("SELECT 1 FROM revoked_auth_tokens WHERE jti = 't3db-jti'");
+  assert.equal(revoked.rows.length, 1, "app role must persist token revocations");
+  await pool.query("DELETE FROM revoked_auth_tokens WHERE jti = 't3db-jti'");
   await pool.query("TRUNCATE TABLE message_receipts");
   console.log("✓ DML (SELECT/INSERT/DELETE/TRUNCATE) works");
 

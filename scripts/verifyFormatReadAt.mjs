@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
 import { formatReadAt } from "../src/utils/formatReadAt.js";
 
-const now = new Date("2026-05-18T15:00:00+03:00");
+const localDate = (year, month, day, hours = 0, minutes = 0) =>
+  new Date(year, month - 1, day, hours, minutes);
 
-assert.equal(formatReadAt("2026-05-18T07:50:00+03:00", now), "сегодня в 07:50");
-assert.equal(formatReadAt("2026-05-17T22:15:00+03:00", now), "вчера в 22:15");
-assert.equal(formatReadAt("2026-05-10T09:00:00+03:00", now), "10.05.2026 09:00");
+const now = localDate(2026, 5, 18, 15);
+
+assert.equal(formatReadAt(localDate(2026, 5, 18, 7, 50), now), "сегодня в 07:50");
+assert.equal(formatReadAt(localDate(2026, 5, 17, 22, 15), now), "вчера в 22:15");
+assert.equal(formatReadAt(localDate(2026, 5, 10, 9), now), "10.05.2026 09:00");
 assert.equal(formatReadAt(null, now), "");
 
 console.log("formatReadAt ok");

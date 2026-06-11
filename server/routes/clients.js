@@ -46,7 +46,15 @@ router.get("/events", requireAuth(), requireAnySectionRead(), (req, res) => {
   res.setHeader("Connection", "keep-alive");
   res.flushHeaders();
 
-  addConnection(res);
+  // Bind the stream to the token that opened it so revocation (logout, password
+  // change, role downgrade, deactivation) can tear it down — otherwise it stays
+  // authorized for the full token TTL.
+  addConnection(res, {
+    userId: req.user.id,
+    jti: req.user.jti || null,
+    tokenVersion: Number(req.user.token_version || 0),
+    role: req.user.role,
+  });
   // Подтверждение подключения
   res.write("event: connected\ndata: {}\n\n");
 

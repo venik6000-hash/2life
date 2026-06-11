@@ -45,6 +45,14 @@ const ensureAppDbRole = async () => {
     const url = new URL(ADMIN_URL);
     const dbName = decodeURIComponent(url.pathname.slice(1));
     const password = crypto.randomBytes(24).toString("base64url"); // URL-safe, no quotes
+    // Defense-in-depth: this password is interpolated into a DDL string below
+    // (PASSWORD '...' cannot be a bind parameter). base64url yields only
+    // [A-Za-z0-9_-], so it can't break out of the literal today — pin that
+    // invariant so a future generator change can't open SQL injection on the
+    // privileged admin connection.
+    if (!/^[A-Za-z0-9_-]+$/.test(password)) {
+      throw new Error("generated app DB role password contains unsafe characters for DDL interpolation");
+    }
     const ident = quoteAppIdent(APP_DB_ROLE);
 
     const exists = await adminPool.query("SELECT 1 FROM pg_roles WHERE rolname = $1", [APP_DB_ROLE]);
@@ -85,6 +93,14 @@ const initSchema = async () => {
       token_version INTEGER NOT NULL DEFAULT 0,
       created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+
+    CREATE TABLE IF NOT EXISTS revoked_auth_tokens (
+      jti        TEXT PRIMARY KEY,
+      expires_at TIMESTAMPTZ NOT NULL,
+      revoked_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_revoked_auth_tokens_expires
+      ON revoked_auth_tokens(expires_at);
 
     CREATE TABLE IF NOT EXISTS doctors (
       id      SERIAL PRIMARY KEY,
@@ -670,7 +686,7 @@ const initSchema = async () => {
     try { await pool.query("ALTER TABLE users ADD COLUMN display_name TEXT NOT NULL DEFAULT ''"); } catch (_) {}
   }
   if (!userCols.includes("token_version")) {
-    try { await pool.query("ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0"); } catch (_) {}
+    await pool.query("ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0");
   }
 
   const assignmentColsRes = await pool.query(

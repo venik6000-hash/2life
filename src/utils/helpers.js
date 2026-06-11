@@ -6,6 +6,38 @@ export const calculateBmiValue = (heightCm, weightKg) => {
   return Number.isFinite(bmi) ? +bmi.toFixed(1) : null;
 };
 
+export const PRINT_DOCUMENT_CSP = "default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:";
+
+export const escapeHtml = (value) => String(value ?? "")
+  .replaceAll("&", "&amp;")
+  .replaceAll("<", "&lt;")
+  .replaceAll(">", "&gt;")
+  .replaceAll('"', "&quot;")
+  .replaceAll("'", "&#39;");
+
+const stripUnsafePrintMarkup = (html) => {
+  if (typeof document === "undefined") return html;
+  const template = document.createElement("template");
+  template.innerHTML = html;
+  template.content
+    .querySelectorAll("script,iframe,object,embed,link,meta,base")
+    .forEach((node) => node.remove());
+  for (const element of template.content.querySelectorAll("*")) {
+    for (const attribute of [...element.attributes]) {
+      const name = attribute.name.toLowerCase();
+      const value = attribute.value.trim();
+      if (name.startsWith("on") || name === "srcdoc") {
+        element.removeAttribute(attribute.name);
+        continue;
+      }
+      if (["href", "src", "xlink:href", "formaction"].includes(name) && /^javascript:/i.test(value)) {
+        element.removeAttribute(attribute.name);
+      }
+    }
+  }
+  return template.innerHTML;
+};
+
 export const sanitizePrintHtml = (html) => {
   // Browsers serialize inline styles as rgb(), not hex — replace all vivid app colors with print-friendly equivalents
   const fixes = [
@@ -52,5 +84,6 @@ export const sanitizePrintHtml = (html) => {
     // Remove box-shadows
     [/box-shadow:[^;}"]+/g,'box-shadow:none'],
   ];
-  return fixes.reduce((h,[from,to])=>h.replace(from,to), html);
+  const safeHtml = stripUnsafePrintMarkup(String(html || ""));
+  return fixes.reduce((h,[from,to])=>h.replace(from,to), safeHtml);
 };

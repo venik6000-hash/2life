@@ -11,6 +11,7 @@ const notifyPath = path.resolve(__dirname, "../services/messengerAccessNotificat
 const middlewarePath = path.resolve(__dirname, "../middleware/auth.js");
 
 let scenario = null;
+let forceLogoutCalls = [];
 
 const makeClient = () => ({
   queries: [],
@@ -62,7 +63,12 @@ require.cache[permissionsPath] = {
   id: permissionsPath,
   filename: permissionsPath,
   loaded: true,
-  exports: { getPermissionsForRole: async () => ({ isAdmin: true, sections: {} }) },
+  exports: {
+    getPermissionsForRole: async () => {
+      if (scenario?.permissionsThrow) throw new Error("permissions unavailable");
+      return { isAdmin: true, sections: {} };
+    },
+  },
 };
 require.cache[chatAccessPath] = {
   id: chatAccessPath,
@@ -74,7 +80,11 @@ require.cache[notifyPath] = {
   id: notifyPath,
   filename: notifyPath,
   loaded: true,
-  exports: { notifyUserChatAccessChanges: async () => {} },
+  exports: {
+    notifyUserChatAccessChanges: async () => {
+      if (scenario?.notifyThrows) throw new Error("notification unavailable");
+    },
+  },
 };
 require.cache[middlewarePath] = {
   id: middlewarePath,
@@ -87,6 +97,15 @@ require.cache[middlewarePath] = {
 };
 
 const router = require("../routes/auth");
+const wsPath = path.resolve(__dirname, "../services/ws.js");
+require.cache[wsPath] = {
+  id: wsPath,
+  filename: wsPath,
+  loaded: true,
+  exports: {
+    forceLogoutUser: (userId, reason) => forceLogoutCalls.push({ userId, reason }),
+  },
+};
 
 const findHandler = (method, routePath) => {
   const layer = router.stack.find((item) => item.route?.path === routePath && item.route?.methods?.[method]);
@@ -162,6 +181,38 @@ const call = async (handler, req) => {
   });
   assert.strictEqual(adminReset.statusCode, 200, "admin reset of another user must not require old password");
   assert.strictEqual(adminReset.body.ok, true);
+
+  scenario = {
+    targetUser: { id: 8, role: "doctor", active: true },
+    notifyThrows: true,
+  };
+  forceLogoutCalls = [];
+  const roleChange = await call(patchUser, {
+    user: { id: 7, role: "admin", jti: "jti-5" },
+    params: { id: "8" },
+    body: { role: "client" },
+  });
+  assert.strictEqual(roleChange.statusCode, 200, "committed role changes must not be reported as failed when notifications fail");
+  assert.deepStrictEqual(
+    forceLogoutCalls,
+    [{ userId: 8, reason: "role_changed" }],
+    "role changes must immediately close the user's open websocket sessions",
+  );
+
+  scenario = {
+    selfUser: { ...baseUser, role: "admin", all_clients_access: true },
+    permissionsThrow: true,
+  };
+  const permissionFailure = await call(changePassword, {
+    user: { id: 7, role: "admin", jti: "jti-6" },
+    body: { newPassword: "new-password" },
+  });
+  assert.strictEqual(permissionFailure.statusCode, 500);
+  assert.strictEqual(
+    permissionFailure.queries.some(({ sql }) => String(sql) === "COMMIT"),
+    false,
+    "password change must not commit before all response data is ready",
+  );
 
   console.log("password change rules ok");
 })().catch((error) => {

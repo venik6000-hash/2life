@@ -36,6 +36,13 @@ const journalRouter        = require("./routes/journal");
 const app  = express();
 const PORT = 3001;
 
+// Behind the nginx reverse proxy (see nginx.conf — it sets X-Forwarded-For), so
+// req.ip must come from the forwarded header, not the proxy's socket address.
+// Without this, every client collapses to one req.ip and the per-IP login rate
+// limiter would throttle all users together (a global login lockout). The repo
+// topology is a single proxy hop; deployments with extra hops set TRUST_PROXY.
+app.set("trust proxy", Number(process.env.TRUST_PROXY) || 1);
+
 let appReady = false;
 
 app.use(cors({
@@ -79,8 +86,14 @@ async function start() {
   await ensureAppDbRole();
   appReady = true;
   console.log(`2life API готов: http://localhost:${PORT}`);
-  const { initWebSocket } = require("./services/ws");
+  const { initWebSocket, startRevocationSweep: startWsRevocationSweep } = require("./services/ws");
   initWebSocket(httpServer);
+  // Backstop for revoking long-lived real-time sessions after token expiry /
+  // token_version bumps (explicit closes handle the same-process case). SSE has no
+  // inbound frames and WS sockets can sit idle, so a timer drives the freshness check.
+  const { startRevocationSweep } = require("./services/sse");
+  startRevocationSweep();
+  startWsRevocationSweep();
   startAutoBackup();
   startJournalNotificationScheduler();
 }

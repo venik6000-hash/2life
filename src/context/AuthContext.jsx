@@ -2,6 +2,7 @@ import { createContext, useContext, useState, useEffect, useCallback } from "rea
 import { clearPendingPassword } from "../utils/cryptoSession";
 import { withNoStoreCache, TimeoutError } from "../utils/fetchOptions";
 import { deepEqual } from "../utils/deepEqual";
+import { shouldClearSessionAfterAuthCheck } from "../utils/authSession";
 
 const AuthContext = createContext(null);
 const TOKEN_KEY = "dash_token";
@@ -56,8 +57,17 @@ export function AuthProvider({ children }) {
     const controller = (typeof AbortController !== "undefined") ? new AbortController() : null;
     const timer = controller ? setTimeout(() => controller.abort(), 10000) : null;
     fetch("/api/auth/me", withNoStoreCache({ headers: { Authorization: `Bearer ${requestToken}`, "X-Messenger-Device-Id": getOrCreateDeviceId() }, signal: controller?.signal }))
-      .then(r => r.ok ? r.json() : Promise.reject(new Error("unauthorized")))
+      .then(async (res) => {
+        if (shouldClearSessionAfterAuthCheck(res.status)) {
+          if (localStorage.getItem(TOKEN_KEY) !== requestToken) return null;
+          setToken(null); setUser(null); setPermissions(null); clearSessionCache();
+          return null;
+        }
+        if (!res.ok) return null;
+        return res.json();
+      })
       .then(data => {
+        if (!data?.user) return;
         if (localStorage.getItem(TOKEN_KEY) !== requestToken) return;
         // Preserve referential identity when the content is unchanged. The token
         // re-validation that fires right after login returns byte-identical
@@ -70,10 +80,9 @@ export function AuthProvider({ children }) {
         setPermissions(prev => deepEqual(prev, data.permissions) ? prev : data.permissions);
       })
       .catch((err) => {
-        if (err?.name === "AbortError") return; // timeout: keep cached session, just stop checking (finally runs)
-        if (localStorage.getItem(TOKEN_KEY) !== requestToken) return;
-        // real failure (401/invalid) for the same token: clear, as before
-        setToken(null); setUser(null); setPermissions(null); clearSessionCache();
+        // Network, timeout, malformed response, and 5xx failures are transient.
+        // Protected requests are still checked by the server once it recovers.
+        if (err?.name === "AbortError") return;
       })
       .finally(() => {
         if (timer) clearTimeout(timer);
@@ -109,18 +118,23 @@ export function AuthProvider({ children }) {
     return data.user;
   }, [applySession]);
 
-  const logout = useCallback(async () => {
-    // Инвалидируем токен на сервере (jti-blacklist), затем чистим локальное состояние
+  const logout = useCallback(() => {
     const currentToken = localStorage.getItem(TOKEN_KEY);
+    clearSessionCache();
+    setToken(null); setUser(null); setPermissions(null);
+
     if (currentToken) {
-      await fetch("/api/auth/logout", {
+      const controller = (typeof AbortController !== "undefined") ? new AbortController() : null;
+      const timer = controller ? setTimeout(() => controller.abort(), 5000) : null;
+      fetch("/api/auth/logout", {
         method: "POST",
         cache: "no-store",
         headers: { Authorization: `Bearer ${currentToken}` },
-      }).catch(() => {}); // silent — клиент всё равно разлогинится
+        signal: controller?.signal,
+      }).catch(() => {}).finally(() => {
+        if (timer) clearTimeout(timer);
+      });
     }
-    clearSessionCache();
-    setToken(null); setUser(null); setPermissions(null);
   }, [clearSessionCache]);
 
   const updateUser = useCallback((patch) => {

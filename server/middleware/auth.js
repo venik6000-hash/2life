@@ -1,12 +1,14 @@
 const jwt  = require("jsonwebtoken");
 const crypto = require("crypto");
 const { getPermissionsForRoleCached } = require("../services/permissions");
-const { isBlacklisted } = require("../services/tokenBlacklist");
 const { pool } = require("../services/db");
 
 const JWT_SECRET = process.env.JWT_SECRET;
-if (!JWT_SECRET) {
-  console.error("[auth] FATAL: JWT_SECRET не задан. Установите переменную окружения JWT_SECRET и перезапустите сервер.");
+const weakSecret = !JWT_SECRET
+  || JWT_SECRET.length < 32
+  || /change-this|your-very-long-random-jwt-secret/i.test(JWT_SECRET);
+if (weakSecret) {
+  console.error("[auth] FATAL: JWT_SECRET должен содержать минимум 32 случайных символа и не быть шаблонным.");
   process.exit(1);
 }
 const TOKEN_TTL = "8h";
@@ -20,15 +22,21 @@ const TOKEN_TTL = "8h";
 const signToken = (payload) =>
   jwt.sign({ ...payload, jti: crypto.randomUUID() }, JWT_SECRET, { expiresIn: TOKEN_TTL });
 
-const loadCurrentUser = async (userId) => {
+const loadCurrentUser = async (userId, jti = null) => {
   const id = Number(userId);
   if (!Number.isInteger(id) || id <= 0) return null;
   const r = await pool.query(
-    `SELECT id, username, role, all_clients_access, display_name, token_version
-       FROM users
-      WHERE id = $1 AND active = true
+    `SELECT u.id, u.username, u.role, u.all_clients_access, u.display_name, u.token_version,
+            EXISTS (
+              SELECT 1
+                FROM revoked_auth_tokens rat
+               WHERE rat.jti = $2
+                 AND rat.expires_at > NOW()
+            ) AS token_revoked
+       FROM users u
+      WHERE u.id = $1 AND u.active = true
       LIMIT 1`,
-    [id]
+    [id, jti]
   );
   const row = r.rows[0] || null;
   if (!row) return null;
@@ -39,6 +47,7 @@ const loadCurrentUser = async (userId) => {
     all_clients_access: !!row.all_clients_access,
     display_name: row.display_name || "",
     token_version: Number(row.token_version || 0),
+    token_revoked: !!row.token_revoked,
   };
 };
 
@@ -73,9 +82,9 @@ const requireAuth = (...roles) => async (req, res, next) => {
     const user = consumeTicket(req.query.ticket);
     if (!user) return res.status(401).json({ error: "Недействительный или просроченный SSE-тикет" });
     try {
-      const currentUser = await loadCurrentUser(user.id);
+      const currentUser = await loadCurrentUser(user.id, user.jti);
       if (!currentUser) return res.status(401).json({ error: "Пользователь отключён или удалён" });
-      if (user.jti && isBlacklisted(user.jti)) return res.status(401).json({ error: "Токен отозван" });
+      if (currentUser.token_revoked) return res.status(401).json({ error: "Токен отозван" });
       if (Number(user.token_version || 0) !== Number(currentUser.token_version || 0)) {
         return res.status(401).json({ error: "Сессия отозвана" });
       }
@@ -99,15 +108,13 @@ const requireAuth = (...roles) => async (req, res, next) => {
     return res.status(401).json({ error: "Токен недействителен или истёк" });
   }
 
-  // Проверяем, не был ли токен отозван (logout)
-  if (payload.jti && isBlacklisted(payload.jti)) {
-    return res.status(401).json({ error: "Токен отозван" });
-  }
-
   try {
-    const currentUser = await loadCurrentUser(payload.id);
+    const currentUser = await loadCurrentUser(payload.id, payload.jti);
     if (!currentUser) {
       return res.status(401).json({ error: "Пользователь отключён или удалён" });
+    }
+    if (currentUser.token_revoked) {
+      return res.status(401).json({ error: "Токен отозван" });
     }
     if (Number(payload.token_version || 0) !== Number(currentUser.token_version || 0)) {
       return res.status(401).json({ error: "Сессия отозвана" });

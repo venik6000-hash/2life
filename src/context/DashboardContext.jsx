@@ -563,6 +563,21 @@ export function DashboardProvider({ children }) {
 
     let es = null;
     let cancelled = false;
+    let reconnectTimer = null;
+    let retryDelay = 1000;
+
+    // SSE tickets are one-time. The browser's built-in EventSource auto-reconnect
+    // reuses the SAME (already-consumed) ticket → 401 loop, so a server-initiated
+    // close (logout, password change, role downgrade, deactivation, or a transient
+    // drop) would otherwise kill live updates until a full page reload. Instead we
+    // own reconnection: tear down, fetch a FRESH ticket, and rebind under the
+    // current role, with capped backoff.
+    const scheduleReconnect = () => {
+      if (cancelled) return;
+      clearTimeout(reconnectTimer);
+      reconnectTimer = setTimeout(() => { connect(); }, retryDelay);
+      retryDelay = Math.min(retryDelay * 2, 30000);
+    };
 
     const connect = async () => {
       try {
@@ -570,10 +585,12 @@ export function DashboardProvider({ children }) {
           method: "POST",
           headers: { Authorization: `Bearer ${token}` },
         });
-        if (cancelled || !r.ok) return;
+        if (cancelled) return;
+        if (!r.ok) { scheduleReconnect(); return; }
         const { ticket } = await r.json();
         if (cancelled) return;
         es = new EventSource(`/api/events?ticket=${encodeURIComponent(ticket)}`);
+        es.addEventListener("open", () => { retryDelay = 1000; });
         es.addEventListener("client-updated", async (e) => {
           try {
             const { clientId } = JSON.parse(e.data);
@@ -599,14 +616,24 @@ export function DashboardProvider({ children }) {
             if (matchesRole || matchesUser) refreshAuth?.();
           } catch (_) {}
         });
-        es.onerror = () => {};
-      } catch (_) {}
+        es.onerror = () => {
+          // Could be a transient drop OR a server-initiated close (revocation).
+          // Close the dead source and reconnect with a fresh ticket rather than
+          // letting EventSource retry the consumed one.
+          try { es?.close(); } catch (_) {}
+          es = null;
+          scheduleReconnect();
+        };
+      } catch (_) {
+        scheduleReconnect();
+      }
     };
 
     connect();
 
     return () => {
       cancelled = true;
+      clearTimeout(reconnectTimer);
       es?.close();
     };
   }, [loaded, authFetch, refreshAuth]);

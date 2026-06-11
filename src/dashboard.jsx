@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, lazy, Suspense } from "react";
-import { sanitizePrintHtml } from "./utils/helpers";
+import { escapeHtml, PRINT_DOCUMENT_CSP, sanitizePrintHtml } from "./utils/helpers";
 import { useDashboard, SECTIONS, isClientRole } from "./context/DashboardContext";
 import { useAuth } from "./context/AuthContext";
 import Sidebar from "./sections/Sidebar";
@@ -118,10 +118,18 @@ export default function Dashboard() {
 
   const printSectionToPdf = () => {
     const w = window.open('', '_blank');
+    if (!w) return;
     const sectionLabel = SECTIONS.find(s => s.id === activeSectionId)?.lb || "Отчёт";
     const printContent = sanitizePrintHtml(printContentRef.current?.innerHTML || "");
+    const safeClientName = escapeHtml(currentClient.name);
+    const safeSectionLabel = escapeHtml(sectionLabel);
+    const safeStageId = escapeHtml(currentStage.id);
+    const safeStageTitle = escapeHtml(currentStage.title);
+    const safeDoctor = escapeHtml(currentStage.doctor);
+    const safeToday = escapeHtml(todayLabel());
+    const safeDob = escapeHtml(currentClient.dob);
     const css = `*,*::before,*::after{box-sizing:border-box}body{font-family:'Segoe UI',-apple-system,Arial,sans-serif;background:#fff;color:#1a1f2e;font-size:13px;line-height:1.65;padding:0;margin:0}.page{padding:44px 52px;max-width:900px;margin:0 auto}.hdr{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:28px;padding-bottom:18px;border-bottom:1px solid #e8eaf0}.name{font-size:21px;font-weight:700;color:#1a1f2e;letter-spacing:-.3px;margin-bottom:4px}.sub{font-size:12px;color:#6b7a99}.meta{text-align:right;font-size:12px;color:#6b7a99;line-height:1.9}.badge{display:inline-block;font-size:10px;font-weight:600;letter-spacing:.8px;text-transform:uppercase;color:#6b7a99;border:1px solid #e8eaf0;padding:3px 10px;border-radius:4px;margin-bottom:8px}.ftr{margin-top:36px;padding-top:12px;border-top:1px solid #e8eaf0;display:flex;justify-content:space-between;font-size:10px;color:#b0b8cc;letter-spacing:.3px}table{width:100%;border-collapse:collapse;margin:10px 0}th{background:#f5f7fa;color:#6b7a99;font-weight:600;font-size:11px;padding:8px 12px;text-align:left;border-bottom:2px solid #e8eaf0;letter-spacing:.4px;text-transform:uppercase}td{padding:7px 12px;border-bottom:1px solid #f0f2f6;vertical-align:top}button{display:none!important}input,select,textarea{border:none!important;background:transparent!important;padding:0!important;color:#1a1f2e!important;-webkit-appearance:none;appearance:none}@media print{.page{padding:0}@page{margin:18mm 22mm;size:A4 portrait}}`;
-    w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${currentClient.name} — ${sectionLabel}</title><style>${css}</style></head><body><div class="page"><div class="hdr"><div><div class="name">${currentClient.name}</div><div class="sub">Этап ${currentStage.id}: ${currentStage.title}${currentStage.doctor ? ` · ${currentStage.doctor}` : ""}</div></div><div class="meta"><div class="badge">${sectionLabel}</div><div>${todayLabel()}</div>${currentClient.dob ? `<div>${currentClient.dob}</div>` : ""}</div></div><div>${printContent}</div><div class="ftr"><span>${currentClient.name} · ${sectionLabel}</span><span>${todayLabel()}</span></div></div></body></html>`);
+    w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${PRINT_DOCUMENT_CSP}"><title>${safeClientName} — ${safeSectionLabel}</title><style>${css}</style></head><body><div class="page"><div class="hdr"><div><div class="name">${safeClientName}</div><div class="sub">Этап ${safeStageId}: ${safeStageTitle}${safeDoctor ? ` · ${safeDoctor}` : ""}</div></div><div class="meta"><div class="badge">${safeSectionLabel}</div><div>${safeToday}</div>${safeDob ? `<div>${safeDob}</div>` : ""}</div></div><div>${printContent}</div><div class="ftr"><span>${safeClientName} · ${safeSectionLabel}</span><span>${safeToday}</span></div></div></body></html>`);
     w.document.close();
     setTimeout(() => w.print(), 400);
   };

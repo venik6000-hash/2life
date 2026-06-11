@@ -1038,12 +1038,13 @@ router.delete("/messenger/devices/:deviceId", requireAuth(), requireSectionRead(
   try {
     if (!isNonEmptyString(req.params.deviceId, 160)) return res.status(400).json({ error: "Некорректный deviceId" });
     const deviceId = req.params.deviceId.trim();
-    // Достаём jti, чтобы блэклистить активный токен этого устройства.
     const jti = await getDeviceJti(req.user.id, deviceId).catch(() => null);
+    if (jti) {
+      await blacklistToken(jti);
+    }
     const removed = await removeMessengerDevice(req.user.id, deviceId);
-    const targetJti = jti || removed?.jti || null;
-    if (targetJti) {
-      try { blacklistToken(targetJti); } catch (_) {}
+    if (!jti && removed?.jti) {
+      await blacklistToken(removed.jti);
     }
     // Будим клиентов — все сокеты этого пользователя получат событие, целевое устройство закроется.
     try { forceLogoutDevice(req.user.id, deviceId); } catch (_) {}

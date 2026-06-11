@@ -107,7 +107,7 @@ src/main.jsx
 | `sseTickets.js`      | Одноразовые SSE-тикеты (30 сек) для browser EventSource-аутентификации           |
 | `ws.js`              | WebSocket-хаб мессенджера: маршрутизация событий по участникам                   |
 | `wsTickets.js`       | Одноразовые WS-тикеты (30 сек) для browser WebSocket-аутентификации              |
-| `tokenBlacklist.js`  | In-memory JWT blacklist для серверного logout; записи авто-очищаются по TTL токена |
+| `tokenBlacklist.js`  | DB-backed отзыв отдельных JWT по `jti` с локальным TTL-кэшем; logout и отзыв устройства переживают рестарт сервера |
 | `chatAccessSync.js`  | Синхронизация состава `chat_participants` по правам доступа к клиентам |
 | `messengerCrypto.js` | Серверное AES-256-GCM шифрование/дешифрование сообщений и файлов мессенджера |
 | `messengerPush.js`   | Web Push отправка: `sendPushToUsers` (общий путь доставки) + `sendPrivateMessagePush` для сообщений мессенджера. Используется и журналом, и мессенджером. |
@@ -126,7 +126,7 @@ src/main.jsx
 ## 6. Аутентификация и права
 
 - JWT хранится в `localStorage` (`dash_token`), передаётся через `Authorization: Bearer`.
-- JWT содержит `jti` (уникальный ID) — используется для инвалидации при logout через `tokenBlacklist.js`.
+- JWT содержит `jti` (уникальный ID) — отзыв при logout и удалении устройства сохраняется в PostgreSQL (`revoked_auth_tokens`) и проверяется через `tokenBlacklist.js`.
 - `AuthContext` предоставляет `authFetch` — обёртка над `fetch` с токеном.
 - Роли: `admin` + кастомные. Права задаются в `role_sections` (read/write по разделу) и `role_permissions`.
 - `AdminSection` доступна только роли `admin`.

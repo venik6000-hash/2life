@@ -8,7 +8,7 @@ const { getUser, listUsers, createUser, pool } = require("../services/db");
 const { syncUserChatAccessByClientPermissions } = require("../services/chatAccessSync");
 const { notifyUserChatAccessChanges } = require("../services/messengerAccessNotifications");
 const { isClientRoleName } = require("../services/roleFlags");
-const { broadcast: sseBroadcast } = require("../services/sse");
+const { broadcast: sseBroadcast, closeConnectionsForUser: sseCloseUser, closeConnectionsForJti: sseCloseJti } = require("../services/sse");
 const { requireAuth, signToken }   = require("../middleware/auth");
 const { blacklistToken }           = require("../services/tokenBlacklist");
 const { getPermissionsForRole }    = require("../services/permissions");
@@ -19,6 +19,9 @@ const {
 } = require("../services/messengerRecovery");
 
 const BCRYPT_ROUNDS = 12;
+const DUMMY_PASSWORD_HASH = "$2b$12$UjzCKeGbFa7WOf2CBjl/7uN8oNqaBKN9O.n/EflPUKZsYtV97JS1C";
+const MAX_USERNAME_LENGTH = 160;
+const MAX_PASSWORD_LENGTH = 1024;
 const hasText = (value) => String(value || "").trim() !== "";
 const hasMessengerBundle = (row) => (
   !!row &&
@@ -113,15 +116,36 @@ const loginLimiter = rateLimit({
   },
 });
 
+// Coarse per-IP cap layered on top of the per-username limiter above: the latter
+// only throttles 5/min *per username*, so an attacker rotating usernames from one
+// IP (credential stuffing) would otherwise get 5 free attempts per account with no
+// aggregate ceiling. This bounds total login attempts per IP across all usernames.
+const loginIpLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Слишком много попыток входа. Попробуйте через минуту." },
+  keyGenerator: (req) => ipKeyGenerator(req.ip),
+});
+
 // POST /api/auth/login
-router.post("/auth/login", loginLimiter, async (req, res) => {
+router.post("/auth/login", loginIpLimiter, loginLimiter, async (req, res) => {
   try {
     const { username, password } = req.body || {};
-    if (!username || !password) {
+    if (
+      typeof username !== "string"
+      || typeof password !== "string"
+      || !username.trim()
+      || !password
+      || username.length > MAX_USERNAME_LENGTH
+      || password.length > MAX_PASSWORD_LENGTH
+    ) {
       return res.status(400).json({ error: "Введите логин и пароль" });
     }
-    const user = await getUser(String(username).trim().toLowerCase());
-    if (!user || !(await bcrypt.compare(password, user.password_hash))) {
+    const user = await getUser(username.trim().toLowerCase());
+    const passwordOk = await bcrypt.compare(password, user?.password_hash || DUMMY_PASSWORD_HASH);
+    if (!user || !passwordOk) {
       return res.status(401).json({ error: "Неверный логин или пароль" });
     }
     const token = signToken({ id: user.id, username: user.username, role: user.role, token_version: Number(user.token_version || 0) });
@@ -139,12 +163,26 @@ router.post("/auth/login", loginLimiter, async (req, res) => {
 });
 
 // POST /api/auth/logout — серверная инвалидация токена
-router.post("/auth/logout", requireAuth(), (req, res) => {
-  if (req.user?.jti) {
-    blacklistToken(req.user.jti);
-    try { require("../services/ws").forceLogoutJti(req.user.jti); } catch (_) {}
+router.post("/auth/logout", requireAuth(), async (req, res) => {
+  try {
+    if (req.user?.jti) {
+      try {
+        await blacklistToken(req.user.jti, req.user.exp);
+      } catch (e) {
+        // blacklistToken records the jti in-memory BEFORE its DB write, so
+        // same-process revocation already took effect; the persisted row is
+        // best-effort (cross-process/restart). A DB blip must not fail the
+        // logout or skip tearing down the user's live WS/SSE sessions.
+        console.error("[auth] logout persistence error (in-memory revocation applied):", e);
+      }
+      try { require("../services/ws").forceLogoutJti(req.user.jti); } catch (_) {}
+      try { sseCloseJti(req.user.jti); } catch (_) {}
+    }
+    res.json({ ok: true });
+  } catch (e) {
+    console.error("[auth] logout revocation error:", e);
+    res.status(500).json({ error: "Не удалось отозвать сессию" });
   }
-  res.json({ ok: true });
 });
 
 // GET /api/auth/me — кто я
@@ -299,18 +337,24 @@ router.post("/auth/change-password", requireAuth(), async (req, res) => {
       }
     }
 
-    await client.query("COMMIT");
-    if (req.user?.jti) blacklistToken(req.user.jti);
-    try { require("../services/ws").forceLogoutUser(req.user.id, "password_changed"); } catch (_) {}
     const nextUser = {
       id: user.id,
       username: user.username,
       role: user.role,
       all_clients_access: !!user.all_clients_access,
+      display_name: user.display_name || "",
     };
-    const nextToken = signToken({ id: nextUser.id, username: nextUser.username, role: nextUser.role, token_version: Number(user.token_version || 0) + 1 });
     const permissions = await getPermissionsForRole(nextUser.role);
     nextUser.is_client = permissions?.isClient === true;
+    const nextToken = signToken({ id: nextUser.id, username: nextUser.username, role: nextUser.role, token_version: Number(user.token_version || 0) + 1 });
+    await client.query("COMMIT");
+    if (req.user?.jti) {
+      blacklistToken(req.user.jti, req.user.exp).catch((e) => {
+        console.error("[auth] password-change token persistence error:", e);
+      });
+    }
+    try { require("../services/ws").forceLogoutUser(req.user.id, "password_changed"); } catch (_) {}
+    try { sseCloseUser(req.user.id); } catch (_) {}
     res.json({ ok: true, messengerReset, token: nextToken, user: nextUser, permissions });
   } catch (e) {
     try { await client.query("ROLLBACK"); } catch (_) {}
@@ -444,6 +488,7 @@ router.patch("/admin/users/:id", requireAuth("admin"), async (req, res) => {
         [role, id, newRoleIsClient]
       );
       shouldSyncChatAccess = true;
+      forceLogoutReason = "role_changed";
     }
     if (active != null) {
       if (active) {
@@ -479,13 +524,21 @@ router.patch("/admin/users/:id", requireAuth("admin"), async (req, res) => {
 
     await client.query("COMMIT");
     committed = true;
-    await notifyUserChatAccessChanges(pool, id, syncResult);
+    if (forceLogoutReason) {
+      try { require("../services/ws").forceLogoutUser(id, forceLogoutReason); } catch (_) {}
+      // Tear down the user's open SSE stream too: a role downgrade or deactivation
+      // must stop live client-update events immediately, not after the token TTL.
+      // The client's EventSource auto-reconnects and re-authorizes under the new role.
+      try { sseCloseUser(id); } catch (_) {}
+    }
     if (shouldSyncChatAccess) {
       // Live revocation: open tabs of this user re-read their permissions.
       try { sseBroadcast("permissions-updated", { userId: id }); } catch (_) {}
     }
-    if (forceLogoutReason) {
-      try { require("../services/ws").forceLogoutUser(id, forceLogoutReason); } catch (_) {}
+    try {
+      await notifyUserChatAccessChanges(pool, id, syncResult);
+    } catch (e) {
+      console.error("[auth] post-commit access notification error:", e);
     }
     res.json({ ok: true });
   } catch (e) {
@@ -520,9 +573,14 @@ router.delete("/admin/users/:id", requireAuth("admin"), async (req, res) => {
     await client.query("UPDATE users SET active = false, token_version = token_version + 1 WHERE id = $1", [id]);
     const syncResult = await syncUserChatAccessByClientPermissions(client, id);
     await client.query("COMMIT");
-    await notifyUserChatAccessChanges(pool, id, syncResult);
-    try { sseBroadcast("permissions-updated", { userId: id }); } catch (_) {}
     try { require("../services/ws").forceLogoutUser(id, "user_inactive"); } catch (_) {}
+    try { sseCloseUser(id); } catch (_) {}
+    try { sseBroadcast("permissions-updated", { userId: id }); } catch (_) {}
+    try {
+      await notifyUserChatAccessChanges(pool, id, syncResult);
+    } catch (e) {
+      console.error("[auth] post-commit delete notification error:", e);
+    }
     res.json({ ok: true });
   } catch (e) {
     try { await client.query("ROLLBACK"); } catch (_) {}

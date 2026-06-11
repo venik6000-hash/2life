@@ -1,5 +1,6 @@
 import InjectionPhaseModal from "../components/InjectionPhaseModal";
 import InjectionsScheduleCard from "../components/InjectionsScheduleCard";
+import { buildInjectionIcs, generateInjectionEvents } from "../utils/injectionSchedule";
 
 const normalizeSchedule = (value) => {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -50,33 +51,7 @@ export default function InjectionsSection({
     });
   };
 
-  const genEvents = () => {
-    if (!sch.phases?.length) return [];
-    const evs = [];
-    for (const ph of sch.phases) {
-      const phStart = parseD(ph.startDate);
-      if (!phStart) continue;
-      for (let day = 0; day < (ph.durationDays || 1); day += 1) {
-        const d = new Date(phStart.getFullYear(), phStart.getMonth(), phStart.getDate() + day);
-        let ok = false;
-        if (ph.type === "daily") ok = true;
-        else if (ph.type === "weekdays") ok = (ph.daysOfWeek || []).includes(d.getDay());
-        else if (ph.type === "interval") ok = (day % (ph.intervalDays || 1) === 0);
-        if (ok) {
-          evs.push({
-            dateIso: fmtIso(d),
-            drug: ph.drug || "?",
-            dosage: ph.dosage || "",
-            instruction: ph.instruction || "",
-            times: ph.times || ["09:00"],
-          });
-        }
-      }
-    }
-    return evs;
-  };
-
-  const events = genEvents();
+  const events = generateInjectionEvents(sch);
   const evByDate = events.reduce((acc, ev) => {
     (acc[ev.dateIso] = acc[ev.dateIso] || []).push(ev);
     return acc;
@@ -84,22 +59,7 @@ export default function InjectionsSection({
 
   const exportIcs = () => {
     if (!events.length) return;
-    const pad = (n) => String(n).padStart(2, "0");
-    const toDt = (iso, t) => {
-      const [y, mo, d] = iso.split("-");
-      const [h, mi] = (t || "09:00").split(":");
-      return `${y}${mo}${d}T${pad(h)}${pad(mi)}00`;
-    };
-    const esc = (s) => String(s || "").replace(/\n/g, "\\n").replace(/,/g, "\\,").replace(/;/g, "\\;");
-    let ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//2life//Injections//RU\r\nCALSCALE:GREGORIAN\r\nMETHOD:PUBLISH\r\n";
-    let uid = 0;
-    for (const ev of events) {
-      for (const t of ev.times) {
-        const dt = toDt(ev.dateIso, t);
-        ics += `BEGIN:VEVENT\r\nUID:inj-${++uid}@2life\r\nDTSTAMP:${toDt(fmtIso(new Date()), "00:00")}\r\nDTSTART:${dt}\r\nDTEND:${dt}\r\nSUMMARY:Инъекция: ${esc(ev.drug)}${ev.dosage ? ` ${esc(ev.dosage)}` : ""}\r\n${ev.instruction ? `DESCRIPTION:${esc(ev.instruction)}\r\n` : ""}END:VEVENT\r\n`;
-      }
-    }
-    ics += "END:VCALENDAR";
+    const ics = buildInjectionIcs(events);
     const blob = new Blob([ics], { type: "text/calendar;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");

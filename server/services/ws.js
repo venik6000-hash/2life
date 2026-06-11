@@ -91,11 +91,8 @@ const sendChatPayloadTo = async (userId, payload) => {
   if (!set) return;
   const data = JSON.stringify(payload);
   for (const ws of set) {
-    if (ws.user?.jti && isBlacklisted(ws.user.jti)) {
-      try { ws.close(4401, "token_revoked"); } catch (_) {}
-      continue;
-    }
-    if (!(await canRoleReadMessenger(ws.user?.role))) continue;
+    const currentUser = await refreshWsUser(ws);
+    if (!currentUser || !(await canRoleReadMessenger(currentUser.role))) continue;
     if (ws.readyState === 1 /* OPEN */) ws.send(data);
   }
 };
@@ -163,15 +160,21 @@ const messagePayload = (row, user, { text = "", meta = {} } = {}) => ({
   edited_at: row.edited_at || null,
 });
 
-const loadCurrentWsUser = async (userId) => {
+const loadCurrentWsUser = async (userId, jti = null) => {
   const id = safeId(userId);
   if (!id) return null;
   const r = await pool.query(
-    `SELECT id, username, role, all_clients_access, display_name, token_version
-       FROM users
-      WHERE id = $1 AND active = true
+    `SELECT u.id, u.username, u.role, u.all_clients_access, u.display_name, u.token_version,
+            EXISTS (
+              SELECT 1
+                FROM revoked_auth_tokens rat
+               WHERE rat.jti = $2
+                 AND rat.expires_at > NOW()
+            ) AS token_revoked
+       FROM users u
+      WHERE u.id = $1 AND u.active = true
       LIMIT 1`,
-    [id]
+    [id, jti]
   );
   const row = r.rows[0] || null;
   if (!row) return null;
@@ -182,6 +185,7 @@ const loadCurrentWsUser = async (userId) => {
     all_clients_access: !!row.all_clients_access,
     display_name: row.display_name || "",
     token_version: Number(row.token_version || 0),
+    token_revoked: !!row.token_revoked,
   };
 };
 
@@ -196,13 +200,13 @@ const mergeWsUser = (tokenUser, currentUser) => ({
 });
 
 const refreshWsUser = async (ws) => {
-  if (ws.user?.jti && isBlacklisted(ws.user?.jti)) {
-    try { ws.close(4401, "token_revoked"); } catch (_) {}
-    return null;
-  }
-  const currentUser = await loadCurrentWsUser(ws.user?.id);
+  const currentUser = await loadCurrentWsUser(ws.user?.id, ws.user?.jti);
   if (!currentUser) {
     try { ws.close(4401, "user_inactive"); } catch (_) {}
+    return null;
+  }
+  if (currentUser.token_revoked) {
+    try { ws.close(4401, "token_revoked"); } catch (_) {}
     return null;
   }
   if (Number(ws.user?.token_version || 0) !== Number(currentUser.token_version || 0)) {
@@ -211,6 +215,33 @@ const refreshWsUser = async (ws) => {
   }
   ws.user = mergeWsUser(ws.user || {}, currentUser);
   return ws.user;
+};
+
+// Backstop for idle sockets: refreshWsUser is otherwise only driven by inbound
+// frames / outbound chat payloads, so a socket that neither sends nor receives
+// keeps its context until the token would naturally expire. This periodic sweep
+// gives WS the same time-bounded revocation guarantee the SSE sweep provides —
+// refreshWsUser closes (4401) any session that is now revoked, version-stale, or
+// inactive, and harmlessly refreshes the rest.
+const sweepRevokedConnections = async () => {
+  for (const set of connections.values()) {
+    for (const ws of Array.from(set)) {
+      try { await refreshWsUser(ws); }
+      catch (_) { /* transient DB error — fail open, retry next sweep */ }
+    }
+  }
+};
+
+let sweepTimer = null;
+const startRevocationSweep = (intervalMs = 30_000) => {
+  if (sweepTimer) return sweepTimer;
+  sweepTimer = setInterval(() => { sweepRevokedConnections().catch(() => {}); }, intervalMs);
+  if (typeof sweepTimer.unref === "function") sweepTimer.unref();
+  return sweepTimer;
+};
+
+const stopRevocationSweep = () => {
+  if (sweepTimer) { clearInterval(sweepTimer); sweepTimer = null; }
 };
 
 // Authenticate an upgrade request: Bearer token or ?ticket= (one-time WS ticket)
@@ -227,8 +258,8 @@ const authenticateUpgrade = async (req) => {
       const { consumeWsTicket } = require("./wsTickets");
       const ticketUser = consumeWsTicket(ticket); // returns user object or null
       if (!ticketUser) return null;
-      if (ticketUser.jti && isBlacklisted(ticketUser.jti)) return null;
-      const currentUser = await loadCurrentWsUser(ticketUser.id);
+      const currentUser = await loadCurrentWsUser(ticketUser.id, ticketUser.jti);
+      if (currentUser?.token_revoked) return null;
       if (currentUser && Number(ticketUser.token_version || 0) !== Number(currentUser.token_version || 0)) return null;
       return currentUser ? mergeWsUser(ticketUser, currentUser) : null;
     }
@@ -237,8 +268,8 @@ const authenticateUpgrade = async (req) => {
 
   try {
     const payload = jwt.verify(token, JWT_SECRET);
-    if (payload.jti && isBlacklisted(payload.jti)) return null;
-    const currentUser = await loadCurrentWsUser(payload.id);
+    const currentUser = await loadCurrentWsUser(payload.id, payload.jti);
+    if (currentUser?.token_revoked) return null;
     if (currentUser && Number(payload.token_version || 0) !== Number(currentUser.token_version || 0)) return null;
     return currentUser ? mergeWsUser(payload, currentUser) : null;
   } catch {
@@ -502,4 +533,4 @@ const initWebSocket = (httpServer) => {
   return wss;
 };
 
-module.exports = { initWebSocket, sendTo, sendChatPayloadTo, broadcastToChat, forceLogoutDevice, forceLogoutJti, forceLogoutUser, connections };
+module.exports = { initWebSocket, sendTo, sendChatPayloadTo, broadcastToChat, forceLogoutDevice, forceLogoutJti, forceLogoutUser, connections, sweepRevokedConnections, startRevocationSweep, stopRevocationSweep };

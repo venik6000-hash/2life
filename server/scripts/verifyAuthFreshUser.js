@@ -1,7 +1,7 @@
 const assert = require("assert");
 const path = require("path");
 
-process.env.JWT_SECRET = process.env.JWT_SECRET || "verify-auth-fresh-user-secret";
+process.env.JWT_SECRET = process.env.JWT_SECRET || "verify-auth-fresh-user-secret-at-least-32-chars";
 
 const dbPath = path.resolve(__dirname, "../services/db.js");
 let currentDbUser = null;
