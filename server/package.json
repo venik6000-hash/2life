@@ -16,7 +16,8 @@
     "verify:journal-backfill": "node scripts/verifyJournalBackfill.js",
     "verify:migrations": "node scripts/verifyMigrations.js",
     "verify:permissions": "node scripts/verifyPermissions.js",
-    "start": "node index.js"
+    "start": "node index.js",
+    "verify:journal-reminder-perms": "node scripts/verifyJournalReminderPerms.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

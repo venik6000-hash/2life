@@ -192,11 +192,14 @@ async function recordJournalNotificationDelivery({ userId, journalItemId = null,
 }
 
 async function listUsersForJournalDigest(today) {
+  // LEFT JOIN roles/role_sections (not INNER): an admin without a journal
+  // role_sections row must still pass via the u.role='admin' branch.
+  // Client (is_client) roles are excluded outright — journal is staff-only.
   const res = await pool.query(
     `SELECT u.id, u.role, COALESCE(u.display_name, u.username) AS name, COUNT(ji.id)::int AS due_count
      FROM users u
-     JOIN role_sections rs ON rs.section_id='journal'
-     JOIN roles r ON r.name = u.role AND r.id = rs.role_id
+     LEFT JOIN roles r ON r.name = u.role
+     LEFT JOIN role_sections rs ON rs.role_id = r.id AND rs.section_id = 'journal'
      JOIN journal_items ji ON ji.deleted_at IS NULL
        AND ji.type IN ('task','event')
        AND ji.status IN ('open','in_progress','waiting_client')
@@ -205,6 +208,7 @@ async function listUsersForJournalDigest(today) {
        AND (ji.is_team_task = true OR ji.assignee_user_id = u.id)
      LEFT JOIN client_assignments ca ON ca.client_id = ji.client_id AND ca.user_id = u.id
      WHERE u.active = true
+       AND COALESCE(r.is_client, false) = false
        AND (u.role = 'admin' OR rs.can_read = true OR rs.can_write = true)
        AND (u.role = 'admin' OR u.all_clients_access = true OR ca.user_id IS NOT NULL)
      GROUP BY u.id, u.role, u.display_name, u.username`,
@@ -214,10 +218,15 @@ async function listUsersForJournalDigest(today) {
 }
 
 async function listDueJournalReminders(nowIso) {
+  // Same permission gate as the digest: journal.read/write (admin bypass),
+  // never client (is_client) roles. Assignment alone is NOT enough — a user
+  // whose journal section is disabled must not receive exact-time pushes.
   const res = await pool.query(
     `SELECT ji.*, u.id AS user_id
      FROM journal_items ji
      JOIN users u ON u.active = true
+     LEFT JOIN roles r ON r.name = u.role
+     LEFT JOIN role_sections rs ON rs.role_id = r.id AND rs.section_id = 'journal'
      LEFT JOIN client_assignments ca ON ca.client_id = ji.client_id AND ca.user_id = u.id
      WHERE ji.deleted_at IS NULL
        AND ji.type IN ('task','event')
@@ -227,6 +236,8 @@ async function listDueJournalReminders(nowIso) {
        AND ji.due_time IS NOT NULL
        AND ((ji.due_date::text || 'T' || ji.due_time::text)::timestamp <= $1::timestamp)
        AND (ji.is_team_task = true OR ji.assignee_user_id = u.id)
+       AND COALESCE(r.is_client, false) = false
+       AND (u.role = 'admin' OR rs.can_read = true OR rs.can_write = true)
        AND (u.role = 'admin' OR u.all_clients_access = true OR ca.user_id IS NOT NULL)`,
     [nowIso]
   );
