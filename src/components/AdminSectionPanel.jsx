@@ -486,6 +486,9 @@ export default function AdminSection() {
     const r = await authFetch(`/api/admin/roles/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ isClient: val }) });
     const d = await readResponseSafe(r);
     if (!r.ok) { alert(d.error || "Ошибка сохранения роли"); return; }
+    // The server stripped restricted grants — drop pending edits so a stale
+    // (now hidden) checkbox is not resubmitted with the next save.
+    setPendingRoleChanges(prev => { const n = { ...prev }; delete n[id]; return n; });
     fetchRoles();
   };
 
@@ -868,6 +871,7 @@ export default function AdminSection() {
                     const isExpanded = expandedUserId === u.id;
                     const assignedClients = sortClientsByName(userClientsMap[u.id] || []);
                     const isAdmin = u.role === "admin";
+                    const isClientUser = !!u.is_client;
                     const hasAllClientsAccess = !!u.all_clients_access;
                     const hasGlobalClientAccess = isAdmin || hasAllClientsAccess;
                     const unassigned = sortClientsByName(
@@ -924,7 +928,7 @@ export default function AdminSection() {
                           </td>
                           <td style={{ padding: "8px 10px" }}>
                             <Wrapper dir="row" gap={6} wrap>
-                              {!isAdmin && (
+                              {!isAdmin && !isClientUser && (
                                 <Button
                                   onClick={() => handleToggleUserAllClientsAccess(u)}
                                   variant="pill"
@@ -934,6 +938,11 @@ export default function AdminSection() {
                                 >
                                   {hasAllClientsAccess ? "Все клиенты" : "Ограниченный"}
                                 </Button>
+                              )}
+                              {!isAdmin && isClientUser && (
+                                <span style={{ fontSize: 11, color: $.txM, fontStyle: "italic", alignSelf: "center" }} title="Клиентская роль: доступ только к назначенным клиентам">
+                                  Только свои
+                                </span>
                               )}
                               <Button
                                 onClick={() => handleChangeUserPassword(u)}
@@ -1102,7 +1111,7 @@ export default function AdminSection() {
                           </tr>
                         </thead>
                         <tbody>
-                          {ALL_SECTIONS.map(sec => (
+                          {ALL_SECTIONS.filter(sec => !(role.isClient && sec === "journal")).map(sec => (
                             <tr key={sec} style={{ borderBottom: `1px solid ${$.brd}` }}>
                               <td style={{ padding: "5px 10px" }}>{SECTION_LABELS[sec]}</td>
                               <td style={{ padding: "5px 10px", textAlign: "center" }}>
@@ -1117,15 +1126,23 @@ export default function AdminSection() {
                       </table>
                     </Wrapper>
 
-                    <div style={{ fontSize: 12, fontWeight: 600, color: $.txM, textTransform: "uppercase", letterSpacing: .5, marginBottom: 8 }}>Права</div>
-                    <Wrapper dir="row" gap={16} wrap>
-                      {ALL_PERMISSIONS.map(perm => (
-                        <label key={perm} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, cursor: "pointer" }}>
-                          <input type="checkbox" checked={getRolePermVal(role, perm)} onChange={e => setRolePermission(role.id, perm, e.target.checked)} />
-                          {PERM_LABELS[perm]}
-                        </label>
-                      ))}
-                    </Wrapper>
+                    {role.isClient ? (
+                      <div style={{ fontSize: 12, color: $.txM, fontStyle: "italic" }}>
+                        Клиентская роль: журнал и административные права недоступны
+                      </div>
+                    ) : (
+                      <>
+                        <div style={{ fontSize: 12, fontWeight: 600, color: $.txM, textTransform: "uppercase", letterSpacing: .5, marginBottom: 8 }}>Права</div>
+                        <Wrapper dir="row" gap={16} wrap>
+                          {ALL_PERMISSIONS.map(perm => (
+                            <label key={perm} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, cursor: "pointer" }}>
+                              <input type="checkbox" checked={getRolePermVal(role, perm)} onChange={e => setRolePermission(role.id, perm, e.target.checked)} />
+                              {PERM_LABELS[perm]}
+                            </label>
+                          ))}
+                        </Wrapper>
+                      </>
+                    )}
                   </>
                 )}
               </Card>
