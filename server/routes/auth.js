@@ -129,6 +129,17 @@ const loginIpLimiter = rateLimit({
   keyGenerator: (req) => ipKeyGenerator(req.ip),
 });
 
+// Per-user cap on password-change attempts: a stolen 8h token must not be able
+// to brute-force the current password against bcrypt.compare without bound.
+const changePasswordLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Слишком много попыток смены пароля. Попробуйте через минуту." },
+  keyGenerator: (req) => (req.user?.id ? `user:${req.user.id}` : ipKeyGenerator(req.ip)),
+});
+
 // POST /api/auth/login
 router.post("/auth/login", loginIpLimiter, loginLimiter, async (req, res) => {
   try {
@@ -241,7 +252,7 @@ router.post("/auth/ws-ticket", requireAuth(), (req, res) => {
 });
 
 // POST /api/auth/change-password — смена своего пароля
-router.post("/auth/change-password", requireAuth(), async (req, res) => {
+router.post("/auth/change-password", requireAuth(), changePasswordLimiter, async (req, res) => {
   const client = await pool.connect();
   try {
     const { currentPassword, newPassword, messengerKeys, forceResetMessenger } = req.body || {};

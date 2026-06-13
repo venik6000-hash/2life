@@ -17,6 +17,22 @@ const PG_DUMP_BIN = process.env.PG_DUMP_BIN || "pg_dump";
 const TAR_BIN = process.env.TAR_BIN || "tar";
 const DATABASE_URL = process.env.DATABASE_URL || "postgresql://postgres:postgres@localhost:5432/2life";
 
+// Build a pg env from DATABASE_URL so the password is passed via PGPASSWORD
+// instead of on the pg_dump argv (argv is world-readable via ps / /proc).
+const buildPgEnv = () => {
+  const env = { ...process.env };
+  try {
+    const u = new URL(DATABASE_URL);
+    if (u.hostname) env.PGHOST = decodeURIComponent(u.hostname);
+    if (u.port) env.PGPORT = u.port;
+    if (u.username) env.PGUSER = decodeURIComponent(u.username);
+    if (u.password) env.PGPASSWORD = decodeURIComponent(u.password);
+    const db = u.pathname.replace(/^\//, "");
+    if (db) env.PGDATABASE = decodeURIComponent(db);
+  } catch (_) { /* leave any pre-existing PG* env in place */ }
+  return env;
+};
+
 const backupStamp = () => {
   const d = new Date();
   const y = d.getFullYear();
@@ -45,7 +61,7 @@ const createPgDump = (reason = "auto") => new Promise((resolve) => {
   ensureDir(PGDUMP_DIR);
   const stamp = backupStamp();
   const outFile = path.join(PGDUMP_DIR, `2life-${stamp}-${reason}.sql`);
-  execFile(PG_DUMP_BIN, ["--no-password", "--clean", "--if-exists", DATABASE_URL], (err, stdout) => {
+  execFile(PG_DUMP_BIN, ["--no-password", "--clean", "--if-exists"], { env: buildPgEnv(), maxBuffer: 512 * 1024 * 1024 }, (err, stdout) => {
     if (err) {
       console.error("pg_dump error:", err.message);
       return resolve(false);
