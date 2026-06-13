@@ -6,7 +6,7 @@ const { buildActionLogs, appendActivityLog } = require("../services/logger");
 const { createBackupSnapshot } = require("../services/backup");
 const { requireAuth, requirePermission, requireSectionWrite, requireAnySectionRead, requireAnySectionWrite } = require("../middleware/auth");
 const { getPermissionsForRole } = require("../services/permissions");
-const { pool, withTransaction, upsertClientAssignment, deleteClientAssignment, getClientAssignment, getAssignmentsByClient, getAssignmentsByUser, getDoctorByName, hasAllClientsAccess, replaceDoctorClientAssignments } = require("../services/db");
+const { pool, withTransaction, upsertClientAssignment, deleteClientAssignment, getClientAssignment, getAssignmentsByClient, getAssignmentsByUser, hasAllClientsAccess, replaceDoctorClientAssignments } = require("../services/db");
 const { syncUserChatAccessByClientPermissions } = require("../services/chatAccessSync");
 const { notifyUserChatAccessChanges } = require("../services/messengerAccessNotifications");
 const { addConnection, removeConnection, broadcast } = require("../services/sse");
@@ -153,7 +153,7 @@ router.put("/clients/:clientId", requireAuth(), requireAnySectionWrite(), async 
       await upsertClientAssignment(req.user.id, client.id, req.user.id);
     }
     await appendActivityLog(actionEntries);
-    await autoAssignDoctors(client.id, req.user.id);
+    await autoAssignDoctors(client.id, req.user.id, client.stages);
     broadcast("client-updated", { clientId: req.params.clientId }, res);
     res.json({ ok: true });
   } catch (e) {
@@ -208,7 +208,7 @@ router.patch("/clients/:clientId", requireAuth(), requireAnySectionWrite(), asyn
 
     const actionEntries = buildActionLogs([result.prev], [result.next], req);
     await appendActivityLog(actionEntries);
-    await autoAssignDoctors(req.params.clientId, req.user.id);
+    await autoAssignDoctors(req.params.clientId, req.user.id, result.next?.stages);
     broadcast("client-updated", { clientId: req.params.clientId }, res);
     res.json({ ok: true, applied: ops.length, loggedActions: actionEntries.length });
   } catch (e) {
@@ -343,16 +343,24 @@ router.get("/admin/users/:userId/clients", requireAuth("admin"), async (req, res
 
 // После сохранения клиента автоматически назначает доступ врачам,
 // у которых в таблице doctors указан linked user_id.
-const autoAssignDoctors = async (clientId, assignedByUserId) => {
-  const client = await getOneClient(clientId);
-  if (!client) return;
-  const doctorNames = [...new Set((client.stages || []).map(s => s.doctor).filter(Boolean))];
-  const nextDoctorUserIds = [];
-  for (const name of doctorNames) {
-    const doctor = await getDoctorByName(name);
-    if (doctor?.user_id) {
-      nextDoctorUserIds.push(Number(doctor.user_id));
-    }
+const autoAssignDoctors = async (clientId, assignedByUserId, stages = null) => {
+  // Prefer the already-loaded stages from the caller; only reload from the DB
+  // (a full buildClientsBatch) when they aren't available.
+  let stageList = stages;
+  if (!stageList) {
+    const client = await getOneClient(clientId);
+    if (!client) return;
+    stageList = client.stages || [];
+  }
+  const doctorNames = [...new Set((stageList || []).map(s => s.doctor).filter(Boolean))];
+  let nextDoctorUserIds = [];
+  if (doctorNames.length > 0) {
+    // Single batched lookup instead of one getDoctorByName query per name.
+    const r = await pool.query(
+      "SELECT user_id FROM doctors WHERE LOWER(name) = ANY($1::text[]) AND user_id IS NOT NULL",
+      [doctorNames.map((name) => String(name).toLowerCase())]
+    );
+    nextDoctorUserIds = [...new Set(r.rows.map((row) => Number(row.user_id)))];
   }
   // Doctor-assignment replacement + chat-access sync for every touched user
   // commit atomically: a failure rolls back both, so an old doctor can't keep
@@ -373,7 +381,7 @@ const autoAssignDoctors = async (clientId, assignedByUserId) => {
 
 const syncBulkDoctorAssignments = async (clients, assignedByUserId) => {
   for (const client of clients) {
-    if (client?.id) await autoAssignDoctors(client.id, assignedByUserId);
+    if (client?.id) await autoAssignDoctors(client.id, assignedByUserId, client.stages);
   }
 };
 
