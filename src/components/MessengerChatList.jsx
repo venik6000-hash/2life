@@ -5,6 +5,18 @@ import { isImageLike, parseBundleFiles } from "../utils/messengerUiUtils";
 import { getUnreadCount } from "../utils/messengerUnread";
 import { formatChatListTime } from "../utils/chatTimeFormat";
 
+function fmtDuration(sec) {
+  const s = Math.max(0, Math.round(sec || 0));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+
+function safeParseVoiceMeta(text) {
+  try {
+    const v = JSON.parse(text || "{}");
+    return typeof v === "object" && v ? v : null;
+  } catch { return null; }
+}
+
 export default function MessengerChatList({
   chats,
   activeChatId,
@@ -76,18 +88,6 @@ export default function MessengerChatList({
     if (!text) return "Нет сообщений";
     return text.length > 60 ? `${text.slice(0, 60)}…` : text;
   };
-
-  function fmtDuration(sec) {
-    const s = Math.max(0, Math.round(sec || 0));
-    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
-  }
-
-  function safeParseVoiceMeta(text) {
-    try {
-      const v = JSON.parse(text || "{}");
-      return typeof v === "object" && v ? v : null;
-    } catch { return null; }
-  }
 
   const getActivityTimestamp = useCallback((chat) => {
     const chatMessages = messages[chat.id] || [];

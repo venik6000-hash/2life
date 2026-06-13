@@ -11,13 +11,14 @@ async function filterMessengerReadUserIds(userIds) {
   ));
   if (!ids.length) return [];
   const r = await pool.query("SELECT id, role FROM users WHERE id = ANY($1) AND active = true", [ids]);
-  const out = [];
-  for (const row of r.rows) {
-    if (row.role === "admin") { out.push(row.id); continue; }
-    const perms = await getPermissionsForRoleCached(row.role);
-    if (perms?.sections?.messenger?.read) out.push(row.id);
-  }
-  return out;
+  const results = await Promise.all(
+    r.rows.map(async (row) => {
+      if (row.role === "admin") return row.id;
+      const perms = await getPermissionsForRoleCached(row.role);
+      return perms?.sections?.messenger?.read ? row.id : null;
+    })
+  );
+  return results.filter((id) => id !== null);
 }
 
 const PUSH_STATUS = (() => {

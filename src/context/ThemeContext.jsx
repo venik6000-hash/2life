@@ -4,11 +4,7 @@ import { TH } from "../styles/theme";
 const ThemeContext = createContext(null);
 
 export function ThemeProvider({ children }) {
-  const [dk, setDk] = useState(() =>
-    localStorage.getItem("dash_theme")
-      ? localStorage.getItem("dash_theme") === "dark"
-      : false
-  );
+  const [dk, setDk] = useState(() => localStorage.getItem("dash_theme") === "dark");
 
   useEffect(() => {
     localStorage.setItem("dash_theme", dk ? "dark" : "light");

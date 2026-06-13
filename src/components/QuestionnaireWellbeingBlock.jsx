@@ -4,6 +4,7 @@ import Ed from "./Ed";
 import QWellbeingCard from "./QWellbeingCard";
 import ScoreBar from "./ScoreBar";
 import Wrapper from "./Wrapper";
+import { parseScore } from "../utils/questionnaireUtils";
 
 const WELLBEING_SPEC = [
   { key: "energy", title: "1. Уровень энергии", icon: "⚡", items: [["peak", "1.1. Пик энергии у вас"], ["frequency", "1.2. Как часто"], ["duration", "1.3. Как давно длится"]] },
@@ -39,8 +40,7 @@ export default function QuestionnaireWellbeingBlock({
 
         <Wrapper columns="repeat(auto-fit, minmax(170px, 1fr))" gap="md">
           {WELLBEING_SUMMARY.map(([key, label]) => {
-            const rawValue = wellbeing?.[key]?.score;
-            const score = rawValue == null || rawValue === "" || Number.isNaN(+rawValue) ? null : +rawValue;
+            const score = parseScore(wellbeing?.[key]?.score);
             return (
               <Wrapper key={key} gap="xs">
                 <div style={{ fontSize: 12, color: $.txS }}>{label}</div>

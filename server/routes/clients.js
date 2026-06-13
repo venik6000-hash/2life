@@ -4,9 +4,9 @@ const router  = express.Router();
 const { getClients, getOneClient, getClientsForUser, saveClients, saveOneClient, patchClientLocked, deleteOneClient, saveAnalyticsForClient } = require("../services/clientStore");
 const { buildActionLogs, appendActivityLog } = require("../services/logger");
 const { createBackupSnapshot } = require("../services/backup");
-const { requireAuth, requirePermission, requireSectionWrite, requireAnySectionRead, requireAnySectionWrite } = require("../middleware/auth");
+const { requireAuth, requirePermission, requireSectionWrite, requireAnySectionRead, requireAnySectionWrite, hasSectionWrite } = require("../middleware/auth");
 const { getPermissionsForRole } = require("../services/permissions");
-const { pool, withTransaction, upsertClientAssignment, deleteClientAssignment, getClientAssignment, getAssignmentsByClient, getAssignmentsByUser, hasAllClientsAccess, replaceDoctorClientAssignments } = require("../services/db");
+const { pool, withTransaction, upsertClientAssignment, deleteClientAssignment, getClientAssignment, getAssignmentsByClient, hasAllClientsAccess, replaceDoctorClientAssignments } = require("../services/db");
 const { syncUserChatAccessByClientPermissions } = require("../services/chatAccessSync");
 const { notifyUserChatAccessChanges } = require("../services/messengerAccessNotifications");
 const { addConnection, removeConnection, broadcast } = require("../services/sse");
@@ -132,13 +132,13 @@ router.put("/clients/:clientId", requireAuth(), requireAnySectionWrite(), async 
       }
       // Require write on every section the new client actually populates, not just overview.
       const requiredSections = Array.from(sectionsForClient(client));
-      const deniedSections = requiredSections.filter((sectionId) => !hasSectionWritePermission(permissions, sectionId));
+      const deniedSections = requiredSections.filter((sectionId) => !hasSectionWrite(permissions, sectionId));
       if (deniedSections.length) {
         return res.status(403).json({ error: "Недостаточно прав на создание клиента", code: "PUT_FORBIDDEN_SECTIONS", deniedSections });
       }
     } else {
       const touchedSections = collectTouchedSectionsForPut(prev, client);
-      const deniedSections = touchedSections.filter((sectionId) => !hasSectionWritePermission(permissions, sectionId));
+      const deniedSections = touchedSections.filter((sectionId) => !hasSectionWrite(permissions, sectionId));
       if (deniedSections.length) {
         return res.status(403).json({
           error: "Недостаточно прав для изменения некоторых разделов",
@@ -440,12 +440,6 @@ const hasRoleActionPermission = (permissions, permissionId) => {
   return false;
 };
 
-const hasSectionWritePermission = (permissions, sectionId) => {
-  if (!permissions) return false;
-  if (permissions.isAdmin) return true;
-  return !!permissions.sections?.[sectionId]?.write;
-};
-
 const pathToString = (path = []) => path.reduce((acc, seg) => {
   if (typeof seg === "number") return `${acc}[${seg}]`;
   const key = String(seg);
@@ -479,7 +473,7 @@ const collectPatchPermissionViolations = (ops, permissions) => {
     // where "overview"-only write could rewrite closed sections via a stage object.
     if (root === "stages" && Array.isArray(op.path) && op.path.length <= 2) {
       for (const sectionId of PROTECTED_SECTIONS) {
-        if (!hasSectionWritePermission(permissions, sectionId)) {
+        if (!hasSectionWrite(permissions, sectionId)) {
           deniedPaths.push({ path: strPath, section: sectionId });
         }
       }
@@ -491,7 +485,7 @@ const collectPatchPermissionViolations = (ops, permissions) => {
       unknownPaths.push(strPath);
       continue;
     }
-    if (!hasSectionWritePermission(permissions, sectionId)) {
+    if (!hasSectionWrite(permissions, sectionId)) {
       deniedPaths.push({ path: strPath, section: sectionId });
     }
   }

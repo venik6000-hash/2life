@@ -1,7 +1,6 @@
 const express = require("express");
 const router = express.Router();
 const { requireAuth, requireSectionRead, requireSectionWrite } = require("../middleware/auth");
-const { pool } = require("../services/db");
 const {
   listJournalItems,
   createJournalItem,

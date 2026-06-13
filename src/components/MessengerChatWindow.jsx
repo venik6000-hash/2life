@@ -591,12 +591,13 @@ export default function MessengerChatWindow({
       {contextMenu && (() => {
         const msg = contextMenu.msg || {};
         const isOwn = Number(msg.sender_id) === Number(user.id);
-        const readersForMsg = (chat.receipts || [])
+        const readersForMsg = chatReceipts
           .filter((rc) => rc.last_read_message_id >= msg.id && rc.user_id !== msg.sender_id)
           .map((rc) => {
             const p = (chat.participants || []).find((x) => x.user_id === rc.user_id);
             return { userId: rc.user_id, name: p?.username || `#${rc.user_id}`, avatar: p?.avatar_url || null };
           });
+        const myPins = pinnedForMe[chat?.id] || [];
         return (
         <MessengerContextMenu
           x={contextMenu.x}
@@ -628,9 +629,9 @@ export default function MessengerChatWindow({
             if (r && r.ok === false) setActionError(r.error || "Не удалось открепить");
           }}
           isPinnedForAll={!!contextMenu.msg?.pinned_at}
-          isPinnedForMe={(pinnedForMe[chat?.id] || []).some((m) => m.id === contextMenu.msg?.id)}
+          isPinnedForMe={myPins.some((m) => m.id === contextMenu.msg?.id)}
           canPinForAll={chatPins.length < 5}
-          canPinForMe={(pinnedForMe[chat?.id] || []).length < 5}
+          canPinForMe={myPins.length < 5}
           onCopy={() => { navigator.clipboard?.writeText(contextMenu.msg?.text || ""); setContextMenu(null); }}
           onEnterSelection={() => { enterSelectionMode(contextMenu.msg?.id); setContextMenu(null); }}
         />

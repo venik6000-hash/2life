@@ -154,7 +154,6 @@ async function listJournalItems(clientId) {
 
 async function countJournalBadgesForUser({ userId, role, today }) {
   const isAdmin = role === "admin";
-  const params = [today, userId];
   const accessWhere = isAdmin ? "true" : `(u.all_clients_access = true OR ca.user_id IS NOT NULL)`;
   const res = await pool.query(
     `SELECT ji.client_id, COUNT(*)::int AS n
@@ -169,7 +168,7 @@ async function countJournalBadgesForUser({ userId, role, today }) {
        AND ($3::boolean = true OR ${accessWhere})
        AND (ji.is_team_task = true OR ji.assignee_user_id = $2)
      GROUP BY ji.client_id`,
-    [...params, isAdmin]
+    [today, userId, isAdmin]
   );
   return Object.fromEntries(res.rows.map((row) => [row.client_id, row.n]));
 }

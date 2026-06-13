@@ -25,27 +25,11 @@ export default function FormField({
         </label>
       )}
       {children}
-      {hint && !error && (
-        <div
-          style={{
-            fontSize: 11,
-            color: $.txM,
-            lineHeight: 1.45,
-          }}
-        >
-          {hint}
-        </div>
+      {(hint && !error) && (
+        <div style={{ fontSize: 11, color: $.txM, lineHeight: 1.45 }}>{hint}</div>
       )}
       {error && (
-        <div
-          style={{
-            fontSize: 11,
-            color: $.dn,
-            lineHeight: 1.45,
-          }}
-        >
-          {error}
-        </div>
+        <div style={{ fontSize: 11, color: $.dn, lineHeight: 1.45 }}>{error}</div>
       )}
       {footer}
     </Wrapper>

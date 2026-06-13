@@ -59,6 +59,22 @@ const parseAnalyticsWorksheet = (ws) => {
 
   // Extract dates from columns 3+
   // Some columns are "Причина отклонения" — skip those
+  const months = {
+    "январ": "01",
+    "феврал": "02",
+    "март": "03",
+    "апрел": "04",
+    "май": "05",
+    "мая": "05",
+    "июн": "06",
+    "июл": "07",
+    "август": "08",
+    "сентябр": "09",
+    "октябр": "10",
+    "ноябр": "11",
+    "декабр": "12"
+  };
+
   const dateColumns = []; // [{colIdx, date}]
   for (let c = 3; c < datesRow.length; c++) {
     const cell = datesRow[c];
@@ -76,22 +92,6 @@ const parseAnalyticsWorksheet = (ws) => {
         dateStr = `${String(d.d).padStart(2, "0")}.${String(d.m).padStart(2, "0")}.${d.y}`;
       }
     }
-
-    const months = {
-      "январ": "01",
-      "феврал": "02",
-      "март": "03",
-      "апрел": "04",
-      "май": "05",
-      "мая": "05",
-      "июн": "06",
-      "июл": "07",
-      "август": "08",
-      "сентябр": "09",
-      "октябр": "10",
-      "ноябр": "11",
-      "декабр": "12"
-    };
 
     let normalized = null;
 

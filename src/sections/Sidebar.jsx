@@ -19,7 +19,8 @@ export default function Sidebar() {
 
   const city = cl ? (cl.stages?.[si]?.city ?? cl.city ?? "") : "";
   const sortedClients = useMemo(() => sortClientsByName(cls), [cls]);
-  const canRenameClients = user?.role === "admin";
+  const isAdmin = user?.role === "admin";
+  const canRenameClients = isAdmin;
 
   const handleRenameClient = (client) => {
     if (!canRenameClients) return;
@@ -98,7 +99,7 @@ export default function Sidebar() {
         <SidebarFooter
           expanded={so}
           username={user?.username}
-          isAdmin={user?.role === "admin"}
+          isAdmin={isAdmin}
           adminActive={sec === "admin"}
           loggingOut={loggingOut}
           onOpenAdmin={() => setSec("admin")}

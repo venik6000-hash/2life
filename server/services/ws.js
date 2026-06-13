@@ -76,10 +76,18 @@ const forceLogoutDevice = (userId, deviceId) => {
   }
 };
 
+const ALLOWED_MSG_TYPES = Object.freeze(new Set(["text", "image", "file", "files_bundle", "voice", "system"]));
+
 const canRoleReadMessenger = async (role) => {
   if (role === "admin") return true;
   const perms = await getPermissionsForRoleCached(role);
   return !!perms?.sections?.messenger?.read;
+};
+
+const canRoleWriteMessenger = async (role) => {
+  if (role === "admin") return true;
+  const perms = await getPermissionsForRoleCached(role);
+  return !!perms?.sections?.messenger?.write;
 };
 
 // Chat-content payloads only — control frames (force logout, pong, self-echo
@@ -294,14 +302,6 @@ const handleMessage = async (ws, raw) => {
     return;
   }
 
-  // WS mirrors the HTTP enforcement: sending/editing/deleting messages needs
-  // messenger WRITE permission (admin always passes).
-  const canWriteMessenger = async () => {
-    if (user.role === "admin") return true;
-    const perms = await getPermissionsForRoleCached(user.role);
-    return !!perms?.sections?.messenger?.write;
-  };
-
   // ── send_message ──────────────────────────────────────────────────────────
   if (type === "send_message") {
     const chatId = safeId(msg.chatId);
@@ -314,7 +314,6 @@ const handleMessage = async (ws, raw) => {
     if (!chatId) return;
     if (!text.trim() && msgType === "text") return;
 
-    const ALLOWED_MSG_TYPES = new Set(["text", "image", "file", "files_bundle", "voice", "system"]);
     if (!ALLOWED_MSG_TYPES.has(msgType)) return;
     if (msgType === "voice" && (typeof text !== "string" || text.length > 4096)) {
       try { ws.send(JSON.stringify({ type: "send_error", error: "voice payload too large", clientMessageId })); } catch {}
@@ -323,7 +322,7 @@ const handleMessage = async (ws, raw) => {
 
     const allowed = await isParticipant(chatId, user.id);
     if (!allowed) return;
-    if (!(await canWriteMessenger())) {
+    if (!(await canRoleWriteMessenger(user.role))) {
       try { ws.send(JSON.stringify({ type: "send_error", error: "Нет прав на отправку сообщений", clientMessageId })); } catch {}
       return;
     }
@@ -343,7 +342,7 @@ const handleMessage = async (ws, raw) => {
         encryptJson(mergedMeta),
         msgType,
         fileId,
-        String(clientMessageId || ""),
+        clientMessageId,
         replyParentId,
       );
       const payload = {
@@ -359,8 +358,10 @@ const handleMessage = async (ws, raw) => {
           eventType: "new_message",
           payload: { messageId: saved.id, lastMessage },
         });
-        await broadcastToChat(chatId, payload, null);
-        const [participants, chat] = await Promise.all([getChatParticipants(chatId), getChatById(chatId)]);
+        const [[participants, chat]] = await Promise.all([
+          Promise.all([getChatParticipants(chatId), getChatById(chatId)]),
+          broadcastToChat(chatId, payload, null),
+        ]);
         const targetUserIds = participants.map((p) => p.user_id).filter((id) => id !== user.id);
         sendPrivateMessagePush({
           userIds: targetUserIds,
@@ -388,7 +389,7 @@ const handleMessage = async (ws, raw) => {
 
     const allowed = await isParticipant(chatId, user.id);
     if (!allowed) return;
-    if (!(await canWriteMessenger())) return;
+    if (!(await canRoleWriteMessenger(user.role))) return;
 
     const original = await getMessageById(chatId, messageId);
     if (!original || original.deleted_for_all) return;
@@ -430,7 +431,7 @@ const handleMessage = async (ws, raw) => {
 
     const allowed = await isParticipant(chatId, user.id);
     if (!allowed) return;
-    if (!(await canWriteMessenger())) return;
+    if (!(await canRoleWriteMessenger(user.role))) return;
 
     const existing = await getMessageById(chatId, messageId);
     if (!existing) return;

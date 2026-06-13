@@ -5,6 +5,8 @@ import { useTheme } from "../context/ThemeContext";
 // tone: "default" | "accent" | "danger" | "warning" — sets text color
 // bold: boolean — sets fontWeight 700
 // align: "center" | "left" | "right"
+const TONE_KEY = { accent: "ac", danger: "dn", warning: "wr", info: "in" };
+
 export default function BlurInput({
   val,
   onSave,
@@ -13,11 +15,7 @@ export default function BlurInput({
   align = "center",
 }) {
   const { $ } = useTheme();
-  const color =
-    tone === "accent"  ? $.ac :
-    tone === "danger"  ? $.dn :
-    tone === "warning" ? $.wr :
-    tone === "info"    ? $.in : $.tx;
+  const color = $[TONE_KEY[tone]] ?? $.tx;
 
   return (
     <input

@@ -729,9 +729,10 @@ export function MessengerProvider({ children }) {
   const sendVoiceMessage = useCallback(async (chatId, { blob, mime, duration, waveformB64 }) => {
     if (!chatId || !blob) return false;
     // Wrap blob as a File so the existing uploader provides a name/type.
-    const fileName = `voice_${Date.now()}.${(mime || "audio/webm").includes("ogg") ? "ogg" : (mime || "audio/webm").includes("mp4") ? "m4a" : "webm"}`;
+    const safeMime = mime || "audio/webm";
+    const fileName = `voice_${Date.now()}.${safeMime.includes("ogg") ? "ogg" : safeMime.includes("mp4") ? "m4a" : "webm"}`;
     const file = (typeof File === "function")
-      ? new File([blob], fileName, { type: mime || "audio/webm" })
+      ? new File([blob], fileName, { type: safeMime })
       : Object.assign(blob, { name: fileName });
     const uploaded = await uploadFile(chatId, file);
     if (!uploaded?.id) return false;
@@ -742,7 +743,7 @@ export function MessengerProvider({ children }) {
     });
     const meta = {
       name: uploaded.original_name || file.name,
-      type: uploaded.mime_type || mime || "audio/webm",
+      type: uploaded.mime_type || safeMime,
       size: Number(uploaded.size_bytes || blob.size || 0),
       iv: FILE_IV_PLACEHOLDER,
       duration: Number(duration) || 0,

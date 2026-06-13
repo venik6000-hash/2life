@@ -99,7 +99,6 @@ const validateSseConnection = async (auth) => {
 
 const sweepRevokedConnections = async () => {
   for (const res of Array.from(connections)) {
-    if (!connections.has(res)) continue;
     let keep = true;
     try {
       keep = await validateSseConnection(res.__sseAuth);

@@ -1,6 +1,6 @@
 import InjectionPhaseModal from "../components/InjectionPhaseModal";
 import InjectionsScheduleCard from "../components/InjectionsScheduleCard";
-import { buildInjectionIcs, generateInjectionEvents } from "../utils/injectionSchedule";
+import { buildInjectionIcs, generateInjectionEvents, formatLocalIsoDate, parseLocalIsoDate } from "../utils/injectionSchedule";
 
 const normalizeSchedule = (value) => {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -33,20 +33,14 @@ export default function InjectionsSection({
     return stage.injectionSchedule;
   };
 
-  const fmtIso = (d) => d ? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}` : "";
-  const parseD = (iso) => {
-    const m = String(iso || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
-    return m ? new Date(+m[1], +m[2] - 1, +m[3]) : null;
-  };
-
   const shiftAll = (delta) => {
     uS((s) => {
       const schedule = ensureSchedule(s);
       schedule.phases = (schedule.phases || []).map((ph) => {
-        const d = parseD(ph.startDate);
+        const d = parseLocalIsoDate(ph.startDate);
         if (!d) return ph;
         d.setDate(d.getDate() + delta);
-        return { ...ph, startDate: fmtIso(d) };
+        return { ...ph, startDate: formatLocalIsoDate(d) };
       });
     });
   };
@@ -69,7 +63,7 @@ export default function InjectionsSection({
     URL.revokeObjectURL(url);
   };
 
-  const todayIso = fmtIso(new Date());
+  const todayIso = formatLocalIsoDate(new Date());
   const firstOfMonth = new Date(calMonth.y, calMonth.m, 1);
   const dow0 = firstOfMonth.getDay();
   const daysToSub = dow0 === 0 ? 6 : dow0 - 1;
@@ -98,7 +92,7 @@ export default function InjectionsSection({
     _idx: -1,
     type: "daily",
     durationDays: 10,
-    startDate: fmtIso(new Date()),
+    startDate: formatLocalIsoDate(new Date()),
     times: ["09:00"],
     daysOfWeek: [1, 3, 5],
     intervalDays: 2,

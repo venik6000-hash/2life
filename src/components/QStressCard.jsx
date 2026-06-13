@@ -3,25 +3,23 @@ import Card from "./Card";
 import QaRow from "./QaRow";
 import QCommentBlock from "./QCommentBlock";
 import PercentBar from "./PercentBar";
+import { makeFieldSaver } from "../utils/questionnaireUtils";
 
 export default function QStressCard({ data, path, uS, readOnly = false }) {
   const { $ } = useTheme();
   if (!data || typeof data !== "object") return null;
 
-  const save = (key, value) => uS(s => {
-    const pts = path.split(".");
-    let o = s.questionnaire;
-    for (const p of pts) { if (o && o[p] !== undefined) o = o[p]; }
+  const baseSave = makeFieldSaver(uS, path);
+  const save = (key, value) => {
     if (key === "level") {
       const n = +String(value).replace(",", ".").replace("%", "").trim();
-      o[key] = Number.isFinite(n) ? Math.max(0, Math.min(100, n)) : value;
+      baseSave(key, Number.isFinite(n) ? Math.max(0, Math.min(100, n)) : value);
     } else {
-      o[key] = value;
+      baseSave(key, value);
     }
-  });
+  };
 
-  const lvlRaw = data.level;
-  const lvl = Number.isFinite(+lvlRaw) ? Math.max(0, Math.min(100, +lvlRaw)) : null;
+  const lvl = Number.isFinite(+data.level) ? Math.max(0, Math.min(100, +data.level)) : null;
 
   const qa = (k, label, sub = false) => (
     <QaRow key={k} label={label} fieldKey={`q-${path}-${k}`} value={data[k]} onSave={v => save(k, v)} sub={sub} labelWidth="165px" readOnly={readOnly} />

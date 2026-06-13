@@ -3,7 +3,7 @@ import Button from "./Button";
 import Card from "./Card";
 import Wrapper from "./Wrapper";
 
-const normalizeMaterial = (instruction) => {
+export const normalizeMaterial = (instruction) => {
   if (typeof instruction === "string") return { text: instruction, url: "" };
   return { text: String(instruction?.text || ""), url: String(instruction?.url || "") };
 };

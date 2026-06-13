@@ -2,13 +2,12 @@ import { useTheme } from "../context/ThemeContext";
 import Card from "./Card";
 import QaRow from "./QaRow";
 import ScoreBar from "./ScoreBar";
-import { makeFieldSaver } from "../utils/questionnaireUtils";
+import { makeFieldSaver, parseScore } from "../utils/questionnaireUtils";
 
 export default function QWellbeingCard({ spec, data, path, uS, readOnly = false }) {
   const { $ } = useTheme();
   const save = makeFieldSaver(uS, path);
-  const scoreRaw = data?.score;
-  const score = scoreRaw == null || scoreRaw === "" || Number.isNaN(+scoreRaw) ? null : +scoreRaw;
+  const score = parseScore(data?.score);
 
   return (
     <Card>

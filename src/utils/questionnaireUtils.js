@@ -9,3 +9,10 @@ export function makeFieldSaver(uS, path) {
     o[key] = value;
   });
 }
+
+// Parses a raw score value (1–10 scale) to a number or null.
+export function parseScore(raw) {
+  if (raw == null || raw === "") return null;
+  const n = +raw;
+  return Number.isNaN(n) ? null : n;
+}

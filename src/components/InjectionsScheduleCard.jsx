@@ -2,6 +2,7 @@ import { useTheme } from "../context/ThemeContext";
 import Button from "./Button";
 import Card from "./Card";
 import Wrapper from "./Wrapper";
+import { formatLocalIsoDate } from "../utils/injectionSchedule";
 
 const DOW = ["Вс", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб"];
 const MONTH_NAMES = ["Январь", "Февраль", "Март", "Апрель", "Май", "Июнь", "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"];
@@ -98,9 +99,6 @@ function InjectionsCalendar({
   onChangeMonth,
 }) {
   const { $ } = useTheme();
-  const formatIso = (date) => (
-    `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`
-  );
 
   return (
     <div style={{ paddingTop: 16, borderTop: `1px solid ${$.brd}` }}>
@@ -121,7 +119,7 @@ function InjectionsCalendar({
             </div>
           ))}
           {weeks.flat().map((date, index) => {
-            const iso = formatIso(date);
+            const iso = formatLocalIsoDate(date);
             const events = eventsByDate[iso] || [];
             const currentMonth = date.getMonth() === calendarMonth.m;
             const isToday = iso === todayIso;

@@ -68,6 +68,7 @@ export default function FileBundleBubble({ msg, chatId, downloadFile, downloadFi
   };
 
   if (isPhotoBundle) {
+    const hiddenTail = imageFiles.length - visiblePhotos.length;
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 6, width: "min(340px, 100%)", minWidth: 0 }}>
         <div style={{
@@ -83,7 +84,6 @@ export default function FileBundleBubble({ msg, chatId, downloadFile, downloadFi
           {visiblePhotos.map((file, idx) => {
             const tile = photoLayout.tiles[idx] || { colSpan: 1, rowSpan: 1 };
             const previewSrc = file.thumb || previewMap[file.fileId];
-            const hiddenTail = imageFiles.length - visiblePhotos.length;
             return (
               <button
                 key={file.fileId}
@@ -137,15 +137,18 @@ export default function FileBundleBubble({ msg, chatId, downloadFile, downloadFi
           {loading ? "..." : "Скачать все"}
         </button>
       </div>
-      {files.map((file) => (
+      {files.map((file) => {
+        const fileIsImage = isImageLike(file.type, file.name, file.thumb);
+        const thumbSrc = file.thumb || previewMap[file.fileId];
+        return (
         <button
           key={file.fileId}
-          onClick={() => isImageLike(file.type, file.name, file.thumb) ? onOpenImage?.(file) : handleDownloadOne(file)}
+          onClick={() => fileIsImage ? onOpenImage?.(file) : handleDownloadOne(file)}
           style={{ width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, padding: "6px 8px", border: "none", cursor: "pointer", borderRadius: 6, background: "rgba(255,255,255,.1)", color: "inherit", textAlign: "left" }}
         >
           <span style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
-            {isImageLike(file.type, file.name, file.thumb) && (file.thumb || previewMap[file.fileId]) ? (
-              <img src={file.thumb || previewMap[file.fileId]} alt={file.name} style={{ width: 42, height: 42, objectFit: "cover", borderRadius: 6, flexShrink: 0, display: "block" }} loading="lazy" />
+            {fileIsImage && thumbSrc ? (
+              <img src={thumbSrc} alt={file.name} style={{ width: 42, height: 42, objectFit: "cover", borderRadius: 6, flexShrink: 0, display: "block" }} loading="lazy" />
             ) : (
               <span style={{ fontSize: 15, opacity: .9, flexShrink: 0 }}>📄</span>
             )}
@@ -153,7 +156,8 @@ export default function FileBundleBubble({ msg, chatId, downloadFile, downloadFi
           </span>
           <span style={{ fontSize: 10, opacity: .75, flexShrink: 0 }}>{fmtSize(file.size)}</span>
         </button>
-      ))}
+        );
+      })}
       {error && <div style={{ fontSize: 10, color: $.dn }}>{error}</div>}
     </div>
   );

@@ -44,17 +44,17 @@ export const buildPatchOps = (prevValue, nextValue, path = []) => {
     const nextObj = isPlainObject(nextNode);
     if (prevObj && nextObj) {
       const keys = new Set([...Object.keys(prevNode), ...Object.keys(nextNode)]);
-      keys.forEach((key) => {
+      for (const key of keys) {
         if (!Object.prototype.hasOwnProperty.call(nextNode, key)) {
           ops.push({ op: "delete", path: [...currentPath, key] });
-          return;
+          continue;
         }
         if (!Object.prototype.hasOwnProperty.call(prevNode, key)) {
           ops.push({ op: "set", path: [...currentPath, key], value: nextNode[key] });
-          return;
+          continue;
         }
         walk(prevNode[key], nextNode[key], [...currentPath, key]);
-      });
+      }
       return;
     }
 

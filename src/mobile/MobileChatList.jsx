@@ -98,7 +98,7 @@ export default function MobileChatList({ onOpenChat, onOpenSettings, onOpenSearc
         .toLowerCase();
       return title.includes(needle) || people.includes(needle);
     });
-  }, [chats, messages, query]);
+  }, [chats, query]);
 
   return (
     <main style={{ height: "100dvh", background: $.bg, color: $.tx, display: "flex", flexDirection: "column", fontFamily: "system-ui, sans-serif", overflow: "hidden" }}>

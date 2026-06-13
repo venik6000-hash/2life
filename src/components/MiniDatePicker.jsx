@@ -80,12 +80,11 @@ export default function MiniDatePicker({
   // Reposition if window scrolls while open
   useEffect(() => {
     if (!open) return;
-    const reposition = () => updatePosition();
-    window.addEventListener("scroll", reposition, true);
-    window.addEventListener("resize", reposition);
+    window.addEventListener("scroll", updatePosition, true);
+    window.addEventListener("resize", updatePosition);
     return () => {
-      window.removeEventListener("scroll", reposition, true);
-      window.removeEventListener("resize", reposition);
+      window.removeEventListener("scroll", updatePosition, true);
+      window.removeEventListener("resize", updatePosition);
     };
   }, [open]);
 

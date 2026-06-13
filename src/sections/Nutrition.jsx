@@ -2,7 +2,7 @@ import { useState } from "react";
 import NutritionCommentCard from "../components/NutritionCommentCard";
 import NutritionEmptyCard from "../components/NutritionEmptyCard";
 import NutritionMaterialModal from "../components/NutritionMaterialModal";
-import NutritionMaterialsCard from "../components/NutritionMaterialsCard";
+import NutritionMaterialsCard, { normalizeMaterial } from "../components/NutritionMaterialsCard";
 import NutritionProductsCard from "../components/NutritionProductsCard";
 import NutritionRecommendationsCard from "../components/NutritionRecommendationsCard";
 import NutritionRevisionHeader from "../components/NutritionRevisionHeader";
@@ -86,10 +86,6 @@ export default function NutritionSection({ st, nri, setNri, uS, todayLabel, read
   };
 
   const [materialDraft, setMaterialDraft] = useState({ open: false, index: -1, text: "", url: "" });
-  const normalizeMaterial = (inst) => {
-    if (typeof inst === "string") return { text: inst, url: "" };
-    return { text: String(inst?.text || ""), url: String(inst?.url || "") };
-  };
   const openMaterialModal = (index = -1) => {
     if (readOnly) return;
     const current = index >= 0 ? normalizeMaterial(n.instructions?.[index]) : { text: "", url: "" };

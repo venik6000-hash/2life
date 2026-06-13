@@ -150,6 +150,18 @@ const qExtractCheckedAnswers = (row, prevRow = [], nextRow = []) => {
   return out;
 };
 
+const qResolvePrompt = (promptByZone, zone, promptAnchors, col) => {
+  let prompt = promptByZone[zone] || "";
+  if (promptAnchors.length && Number.isFinite(col)) {
+    const nearest = promptAnchors.reduce((best, cur) => {
+      if (!best) return cur;
+      return Math.abs(cur.idx - col) < Math.abs(best.idx - col) ? cur : best;
+    }, null);
+    if (nearest && Math.abs(nearest.idx - col) <= 4) prompt = nearest.prompt;
+  }
+  return prompt;
+};
+
 const qDetectGender = (raw, sheetName) => {
   let hasFemale = false;
   let hasMale = false;
@@ -439,14 +451,7 @@ const qExtractWellbeingNormalizedFromRaw = (raw) => {
         if (n >= 1 && n <= 10) qSetMaxNumber(out[fallbackKey], "score", n);
         return;
       }
-      let prompt = promptByZone[zone] || "";
-      if (promptAnchors.length && Number.isFinite(col)) {
-        const nearest = promptAnchors.reduce((best, cur) => {
-          if (!best) return cur;
-          return Math.abs(cur.idx - col) < Math.abs(best.idx - col) ? cur : best;
-        }, null);
-        if (nearest && Math.abs(nearest.idx - col) <= 4) prompt = nearest.prompt;
-      }
+      let prompt = qResolvePrompt(promptByZone, zone, promptAnchors, col);
       const targetKey = resolveWellbeingKeyByPrompt(prompt, ans, fallbackKey) || fallbackKey;
       applyByPrompt(targetKey, prompt, ans);
     });
@@ -553,14 +558,7 @@ const qExtractAppearanceNormalizedFromRaw = (raw, fallback = null) => {
     checked.forEach(({ zone, col, answer }) => {
       const ans = qText(answer);
       if (!ans || qLooksLikeScaleValue(ans)) return;
-      let prompt = promptByZone[zone] || "";
-      if (promptAnchors.length && Number.isFinite(col)) {
-        const nearest = promptAnchors.reduce((best, cur) => {
-          if (!best) return cur;
-          return Math.abs(cur.idx - col) < Math.abs(best.idx - col) ? cur : best;
-        }, null);
-        if (nearest && Math.abs(nearest.idx - col) <= 4) prompt = nearest.prompt;
-      }
+      let prompt = qResolvePrompt(promptByZone, zone, promptAnchors, col);
 
       let baseTopic = activeTopic;
       if (/как часто/.test(qNorm(prompt))) {
@@ -689,14 +687,7 @@ const qExtractDigestionNormalizedFromRaw = (raw, fallback = null) => {
       const ans = qText(answer);
       if (!ans || qLooksLikeScaleValue(ans)) return;
 
-      let prompt = promptByZone[zone] || "";
-      if (promptAnchors.length && Number.isFinite(col)) {
-        const nearest = promptAnchors.reduce((best, cur) => {
-          if (!best) return cur;
-          return Math.abs(cur.idx - col) < Math.abs(best.idx - col) ? cur : best;
-        }, null);
-        if (nearest && Math.abs(nearest.idx - col) <= 4) prompt = nearest.prompt;
-      }
+      let prompt = qResolvePrompt(promptByZone, zone, promptAnchors, col);
 
       let target = resolveDigestionKeyByPrompt(prompt, activeTopic);
       if (target === "afterMealSensation" && /как давно/.test(qNorm(prompt))) target = "afterMealDuration";
@@ -888,14 +879,7 @@ const qExtractFemaleHealthNormalizedFromRaw = (raw, fallback = null) => {
       const ans = qText(answer);
       if (!ans || qLooksLikeScaleValue(ans)) return;
 
-      let prompt = promptByZone[zone] || "";
-      if (promptAnchors.length && Number.isFinite(col)) {
-        const nearest = promptAnchors.reduce((best, cur) => {
-          if (!best) return cur;
-          return Math.abs(cur.idx - col) < Math.abs(best.idx - col) ? cur : best;
-        }, null);
-        if (nearest && Math.abs(nearest.idx - col) <= 4) prompt = nearest.prompt;
-      }
+      let prompt = qResolvePrompt(promptByZone, zone, promptAnchors, col);
 
       const target = resolveFemaleKeyByPrompt(prompt, activeTopic);
       appendFemaleValue(target, ans);
@@ -1021,14 +1005,7 @@ const qExtractMaleHealthNormalizedFromRaw = (raw, fallback = null) => {
       const ans = qText(answer);
       if (!ans || qLooksLikeScaleValue(ans)) return;
 
-      let prompt = promptByZone[zone] || "";
-      if (promptAnchors.length && Number.isFinite(col)) {
-        const nearest = promptAnchors.reduce((best, cur) => {
-          if (!best) return cur;
-          return Math.abs(cur.idx - col) < Math.abs(best.idx - col) ? cur : best;
-        }, null);
-        if (nearest && Math.abs(nearest.idx - col) <= 4) prompt = nearest.prompt;
-      }
+      let prompt = qResolvePrompt(promptByZone, zone, promptAnchors, col);
 
       const target = resolveMaleKeyByPrompt(prompt, activeTopic);
       appendMaleValue(target, ans);
@@ -1134,14 +1111,7 @@ const qExtractRespiratoryNormalizedFromRaw = (raw, fallback = null) => {
       const ans = qText(answer);
       if (!ans || qLooksLikeScaleValue(ans)) return;
 
-      let prompt = promptByZone[zone] || "";
-      if (promptAnchors.length && Number.isFinite(col)) {
-        const nearest = promptAnchors.reduce((best, cur) => {
-          if (!best) return cur;
-          return Math.abs(cur.idx - col) < Math.abs(best.idx - col) ? cur : best;
-        }, null);
-        if (nearest && Math.abs(nearest.idx - col) <= 4) prompt = nearest.prompt;
-      }
+      let prompt = qResolvePrompt(promptByZone, zone, promptAnchors, col);
 
       let target = resolveRespKeyByPrompt(prompt, activeTopic);
       if (target === "breathingIssue" && /как часто/.test(qNorm(prompt))) target = "breathingIssueFrequency";
@@ -1250,14 +1220,7 @@ const qExtractCardioNormalizedFromRaw = (raw, fallback = null) => {
       const ans = qText(answer);
       if (!ans || qLooksLikeScaleValue(ans)) return;
 
-      let prompt = promptByZone[zone] || "";
-      if (promptAnchors.length && Number.isFinite(col)) {
-        const nearest = promptAnchors.reduce((best, cur) => {
-          if (!best) return cur;
-          return Math.abs(cur.idx - col) < Math.abs(best.idx - col) ? cur : best;
-        }, null);
-        if (nearest && Math.abs(nearest.idx - col) <= 4) prompt = nearest.prompt;
-      }
+      let prompt = qResolvePrompt(promptByZone, zone, promptAnchors, col);
 
       let target = resolveCardioKeyByPrompt(prompt, activeTopic);
       if (target === "heartPain" && /после чего усилива/.test(qNorm(prompt))) target = "heartPainTriggers";
@@ -1379,14 +1342,7 @@ const qExtractMusculoskeletalNormalizedFromRaw = (raw, fallback = null) => {
       const ans = qText(answer);
       if (!ans || qLooksLikeScaleValue(ans)) return;
 
-      let prompt = promptByZone[zone] || "";
-      if (promptAnchors.length && Number.isFinite(col)) {
-        const nearest = promptAnchors.reduce((best, cur) => {
-          if (!best) return cur;
-          return Math.abs(cur.idx - col) < Math.abs(best.idx - col) ? cur : best;
-        }, null);
-        if (nearest && Math.abs(nearest.idx - col) <= 4) prompt = nearest.prompt;
-      }
+      let prompt = qResolvePrompt(promptByZone, zone, promptAnchors, col);
 
       let target = resolveMusculoskeletalKeyByPrompt(prompt, activeTopic);
       if (target === "jointDiscomfort" && /как проявля/.test(qNorm(prompt))) target = "jointManifestation";
@@ -1517,14 +1473,7 @@ const qExtractImmuneNormalizedFromRaw = (raw, fallback = null) => {
       const ans = qText(answer);
       if (!ans || qLooksLikeScaleValue(ans)) return;
 
-      let prompt = promptByZone[zone] || "";
-      if (promptAnchors.length && Number.isFinite(col)) {
-        const nearest = promptAnchors.reduce((best, cur) => {
-          if (!best) return cur;
-          return Math.abs(cur.idx - col) < Math.abs(best.idx - col) ? cur : best;
-        }, null);
-        if (nearest && Math.abs(nearest.idx - col) <= 4) prompt = nearest.prompt;
-      }
+      let prompt = qResolvePrompt(promptByZone, zone, promptAnchors, col);
 
       let target = resolveImmuneKeyByPrompt(prompt, activeTopic);
       if (target === "covid19" && /какие изменения.*после|изменения.*самочувств.*после/.test(qNorm(prompt))) target = "postCovidChanges";
@@ -1645,14 +1594,7 @@ const qExtractActivityNormalizedFromRaw = (raw, fallback = null) => {
       const ans = qText(answer);
       if (!ans || qLooksLikeScaleValue(ans)) return;
 
-      let prompt = promptByZone[zone] || "";
-      if (promptAnchors.length && Number.isFinite(col)) {
-        const nearest = promptAnchors.reduce((best, cur) => {
-          if (!best) return cur;
-          return Math.abs(cur.idx - col) < Math.abs(best.idx - col) ? cur : best;
-        }, null);
-        if (nearest && Math.abs(nearest.idx - col) <= 4) prompt = nearest.prompt;
-      }
+      let prompt = qResolvePrompt(promptByZone, zone, promptAnchors, col);
 
       const target = resolveActivityKeyByPrompt(prompt, activeTopic);
       appendActivityValue(target, ans);
@@ -1792,14 +1734,7 @@ const qExtractStressNormalizedFromRaw = (raw, fallback = null) => {
       const ans = qText(answer);
       if (!ans) return;
 
-      let prompt = promptByZone[zone] || "";
-      if (promptAnchors.length && Number.isFinite(col)) {
-        const nearest = promptAnchors.reduce((best, cur) => {
-          if (!best) return cur;
-          return Math.abs(cur.idx - col) < Math.abs(best.idx - col) ? cur : best;
-        }, null);
-        if (nearest && Math.abs(nearest.idx - col) <= 4) prompt = nearest.prompt;
-      }
+      let prompt = qResolvePrompt(promptByZone, zone, promptAnchors, col);
 
       const target = resolveStressKeyByPrompt(prompt, activeTopic);
       appendStressValue(target, ans);
@@ -1915,14 +1850,7 @@ const qExtractHabitsNormalizedFromRaw = (raw, fallback = null) => {
       const ans = qText(answer);
       if (!ans || qLooksLikeScaleValue(ans)) return;
 
-      let prompt = promptByZone[zone] || "";
-      if (promptAnchors.length && Number.isFinite(col)) {
-        const nearest = promptAnchors.reduce((best, cur) => {
-          if (!best) return cur;
-          return Math.abs(cur.idx - col) < Math.abs(best.idx - col) ? cur : best;
-        }, null);
-        if (nearest && Math.abs(nearest.idx - col) <= 4) prompt = nearest.prompt;
-      }
+      let prompt = qResolvePrompt(promptByZone, zone, promptAnchors, col);
       appendValue(resolveKeyByPrompt(prompt, activeTopic), ans);
     });
   }
@@ -2037,14 +1965,7 @@ const qExtractAnamnesNormalizedFromRaw = (raw, fallback = null) => {
       const ans = qText(answer);
       if (!ans || qLooksLikeScaleValue(ans)) return;
 
-      let prompt = promptByZone[zone] || "";
-      if (promptAnchors.length && Number.isFinite(col)) {
-        const nearest = promptAnchors.reduce((best, cur) => {
-          if (!best) return cur;
-          return Math.abs(cur.idx - col) < Math.abs(best.idx - col) ? cur : best;
-        }, null);
-        if (nearest && Math.abs(nearest.idx - col) <= 4) prompt = nearest.prompt;
-      }
+      let prompt = qResolvePrompt(promptByZone, zone, promptAnchors, col);
       appendValue(resolveKeyByPrompt(prompt, activeTopic), ans);
     });
   }

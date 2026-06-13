@@ -58,6 +58,23 @@ const buildDeficitMarkerOptions = (items = []) => {
   return dedup;
 };
 
+// Notify other parts of the app (DashboardContext listeners) that a reference
+// dataset changed. Primary path uses the Event constructor; the fallback covers
+// legacy environments where it is unavailable.
+const dispatchAppEvent = (name) => {
+  try {
+    window.dispatchEvent(new Event(name));
+  } catch (_) {
+    try {
+      const ev = document.createEvent("Event");
+      ev.initEvent(name, true, true);
+      window.dispatchEvent(ev);
+    } catch (_) {
+      // ignore
+    }
+  }
+};
+
 export default function AdminSection() {
   const { authFetch, user, applySession } = useAuth();
   const { $ } = useTheme();
@@ -602,33 +619,9 @@ export default function AdminSection() {
     setter(prev => ({ ...prev, markerSearch: nextValue, markerKey }));
   };
 
-  const emitLabOrderTemplatesChanged = () => {
-    try {
-      window.dispatchEvent(new Event("lab-order-templates-changed"));
-    } catch (_) {
-      try {
-        const ev = document.createEvent("Event");
-        ev.initEvent("lab-order-templates-changed", true, true);
-        window.dispatchEvent(ev);
-      } catch (_) {
-        // ignore
-      }
-    }
-  };
+  const emitLabOrderTemplatesChanged = () => dispatchAppEvent("lab-order-templates-changed");
 
-  const emitDoctorsChanged = () => {
-    try {
-      window.dispatchEvent(new Event("doctors-changed"));
-    } catch (_) {
-      try {
-        const ev = document.createEvent("Event");
-        ev.initEvent("doctors-changed", true, true);
-        window.dispatchEvent(ev);
-      } catch (_) {
-        // ignore
-      }
-    }
-  };
+  const emitDoctorsChanged = () => dispatchAppEvent("doctors-changed");
 
   const handleAddRef = async () => {
     setRefErr("");

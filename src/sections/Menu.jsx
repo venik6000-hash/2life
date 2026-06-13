@@ -136,6 +136,11 @@ export default function MenuSection({ cl, readOnly = false }) {
   const [expandedMenuItemIds, setExpandedMenuItemIds] = useState(() => new Set());
   const [editingMenuItemIds, setEditingMenuItemIds] = useState(() => new Set());
 
+  const applyMenuItems = (items) => {
+    setMenuItems(items);
+    setItemDrafts(Object.fromEntries(items.map((item) => [item.id, buildItemDraft(item)])));
+  };
+
   const loadDishes = useCallback(async () => {
     const params = new URLSearchParams();
     params.set("active", "all");
@@ -158,8 +163,7 @@ export default function MenuSection({ cl, readOnly = false }) {
       const data = await res.json().catch(() => null);
       if (!res.ok) throw new Error(data?.error || "Не удалось загрузить меню клиента");
       const items = Array.isArray(data?.menu?.items) ? data.menu.items : [];
-      setMenuItems(items);
-      setItemDrafts(Object.fromEntries(items.map((item) => [item.id, buildItemDraft(item)])));
+      applyMenuItems(items);
     } catch (e) {
       setError(e.message || "Ошибка загрузки меню");
     } finally {
@@ -300,8 +304,7 @@ export default function MenuSection({ cl, readOnly = false }) {
           }
         }
         const items = Array.isArray(lastData?.menu?.items) ? lastData.menu.items : [];
-        setMenuItems(items);
-        setItemDrafts(Object.fromEntries(items.map((item) => [item.id, buildItemDraft(item)])));
+        applyMenuItems(items);
         setSelectedDishIds(new Set());
         setActiveTab("client");
         return;
@@ -310,8 +313,7 @@ export default function MenuSection({ cl, readOnly = false }) {
       return;
     }
     const items = Array.isArray(data?.menu?.items) ? data.menu.items : [];
-    setMenuItems(items);
-    setItemDrafts(Object.fromEntries(items.map((item) => [item.id, buildItemDraft(item)])));
+    applyMenuItems(items);
     setSelectedDishIds(new Set());
     setActiveTab("client");
   };
@@ -332,8 +334,7 @@ export default function MenuSection({ cl, readOnly = false }) {
       return;
     }
     const items = Array.isArray(data?.menu?.items) ? data.menu.items : [];
-    setMenuItems(items);
-    setItemDrafts(Object.fromEntries(items.map((entry) => [entry.id, buildItemDraft(entry)])));
+    applyMenuItems(items);
   };
 
   const removeItem = async (item) => {
@@ -345,8 +346,7 @@ export default function MenuSection({ cl, readOnly = false }) {
       return;
     }
     const items = Array.isArray(data?.menu?.items) ? data.menu.items : [];
-    setMenuItems(items);
-    setItemDrafts(Object.fromEntries(items.map((entry) => [entry.id, buildItemDraft(entry)])));
+    applyMenuItems(items);
   };
 
   const copyPreviousWeek = async () => {
@@ -364,8 +364,7 @@ export default function MenuSection({ cl, readOnly = false }) {
       return;
     }
     const items = Array.isArray(data?.menu?.items) ? data.menu.items : [];
-    setMenuItems(items);
-    setItemDrafts(Object.fromEntries(items.map((entry) => [entry.id, buildItemDraft(entry)])));
+    applyMenuItems(items);
   };
 
   const updateItemDraft = (itemId, patch) => {

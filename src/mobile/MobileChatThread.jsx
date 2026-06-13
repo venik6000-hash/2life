@@ -336,7 +336,7 @@ export default function MobileChatThread({ onBack, pendingScrollId }) {
           <MessengerContextMenu
             x={ctx.x} y={ctx.y}
             msgType={ctx.msg.msg_type}
-            canEdit={ctx.msg.sender_id === user?.id && !ctx.msg.deleted_for_all && ctx.msg.msg_type === "text" && !ctx.msg.deleted_for_all}
+            canEdit={ctx.msg.sender_id === user?.id && !ctx.msg.deleted_for_all && ctx.msg.msg_type === "text"}
             canDeleteForAll={ctx.msg.sender_id === user?.id || user?.role === "admin"}
             isOwnMessage={isOwn}
             readersPreview={readersForMsg}

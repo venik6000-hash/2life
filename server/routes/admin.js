@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const { requireAuth } = require("../middleware/auth");
-const { pool, withTransaction, getRoleById, countUsersByRole, insertRole, updateRoleDisplayName, updateRoleIsClient, deleteRole,
+const { pool, withTransaction, getRoleById, countUsersByRole, insertRole, updateRoleDisplayName, deleteRole,
         getRoleSections, upsertRoleSection,
         upsertRolePermission,
         listRefData, insertRefData, updateRefData, deleteRefData, listDistinctAnalyticsMarkers,

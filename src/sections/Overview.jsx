@@ -10,6 +10,8 @@ import EditableTextListCard from "../components/EditableTextListCard";
 import SeverityListCard from "../components/SeverityListCard";
 import AutoDeficitCard from "../components/AutoDeficitCard";
 
+const STAGE_NUMERIC_FIELDS = ["height", "weightCurrent", "weightGoal", "waist"];
+
 export default function OverviewSection({
   st,
   pri,
@@ -86,7 +88,7 @@ export default function OverviewSection({
               <FieldRow key={k} label={l}>
                 {isSexField
                   ? <SexEd readOnly={readOnly} value={String(cl.sex || "")} editKey={fieldKey} options={sexOptions} onSave={nextValue => uC(c => { c.sex = nextValue; return c; })} />
-                  : <Ed readOnly={readOnly} value={String(value || "")} editKey={fieldKey} onSave={v => scope === "client" ? uC(c => { c[k] = (k === "dob" || isNaN(+v)) ? v : +v; return c; }) : uS(s => { const numKeys = ["height", "weightCurrent", "weightGoal", "waist"]; s[k] = numKeys.includes(k) ? (isNaN(+v) || v === "" ? v : +v) : String(v); })} />}
+                  : <Ed readOnly={readOnly} value={String(value || "")} editKey={fieldKey} onSave={v => scope === "client" ? uC(c => { c[k] = (k === "dob" || isNaN(+v)) ? v : +v; return c; }) : uS(s => { s[k] = STAGE_NUMERIC_FIELDS.includes(k) ? (isNaN(+v) || v === "" ? v : +v) : String(v); })} />}
               </FieldRow>
             );
           })}
