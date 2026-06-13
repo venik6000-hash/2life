@@ -241,9 +241,7 @@ module.exports = {
   requireSectionWrite,
   requireAnySectionRead,
   requireAnySectionWrite,
-  hasSectionRead,
   hasSectionWrite,
   attachPermissions,
   signToken,
-  TOKEN_TTL,
 };

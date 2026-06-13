@@ -5,8 +5,8 @@ import QCommentBlock from "./QCommentBlock";
 import PercentBar from "./PercentBar";
 
 export default function QNutritionCard({ data, path, uS, readOnly = false }) {
-  if (!data || typeof data !== "object") return null;
   const { $ } = useTheme();
+  if (!data || typeof data !== "object") return null;
 
   const save = (key, value) => uS(s => {
     const pts = path.split(".");

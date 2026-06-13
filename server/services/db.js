@@ -714,6 +714,10 @@ const initSchema = async () => {
     `);
   });
 
+  // Functional index backing the LOWER(BTRIM(doctor)) doctor-name scans
+  // (listClientIdsByDoctorName, deleteDoctorClientAssignmentsCore, the backfill above).
+  try { await pool.query("CREATE INDEX IF NOT EXISTS idx_stages_doctor_lower ON stages (LOWER(BTRIM(doctor))) WHERE NULLIF(BTRIM(doctor), '') IS NOT NULL"); } catch (_) {}
+
   try { await pool.query("ALTER TABLE dishes ALTER COLUMN calories DROP NOT NULL"); } catch (_) {}
   try { await pool.query("ALTER TABLE dishes ALTER COLUMN calories DROP DEFAULT"); } catch (_) {}
 
@@ -954,18 +958,6 @@ const createUser = async (username, passwordHash, role) => {
   return { id: r.rows[0].id };
 };
 
-const updatePass = async (passwordHash, id) => {
-  await pool.query("UPDATE users SET password_hash = $1 WHERE id = $2", [passwordHash, id]);
-};
-
-const setActive = async (active, id) => {
-  await pool.query("UPDATE users SET active = $1 WHERE id = $2", [active, id]);
-};
-
-const setAllClientsAccess = async (allClientsAccess, id) => {
-  await pool.query("UPDATE users SET all_clients_access = $1 WHERE id = $2", [allClientsAccess, id]);
-};
-
 const hasAllClientsAccess = async (id) => {
   const r = await pool.query(
     "SELECT role, active, all_clients_access FROM users WHERE id = $1 LIMIT 1",
@@ -978,15 +970,6 @@ const hasAllClientsAccess = async (id) => {
 
 // ─── Clients ────────────────────────────────────────────────────────────────
 
-const insertClient = async (id, name, shortName, dob, age, sex, avatar, color) => {
-  await pool.query(
-    `INSERT INTO clients (id, name, short_name, dob, age, sex, avatar, color)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-     ON CONFLICT (id) DO UPDATE SET name=$2, short_name=$3, dob=$4, age=$5, sex=$6, avatar=$7, color=$8`,
-    [id, name, shortName, dob, age, sex, avatar, color]
-  );
-};
-
 const deleteClient = async (id) => {
   await pool.query("DELETE FROM clients WHERE id = $1", [id]);
 };
@@ -997,23 +980,6 @@ const getClientById = async (id) => {
 };
 
 // ─── Stages ─────────────────────────────────────────────────────────────────
-
-const insertStage = async (clientId, stageNum, title, subtitle, doctor, doctorRole, dateStart, dateEnd, status, email, phone, city, height, weightCurrent, weightGoal, bmi, waist, tasksJson, syndromesJson, diagnosesJson, deficitsJson, autoDeficitSelectionJson, labOrderSelectedJson, labOrderGroupOrderJson, nutritionJson, injectionsJson, injectionScheduleJson, questionnaireJson) => {
-  await pool.query(
-    `INSERT INTO stages (client_id, stage_num, title, subtitle, doctor, doctor_role, date_start, date_end, status, email, phone, city, height, weight_current, weight_goal, bmi, waist, tasks_json, syndromes_json, diagnoses_json, deficits_json, auto_deficit_selection_json, lab_order_selected_json, lab_order_group_order_json, nutrition_json, injections_json, injection_schedule_json, questionnaire_json)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28)`,
-    [clientId, stageNum, title, subtitle, doctor, doctorRole, dateStart, dateEnd, status, email, phone, city, height, weightCurrent, weightGoal, bmi, waist, tasksJson, syndromesJson, diagnosesJson, deficitsJson, autoDeficitSelectionJson, labOrderSelectedJson, labOrderGroupOrderJson, nutritionJson, injectionsJson, injectionScheduleJson, questionnaireJson]
-  );
-};
-
-const deleteStagesByClient = async (clientId) => {
-  await pool.query("DELETE FROM stages WHERE client_id = $1", [clientId]);
-};
-
-const getStagesByClient = async (clientId) => {
-  const r = await pool.query("SELECT * FROM stages WHERE client_id = $1 ORDER BY stage_num", [clientId]);
-  return r.rows;
-};
 
 const listClientIdsByDoctorName = async (doctorName) => {
   const normalized = String(doctorName || "").trim();
@@ -1026,104 +992,6 @@ const listClientIdsByDoctorName = async (doctorName) => {
     [normalized]
   );
   return r.rows.map((row) => row.client_id);
-};
-
-// ─── Analytics ──────────────────────────────────────────────────────────────
-
-const insertAnalyticsCategory = async (clientId, name, sortOrder) => {
-  const r = await pool.query(
-    "INSERT INTO analytics_categories (client_id, name, sort_order) VALUES ($1, $2, $3) RETURNING id",
-    [clientId, name, sortOrder]
-  );
-  return { id: r.rows[0].id };
-};
-
-const insertAnalyticsMarker = async (categoryId, name, unit, refMin, refMax, optimal, sortOrder) => {
-  const r = await pool.query(
-    "INSERT INTO analytics_markers (category_id, name, unit, ref_min, ref_max, optimal, sort_order) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id",
-    [categoryId, name, unit, refMin, refMax, optimal, sortOrder]
-  );
-  return { id: r.rows[0].id };
-};
-
-const insertAnalyticsValue = async (markerId, date, value, flagOff) => {
-  await pool.query(
-    "INSERT INTO analytics_values (marker_id, date, value, flag_off) VALUES ($1, $2, $3, $4)",
-    [markerId, date, value, flagOff]
-  );
-};
-
-const deleteAnalyticsByClient = async (clientId) => {
-  await pool.query("DELETE FROM analytics_categories WHERE client_id = $1", [clientId]);
-};
-
-const getCategoriesByClient = async (clientId) => {
-  const r = await pool.query("SELECT * FROM analytics_categories WHERE client_id = $1 ORDER BY sort_order", [clientId]);
-  return r.rows;
-};
-
-const getMarkersByCategory = async (categoryId) => {
-  const r = await pool.query("SELECT * FROM analytics_markers WHERE category_id = $1 ORDER BY sort_order", [categoryId]);
-  return r.rows;
-};
-
-const getValuesByMarker = async (markerId) => {
-  const r = await pool.query("SELECT * FROM analytics_values WHERE marker_id = $1 ORDER BY id", [markerId]);
-  return r.rows;
-};
-
-// ─── Journal ────────────────────────────────────────────────────────────────
-
-const insertJournalEntry = async (clientId, stageId, entryNum, date, type, text, author) => {
-  await pool.query(
-    "INSERT INTO journal_entries (client_id, stage_id, entry_num, date, type, text, author) VALUES ($1, $2, $3, $4, $5, $6, $7)",
-    [clientId, stageId, entryNum, date, type, text, author]
-  );
-};
-
-const deleteJournalByClient = async (clientId) => {
-  await pool.query("DELETE FROM journal_entries WHERE client_id = $1", [clientId]);
-};
-
-const getJournalByStage = async (stageId) => {
-  const r = await pool.query("SELECT * FROM journal_entries WHERE stage_id = $1 ORDER BY entry_num", [stageId]);
-  return r.rows;
-};
-
-// ─── Protocol revisions ─────────────────────────────────────────────────────
-
-const insertProtocolRevision = async (stageId, revisionNum, date, label, groupsJson) => {
-  await pool.query(
-    "INSERT INTO protocol_revisions (stage_id, revision_num, date, label, groups_json) VALUES ($1, $2, $3, $4, $5)",
-    [stageId, revisionNum, date, label, groupsJson]
-  );
-};
-
-const deleteProtocolByStage = async (stageId) => {
-  await pool.query("DELETE FROM protocol_revisions WHERE stage_id = $1", [stageId]);
-};
-
-const getProtocolByStage = async (stageId) => {
-  const r = await pool.query("SELECT * FROM protocol_revisions WHERE stage_id = $1 ORDER BY revision_num", [stageId]);
-  return r.rows;
-};
-
-// ─── Nutrition revisions ────────────────────────────────────────────────────
-
-const insertNutritionRevision = async (stageId, revisionNum, date, label, comment, dataJson) => {
-  await pool.query(
-    "INSERT INTO nutrition_revisions (stage_id, revision_num, date, label, comment, data_json) VALUES ($1, $2, $3, $4, $5, $6)",
-    [stageId, revisionNum, date, label, comment, dataJson]
-  );
-};
-
-const deleteNutritionByStage = async (stageId) => {
-  await pool.query("DELETE FROM nutrition_revisions WHERE stage_id = $1", [stageId]);
-};
-
-const getNutritionByStage = async (stageId) => {
-  const r = await pool.query("SELECT * FROM nutrition_revisions WHERE stage_id = $1 ORDER BY revision_num", [stageId]);
-  return r.rows;
 };
 
 // ─── Doctors ────────────────────────────────────────────────────────────────
@@ -1152,11 +1020,6 @@ const getDoctorByName = async (name) => {
 // ─── Activity log ───────────────────────────────────────────────────────────
 
 // ─── Roles ──────────────────────────────────────────────────────────────────
-
-const listRoles = async () => {
-  const r = await pool.query("SELECT * FROM roles ORDER BY id");
-  return r.rows;
-};
 
 const getRoleByName = async (name) => {
   const r = await pool.query("SELECT * FROM roles WHERE name = $1", [name]);
@@ -1434,45 +1297,6 @@ const getAssignmentsByClient = async (clientId) => {
     [clientId]
   );
   return r.rows;
-};
-
-// ─── Messenger: public keys ──────────────────────────────────────────────────
-
-const upsertPublicKey = async (
-  userId,
-  publicKeyJwk,
-  encryptedPrivateKeyJwk,
-  keyDerivationSalt,
-  keyDerivationIv,
-  recoveryEncryptedPrivateKeyJwk = "",
-  recoveryKeyIv = ""
-) => {
-  await pool.query(
-    `INSERT INTO user_public_keys (
-       user_id, public_key_jwk, encrypted_private_key_jwk, key_derivation_salt, key_derivation_iv,
-       recovery_encrypted_private_key_jwk, recovery_key_iv
-     )
-     VALUES ($1, $2, $3, $4, $5, COALESCE($6, ''), COALESCE($7, ''))
-     ON CONFLICT (user_id) DO UPDATE SET
-       public_key_jwk = EXCLUDED.public_key_jwk,
-       encrypted_private_key_jwk = EXCLUDED.encrypted_private_key_jwk,
-       key_derivation_salt = EXCLUDED.key_derivation_salt,
-       key_derivation_iv = EXCLUDED.key_derivation_iv,
-       recovery_encrypted_private_key_jwk = COALESCE(
-         NULLIF(EXCLUDED.recovery_encrypted_private_key_jwk, ''),
-         user_public_keys.recovery_encrypted_private_key_jwk
-       ),
-       recovery_key_iv = COALESCE(
-         NULLIF(EXCLUDED.recovery_key_iv, ''),
-         user_public_keys.recovery_key_iv
-       )`,
-    [userId, publicKeyJwk, encryptedPrivateKeyJwk, keyDerivationSalt, keyDerivationIv, recoveryEncryptedPrivateKeyJwk, recoveryKeyIv]
-  );
-};
-
-const getPublicKey = async (userId) => {
-  const r = await pool.query("SELECT * FROM user_public_keys WHERE user_id = $1", [userId]);
-  return r.rows[0] ?? null;
 };
 
 const decryptMessagePreview = (encryptedText) => {
@@ -2263,24 +2087,15 @@ module.exports = {
   pool, withTransaction, ensureAppDbRole,
   initSchema,
   // users
-  getUser, listUsers, createUser, updatePass, setActive, setAllClientsAccess, hasAllClientsAccess,
+  getUser, listUsers, createUser, hasAllClientsAccess,
   // clients
-  insertClient, deleteClient, getClientById,
+  deleteClient, getClientById,
   // stages
-  insertStage, deleteStagesByClient, getStagesByClient, listClientIdsByDoctorName,
-  // analytics
-  insertAnalyticsCategory, insertAnalyticsMarker, insertAnalyticsValue,
-  deleteAnalyticsByClient, getCategoriesByClient, getMarkersByCategory, getValuesByMarker,
-  // journal
-  insertJournalEntry, deleteJournalByClient, getJournalByStage,
-  // protocol
-  insertProtocolRevision, deleteProtocolByStage, getProtocolByStage,
-  // nutrition revisions
-  insertNutritionRevision, deleteNutritionByStage, getNutritionByStage,
+  listClientIdsByDoctorName,
   // doctors
   insertDoctor, listDoctors, getDoctorByName,
   // roles
-  listRoles, getRoleByName, getRoleById, countUsersByRole, insertRole, updateRoleDisplayName, updateRoleIsClient, deleteRole,
+  getRoleByName, getRoleById, countUsersByRole, insertRole, updateRoleDisplayName, updateRoleIsClient, deleteRole,
   // role sections
   getRoleSections, upsertRoleSection,
   // role permissions
@@ -2290,8 +2105,6 @@ module.exports = {
   // client assignments
   upsertClientAssignment, deleteClientAssignment, getClientAssignment, deleteDoctorClientAssignments, replaceDoctorClientAssignments,
   getAssignmentsByUser, getAssignmentsByClient,
-  // messenger: public keys
-  upsertPublicKey, getPublicKey,
   // messenger: chats
   createChat, getChatById, getChatsByUser, getLastMessageForChat, updateChatMeta, setChatPinned,
   // messenger: participants

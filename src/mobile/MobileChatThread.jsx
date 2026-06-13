@@ -122,6 +122,7 @@ export default function MobileChatThread({ onBack, pendingScrollId }) {
     }
     return items;
   }, [msgList]);
+  const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
 
   const findMessageById = useCallback((id) => {
     const list = messages[activeChatId] || [];
@@ -402,7 +403,7 @@ export default function MobileChatThread({ onBack, pendingScrollId }) {
           <button type="button" onClick={() => {
               if (selectedIds.length === 0) return;
               // Telegram-style: "Удалить у всех" доступен только если все выделенные сообщения мои (или я админ).
-              const list = msgList.filter((m) => selectedIds.includes(m.id));
+              const list = msgList.filter((m) => selectedSet.has(m.id));
               const onlyMine = list.length > 0 && list.every((m) => m.sender_id === user?.id);
               const canForAll = onlyMine || user?.role === "admin";
               setDeleteSheet({ ids: [...selectedIds], canForAll });
@@ -488,7 +489,7 @@ export default function MobileChatThread({ onBack, pendingScrollId }) {
               replyToMessage={item.msg.reply_to_message_id ? findMessageById(item.msg.reply_to_message_id) : null}
               onJumpToMessage={(id) => { const el = messageRefs.current.get(id); el?.scrollIntoView({ behavior: "smooth", block: "center" }); }}
               selectionMode={selectionMode}
-              isSelected={selectedIds.includes(item.msg.id)}
+              isSelected={selectedSet.has(item.msg.id)}
               onToggleSelection={toggleSelection}
             />
             {item.msg.pending && (

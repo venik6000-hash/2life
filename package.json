@@ -33,6 +33,7 @@
     "verify:journal-kanban-static": "node scripts/verifyJournalKanbanStatic.mjs",
     "verify:journal-notifications": "node scripts/verifyJournalNotifications.mjs",
     "verify:client-role-perms": "node scripts/verifyClientRolePermissionsPersist.mjs",
+    "verify:dashboard-optimizations": "node scripts/verifyDashboardOptimizations.mjs",
     "verify:security-hardening": "node scripts/verifySecurityHardening.mjs",
     "verify:auth-client-lifecycle": "node scripts/verifyAuthClientLifecycle.mjs",
     "verify:print-security": "node scripts/verifyPrintSecurity.mjs",

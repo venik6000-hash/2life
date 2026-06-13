@@ -151,7 +151,7 @@ function pendingKey(scope, item) {
   return `${scopePart(scope)}:pending:${item?.id || `${Date.now()}_${Math.random().toString(36).slice(2)}`}`;
 }
 
-export function pruneRecentMessages(messages, now = Date.now()) {
+function pruneRecentMessages(messages, now = Date.now()) {
   const minTime = now - THIRTY_DAYS_MS;
   return Array.from(messages || []).filter((message) => {
     const time = Date.parse(message?.created_at || "");
@@ -159,7 +159,7 @@ export function pruneRecentMessages(messages, now = Date.now()) {
   });
 }
 
-export async function putCachedMessages(chatId, messages, scope) {
+async function putCachedMessages(chatId, messages, scope) {
   const scoped = scopePart(scope);
   const rows = pruneRecentMessages(messages).map((message) => ({
     ...message,

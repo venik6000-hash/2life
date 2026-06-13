@@ -121,10 +121,12 @@ export default function MessengerChatWindow({
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [msgList.length]);
 
+  const lastMsgId = msgList[msgList.length - 1]?.id;
+  const lastMsgSenderId = msgList[msgList.length - 1]?.sender_id;
   useEffect(() => {
     const last = msgList[msgList.length - 1];
     if (last && last.sender_id !== user.id) markRead(chat.id, last.id);
-  }, [msgList.length, chat.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [chat.id, lastMsgId, lastMsgSenderId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const close = () => { setContextMenu(null); setReadersPopover(null); };
@@ -341,13 +343,17 @@ export default function MessengerChatWindow({
     setMetaBusy(false);
   };
 
-  const grouped = [];
-  let lastDate = null;
-  for (const msg of msgList) {
-    const d = fmtDate(msg.created_at);
-    if (d !== lastDate) { grouped.push({ type: "date", d }); lastDate = d; }
-    grouped.push({ type: "msg", msg });
-  }
+  const grouped = useMemo(() => {
+    const items = [];
+    let lastDate = null;
+    for (const msg of msgList) {
+      const d = fmtDate(msg.created_at);
+      if (d !== lastDate) { items.push({ type: "date", d }); lastDate = d; }
+      items.push({ type: "msg", msg });
+    }
+    return items;
+  }, [msgList]);
+  const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
 
   const canEdit = !readOnly && contextMenu?.msg && contextMenu.msg.sender_id === user.id && contextMenu.msg.msg_type === "text" && !contextMenu.msg.deleted_for_all;
   const canDeleteForAll = !readOnly && contextMenu?.msg && (contextMenu.msg.sender_id === user.id || user.role === "admin");
@@ -369,7 +375,7 @@ export default function MessengerChatWindow({
           <button type="button"
             onClick={() => {
               if (selectedIds.length === 0) return;
-              const list = msgList.filter((m) => selectedIds.includes(m.id));
+              const list = msgList.filter((m) => selectedSet.has(m.id));
               const onlyMine = list.length > 0 && list.every((m) => m.sender_id === user.id);
               const canForAll = onlyMine || user.role === "admin";
               setDeleteSheet({ ids: [...selectedIds], canForAll });
@@ -480,7 +486,7 @@ export default function MessengerChatWindow({
                 replyToMessage={item.msg.reply_to_message_id ? findMessageById(item.msg.reply_to_message_id) : null}
                 onJumpToMessage={onJumpToMessage}
                 selectionMode={selectionMode}
-                isSelected={selectedIds.includes(item.msg.id)}
+                isSelected={selectedSet.has(item.msg.id)}
                 onToggleSelection={toggleSelection}
               />
             </div>

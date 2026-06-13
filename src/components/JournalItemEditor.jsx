@@ -5,6 +5,7 @@ import Button from "./Button";
 import Input from "./Input";
 import Wrapper from "./Wrapper";
 import {
+  JOURNAL_ITEM_TYPES,
   JOURNAL_OPEN_STATUSES,
   JOURNAL_STATUS_LABELS,
   JOURNAL_TERMINAL_STATUSES,
@@ -12,7 +13,7 @@ import {
 } from "../utils/journalRules";
 
 const STATUS_KEYS = [...JOURNAL_OPEN_STATUSES, ...JOURNAL_TERMINAL_STATUSES];
-const TYPE_TABS = ["task", "event", "note"];
+const TYPE_TABS = JOURNAL_ITEM_TYPES;
 const PRIORITIES = ["low", "normal", "high", "urgent"];
 
 const toCleanString = (v) => (v == null ? "" : String(v));

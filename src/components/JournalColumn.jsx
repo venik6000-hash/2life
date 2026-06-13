@@ -51,7 +51,10 @@ export default function JournalColumn({
       payload = null;
     }
     if (!payload || payload.type !== "journal-item") return;
-    if (payload.fromStatus === status) return;
+    // 'cancelled' items are bucketed into the visual 'done' column; treat a
+    // drop back into that same column as a no-op instead of un-cancelling.
+    const effectiveFrom = payload.fromStatus === "cancelled" ? "done" : payload.fromStatus;
+    if (effectiveFrom === status) return;
     onDropCard({ id: payload.id, fromStatus: payload.fromStatus, toStatus: status });
   };
 

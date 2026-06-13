@@ -99,11 +99,6 @@ const createBackupSnapshot = async (reason = "auto") => {
   await createPgDump(reason);
 };
 
-const createFullBackupSnapshot = async (reason = "auto") => {
-  await createPgDump(reason);
-  await createUploadsBackup(reason);
-};
-
 const startAutoBackup = () => {
   const intervalMs = BACKUP_INTERVAL_MINUTES * 60 * 1000;
   console.log(`Auto-backup (pg_dump): every ${BACKUP_INTERVAL_MINUTES} min, keep ${BACKUP_KEEP_FILES} files`);
@@ -118,4 +113,4 @@ const startAutoBackup = () => {
   if (typeof uploadsTimer.unref === "function") uploadsTimer.unref();
 };
 
-module.exports = { createPgDump, createUploadsBackup, createBackupSnapshot, createFullBackupSnapshot, startAutoBackup };
+module.exports = { createPgDump, createUploadsBackup, createBackupSnapshot, startAutoBackup };

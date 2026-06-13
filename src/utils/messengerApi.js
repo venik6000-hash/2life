@@ -1,4 +1,4 @@
-export async function apiJson(authFetch, url, options = {}) {
+async function apiJson(authFetch, url, options = {}) {
   const res = await authFetch(url, {
     ...options,
     headers: {

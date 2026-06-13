@@ -85,9 +85,10 @@ export default function MessageBubble({
                 {replyToMessage.sender_display_name || replyToMessage.sender_username}
               </div>
               <div style={{ fontSize: cfg.small, color: replyTextColor, overflow: "hidden", textOverflow: "ellipsis", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>
-                {replyToMessage.msg_type === "image" || replyToMessage.msg_type === "image_bundle" ? "🖼️ Фото" :
+                {replyToMessage.msg_type === "image" ? "🖼️ Фото" :
                  replyToMessage.msg_type === "voice" ? "🎤 Голосовое сообщение" :
-                 replyToMessage.msg_type === "file" || replyToMessage.msg_type === "file_bundle" ? `📎 ${replyToMessage.meta?.fileName || "Файл"}` :
+                 replyToMessage.msg_type === "file" ? `📎 ${replyToMessage.meta?.fileName || "Файл"}` :
+                 replyToMessage.msg_type === "files_bundle" ? "📎 Файлы" :
                  replyToMessage.text}
               </div>
             </button>

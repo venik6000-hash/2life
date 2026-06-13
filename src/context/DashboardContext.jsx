@@ -3,6 +3,8 @@ import { calculateBmiValue } from "../utils/helpers";
 import { useAuth } from "./AuthContext";
 import { fetchJournalBadges } from "../utils/journalApi";
 import { withTimeout } from "../utils/requestTimeout";
+import { buildPatchOps, collapsePatchOps } from "../utils/clientPatch";
+import { getReferenceRefreshType } from "../utils/referenceRefresh";
 
 export const SECTIONS = [
   {id:"overview",ic:"◉",lb:"Обзор"},{id:"questionnaire",ic:"📋",lb:"Анкета"},
@@ -28,43 +30,6 @@ export const isClientRole = (userOrRole) => {
 const DashboardContext = createContext(null);
 const BOOTSTRAP_REQUEST_TIMEOUT_MS = 8000;
 
-const isPlainObject = (value) =>
-  value != null &&
-  typeof value === "object" &&
-  !Array.isArray(value);
-
-const deepEqual = (a, b) => {
-  if (Object.is(a, b)) return true;
-  if (typeof a !== typeof b) return false;
-
-  const aArr = Array.isArray(a);
-  const bArr = Array.isArray(b);
-  if (aArr || bArr) {
-    if (!aArr || !bArr) return false;
-    if (a.length !== b.length) return false;
-    for (let i = 0; i < a.length; i += 1) {
-      if (!deepEqual(a[i], b[i])) return false;
-    }
-    return true;
-  }
-
-  const aObj = isPlainObject(a);
-  const bObj = isPlainObject(b);
-  if (aObj || bObj) {
-    if (!aObj || !bObj) return false;
-    const aKeys = Object.keys(a);
-    const bKeys = Object.keys(b);
-    if (aKeys.length !== bKeys.length) return false;
-    for (const key of aKeys) {
-      if (!Object.prototype.hasOwnProperty.call(b, key)) return false;
-      if (!deepEqual(a[key], b[key])) return false;
-    }
-    return true;
-  }
-
-  return false;
-};
-
 const buildClientIdentity = (name = "", fallbackAvatar = "Н") => {
   const cleaned = String(name || "").trim();
   const parts = cleaned.split(/\s+/).filter(Boolean);
@@ -72,74 +37,6 @@ const buildClientIdentity = (name = "", fallbackAvatar = "Н") => {
     shortName: parts.slice(0, 2).join(" ") || cleaned,
     avatar: parts.slice(0, 2).map(w => (w[0] || "").toUpperCase()).join("") || fallbackAvatar
   };
-};
-
-const buildPatchOps = (prevValue, nextValue, path = []) => {
-  const ops = [];
-
-  const walk = (prevNode, nextNode, currentPath) => {
-    if (deepEqual(prevNode, nextNode)) return;
-
-    const prevObj = isPlainObject(prevNode);
-    const nextObj = isPlainObject(nextNode);
-    if (prevObj && nextObj) {
-      const keys = new Set([...Object.keys(prevNode), ...Object.keys(nextNode)]);
-      keys.forEach((key) => {
-        if (!Object.prototype.hasOwnProperty.call(nextNode, key)) {
-          ops.push({ op: "delete", path: [...currentPath, key] });
-          return;
-        }
-        if (!Object.prototype.hasOwnProperty.call(prevNode, key)) {
-          ops.push({ op: "set", path: [...currentPath, key], value: nextNode[key] });
-          return;
-        }
-        walk(prevNode[key], nextNode[key], [...currentPath, key]);
-      });
-      return;
-    }
-
-    const prevArr = Array.isArray(prevNode);
-    const nextArr = Array.isArray(nextNode);
-    if (prevArr || nextArr) {
-      if (!prevArr || !nextArr) {
-        ops.push({ op: "set", path: [...currentPath], value: nextNode });
-        return;
-      }
-      const minLen = Math.min(prevNode.length, nextNode.length);
-      for (let i = 0; i < minLen; i += 1) {
-        walk(prevNode[i], nextNode[i], [...currentPath, i]);
-      }
-      if (nextNode.length > prevNode.length) {
-        for (let i = prevNode.length; i < nextNode.length; i += 1) {
-          ops.push({ op: "set", path: [...currentPath, i], value: nextNode[i] });
-        }
-      } else if (prevNode.length > nextNode.length) {
-        for (let i = prevNode.length - 1; i >= nextNode.length; i -= 1) {
-          ops.push({ op: "delete", path: [...currentPath, i] });
-        }
-      }
-      return;
-    }
-
-    ops.push({ op: "set", path: [...currentPath], value: nextNode });
-  };
-
-  walk(prevValue, nextValue, path);
-  return ops;
-};
-
-const collapsePatchOps = (ops = []) => {
-  const seen = new Set();
-  const compact = [];
-  const pathKey = (path = []) => path.map(String).join(".");
-  for (let i = ops.length - 1; i >= 0; i -= 1) {
-    const op = ops[i];
-    const key = pathKey(op?.path || []);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    compact.push(op);
-  }
-  return compact.reverse();
 };
 
 export function DashboardProvider({ children }) {
@@ -376,22 +273,34 @@ export function DashboardProvider({ children }) {
     return () => { cancelled = true; };
   }, [authFetch, fetchReferenceItems, normalizeDoctors, canReadSection]);
 
+  const previousReferenceSectionRef = useRef(sec);
   useEffect(() => {
-    if (!loaded) return;
-    const deficitPresetsPromise = canReadSection("overview")
-      ? fetchReferenceItems("deficit_preset")
-      : Promise.resolve([]);
-    const labOrderPromise = canReadSection("lab")
-      ? fetchReferenceItems("lab_order_item")
-      : Promise.resolve([]);
+    const previousSection = previousReferenceSectionRef.current;
+    previousReferenceSectionRef.current = sec;
 
-    Promise.all([
-      deficitPresetsPromise,
-      labOrderPromise
-    ]).then(([deficitItems, labItems]) => {
-      setDeficitPresets(Array.isArray(deficitItems) ? deficitItems : []);
-      setLabOrderTemplates(Array.isArray(labItems) ? labItems : []);
-    }).catch(() => {});
+    if (loaded && sec === "overview" && !canReadSection("overview")) {
+      setDeficitPresets([]);
+      return;
+    }
+    if (loaded && sec === "lab" && !canReadSection("lab")) {
+      setLabOrderTemplates([]);
+      return;
+    }
+
+    const referenceType = getReferenceRefreshType(loaded, previousSection, sec);
+    if (!referenceType) return;
+
+    let cancelled = false;
+    fetchReferenceItems(referenceType)
+      .then((items) => {
+        if (cancelled) return;
+        const nextItems = Array.isArray(items) ? items : [];
+        if (referenceType === "deficit_preset") setDeficitPresets(nextItems);
+        if (referenceType === "lab_order_item") setLabOrderTemplates(nextItems);
+      })
+      .catch(() => {});
+
+    return () => { cancelled = true; };
   }, [sec, loaded, fetchReferenceItems, canReadSection]);
 
   useEffect(() => {
@@ -685,11 +594,10 @@ export function DashboardProvider({ children }) {
     if (!cid) return;
     setCls(p=>p.map(c=>{
       if (c.id !== cid) return c;
-      const prevClient = structuredClone(c);
       const draftClient = structuredClone(c);
       const nextClient = fn(draftClient);
       const resolvedClient = nextClient && typeof nextClient === "object" ? nextClient : draftClient;
-      queueClientPatchOps(cid, prevClient, resolvedClient);
+      queueClientPatchOps(cid, c, resolvedClient);
       return resolvedClient;
     }));
   },[cid, queueClientPatchOps, canWriteActiveSection]);

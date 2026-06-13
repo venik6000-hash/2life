@@ -1,4 +1,5 @@
 import { useTheme } from "../context/ThemeContext";
+import { isImageLike, parseBundleFiles } from "../utils/messengerUiUtils";
 
 export default function MessengerPinBar({ pinnedMessages, currentIndex = 0, onClickNext, onUnpin, canUnpin = true }) {
   const { $ } = useTheme();
@@ -10,8 +11,18 @@ export default function MessengerPinBar({ pinnedMessages, currentIndex = 0, onCl
 
   const preview = (() => {
     if (current.deleted_for_all) return "Сообщение удалено";
-    if (current.msg_type === "file" || current.msg_type === "file_bundle") return `📎 ${current.meta?.fileName || "Файл"}`;
-    if (current.msg_type === "image" || current.msg_type === "image_bundle") return "🖼️ Фото";
+    if (current.msg_type === "files_bundle") {
+      const files = parseBundleFiles(current.text);
+      if (files.length === 0) return "📎 Файлы";
+      if (files.length === 1) {
+        const f = files[0];
+        return isImageLike(f.type, f.name, f.thumb) ? "🖼 Фото" : `📎 ${f.name || "Файл"}`;
+      }
+      const allImages = files.every((f) => isImageLike(f.type, f.name, f.thumb));
+      return allImages ? `🖼 Фото (${files.length})` : `📎 ${files.length} файлов`;
+    }
+    if (current.msg_type === "file") return `📎 ${current.meta?.fileName || "Файл"}`;
+    if (current.msg_type === "image") return "🖼️ Фото";
     return (current.text || "").slice(0, 120);
   })();
 

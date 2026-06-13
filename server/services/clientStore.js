@@ -191,9 +191,10 @@ const getOneClient = async (clientId) => {
 const getClientsForUser = async (userId, role) => {
   if (role === "admin" || await hasAllClientsAccess(userId)) return getClients();
   const assignedRows = await getAssignmentsByUser(userId);
-  const assignedIds = new Set(assignedRows.map(r => r.client_id));
-  const r = await pool.query("SELECT * FROM clients ORDER BY id");
-  return buildClientsBatch(r.rows.filter((row) => assignedIds.has(row.id)));
+  const assignedIds = assignedRows.map(r => r.client_id);
+  if (assignedIds.length === 0) return [];
+  const r = await pool.query("SELECT * FROM clients WHERE id = ANY($1) ORDER BY id", [assignedIds]);
+  return buildClientsBatch(r.rows);
 };
 
 // ─── Write (JS objects → PostgreSQL) ────────────────────────────────────────
@@ -220,9 +221,9 @@ const _writeOneClient = async (client, pgClient) => {
   for (const stage of stages) {
     const stageNum = toInt(stage.id);
 
-    await q(
+    const ins = await q(
       `INSERT INTO stages (client_id, stage_num, title, subtitle, doctor, doctor_role, date_start, date_end, status, email, phone, city, height, weight_current, weight_goal, bmi, waist, tasks_json, syndromes_json, diagnoses_json, deficits_json, auto_deficit_selection_json, lab_order_selected_json, lab_order_group_order_json, nutrition_json, injections_json, injection_schedule_json, questionnaire_json)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28)`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28) RETURNING id`,
       [
         clientId,
         stageNum,
@@ -255,10 +256,9 @@ const _writeOneClient = async (client, pgClient) => {
       ]
     );
 
-    // Get the auto-increment id for this stage
-    const stageRow = (await q("SELECT id FROM stages WHERE client_id = $1 AND stage_num = $2", [clientId, stageNum])).rows[0];
-    if (!stageRow) continue;
-    const stageDbId = stageRow.id;
+    // Auto-increment id for this stage, returned directly by the INSERT above.
+    const stageDbId = ins.rows[0]?.id;
+    if (!stageDbId) continue;
 
     // Protocol revisions
     const protocolRevisions = Array.isArray(stage.protocolRevisions) ? stage.protocolRevisions : [];

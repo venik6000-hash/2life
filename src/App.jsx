@@ -1,12 +1,12 @@
-import { Component, useEffect, useState } from 'react';
+import { Component, useEffect, useState, lazy, Suspense } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { ThemeProvider } from './context/ThemeContext';
 import { EditorProvider } from './context/EditorContext';
 import { DashboardProvider } from './context/DashboardContext';
 import { MessengerProvider } from './context/MessengerContext';
 import Dashboard from './dashboard';
-import LoginScreen from './components/LoginScreen';
-import MobileLoginScreen from './components/MobileLoginScreen';
+const LoginScreen = lazy(() => import('./components/LoginScreen'));
+const MobileLoginScreen = lazy(() => import('./components/MobileLoginScreen'));
 import LoadingScreen from './components/LoadingScreen';
 import MessengerApp from './mobile/MessengerApp';
 import { isDesktopMessengerPath, isMobileAppPath, isMobileViewport } from './utils/device';
@@ -49,7 +49,11 @@ function AppInner() {
   const wantsDesktopMessenger = isDesktopMessengerPath(pathname);
 
   if (checking) return <LoadingScreen />;
-  if (!user) return wantsMobileApp || isMobileViewport() ? <MobileLoginScreen /> : <LoginScreen />;
+  if (!user) return (
+    <Suspense fallback={<LoadingScreen />}>
+      {wantsMobileApp || isMobileViewport() ? <MobileLoginScreen /> : <LoginScreen />}
+    </Suspense>
+  );
   if (wantsMobileApp) return <MessengerApp />;
   if (wantsDesktopMessenger) localStorage.setItem('dash_sec', 'messenger');
 

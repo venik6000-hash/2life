@@ -5,7 +5,7 @@ export const PROTOCOL_SLOTS = [
   { id: "night", label: "На ночь", tint: "#c6d7f4", rail: "#7ea1df", head: "#2d9c96" }
 ];
 
-export const PROTOCOL_SLOT_MAP = Object.fromEntries(PROTOCOL_SLOTS.map(slot => [slot.id, slot]));
+const PROTOCOL_SLOT_MAP = Object.fromEntries(PROTOCOL_SLOTS.map(slot => [slot.id, slot]));
 
 export const normalizeProtocolText = (value) =>
   String(value || "")

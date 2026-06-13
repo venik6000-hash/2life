@@ -55,7 +55,7 @@ const addDaysIso = (iso, days) => {
   return `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, "0")}-${String(dt.getUTCDate()).padStart(2, "0")}`;
 };
 
-export const JOURNAL_ACTUAL_FUTURE_DAYS = 7;
+const JOURNAL_ACTUAL_FUTURE_DAYS = 7;
 
 export const isJournalActual = (
   item,

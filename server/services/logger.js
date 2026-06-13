@@ -123,4 +123,4 @@ const appendActivityLog = async (entries = []) => {
   }
 };
 
-module.exports = { toMapById, pickActor, buildActionLogs, appendActivityLog };
+module.exports = { buildActionLogs, appendActivityLog };

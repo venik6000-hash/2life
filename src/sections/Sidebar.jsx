@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useDashboard } from "../context/DashboardContext";
 import { useAuth } from "../context/AuthContext";
 import { sortClientsByName } from "../utils/clientSort";
@@ -18,7 +18,7 @@ export default function Sidebar() {
   const [loggingOut, setLoggingOut] = useState(false);
 
   const city = cl ? (cl.stages?.[si]?.city ?? cl.city ?? "") : "";
-  const sortedClients = sortClientsByName(cls);
+  const sortedClients = useMemo(() => sortClientsByName(cls), [cls]);
   const canRenameClients = user?.role === "admin";
 
   const handleRenameClient = (client) => {

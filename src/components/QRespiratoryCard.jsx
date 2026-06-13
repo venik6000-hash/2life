@@ -5,8 +5,8 @@ import QCommentBlock from "./QCommentBlock";
 import { makeFieldSaver } from "../utils/questionnaireUtils";
 
 export default function QRespiratoryCard({ data, path, uS, readOnly = false }) {
-  if (!data || typeof data !== "object") return null;
   const { $ } = useTheme();
+  if (!data || typeof data !== "object") return null;
   const save = makeFieldSaver(uS, path);
   const qa = (k, label, sub = false) => (
     <QaRow key={k} label={label} fieldKey={`q-${path}-${k}`} value={data[k]} onSave={v => save(k, v)} sub={sub} readOnly={readOnly} />

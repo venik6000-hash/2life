@@ -33,7 +33,7 @@ function controlStyle($, cfg, extra = {}) {
   };
 }
 
-export function MessengerSettingsPanelContent({
+function MessengerSettingsPanelContent({
   $,
   dk,
   setDk,

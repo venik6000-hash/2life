@@ -112,6 +112,5 @@ module.exports = {
   decryptPrivateKeyFromRecovery,
   wrapPrivateKeyForPassword,
   decryptPrivateKeyFromPassword,
-  publicJwkFromPrivateJwk,
   publicJwkFromRecovery,
 };

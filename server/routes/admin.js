@@ -403,12 +403,22 @@ router.get("/admin/activity", requireAuth("admin"), async (req, res) => {
 // --- Stats ---
 router.get("/admin/stats", requireAuth("admin"), async (req, res) => {
   try {
-    const clientsCount  = (await pool.query("SELECT COUNT(*) as n FROM clients")).rows[0].n;
-    const stagesCount   = (await pool.query("SELECT COUNT(*) as n FROM stages")).rows[0].n;
-    const usersCount    = (await pool.query("SELECT COUNT(*) as n FROM users WHERE active = true")).rows[0].n;
-    const doctorsCount  = (await pool.query("SELECT COUNT(*) as n FROM doctors")).rows[0].n;
-    const lastActivity  = (await pool.query("SELECT ts FROM activity_log ORDER BY ts DESC LIMIT 1")).rows[0];
-    res.json({ ok: true, clientsCount: parseInt(clientsCount, 10), stagesCount: parseInt(stagesCount, 10), usersCount: parseInt(usersCount, 10), doctorsCount: parseInt(doctorsCount, 10), lastActivityTs: lastActivity?.ts || null });
+    const { rows: [stats] } = await pool.query(`
+      SELECT
+        (SELECT COUNT(*) FROM clients) AS clients_count,
+        (SELECT COUNT(*) FROM stages) AS stages_count,
+        (SELECT COUNT(*) FROM users WHERE active = true) AS users_count,
+        (SELECT COUNT(*) FROM doctors) AS doctors_count,
+        (SELECT ts FROM activity_log ORDER BY ts DESC LIMIT 1) AS last_activity_ts
+    `);
+    res.json({
+      ok: true,
+      clientsCount: parseInt(stats.clients_count, 10),
+      stagesCount: parseInt(stats.stages_count, 10),
+      usersCount: parseInt(stats.users_count, 10),
+      doctorsCount: parseInt(stats.doctors_count, 10),
+      lastActivityTs: stats.last_activity_ts || null
+    });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

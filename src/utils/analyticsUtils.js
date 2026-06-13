@@ -1,7 +1,7 @@
 import { DEFICIT_RULES } from "../data/deficitRules";
 import { normalizeAnalyticsKey } from "../data/analyticsData";
 
-export const parseAnalyticsDate = (value) => {
+const parseAnalyticsDate = (value) => {
   if (!value) return { y: 0, m: 0, d: 0, raw: "" };
   const s = String(value).trim();
 
@@ -17,7 +17,7 @@ export const parseAnalyticsDate = (value) => {
   return { y: 0, m: 0, d: 0, raw: s };
 };
 
-export const sortAnalyticsDates = (dates) =>
+const sortAnalyticsDates = (dates) =>
   [...new Set(dates)].sort((a, b) => {
     const A = parseAnalyticsDate(a);
     const B = parseAnalyticsDate(b);
@@ -27,7 +27,7 @@ export const sortAnalyticsDates = (dates) =>
     return String(a).localeCompare(String(b));
   });
 
-export const toMetricNumber = (value) => {
+const toMetricNumber = (value) => {
   if (value == null || value === "") return null;
   const s = String(value).replace(/,/g, ".").trim();
   const m = s.match(/-?\d+(?:\.\d+)?/);
@@ -36,7 +36,7 @@ export const toMetricNumber = (value) => {
   return Number.isFinite(n) ? n : null;
 };
 
-export const parseOptimalRule = (raw) => {
+const parseOptimalRule = (raw) => {
   const s = String(raw || "")
     .toLowerCase()
     .replace(/,/g, ".")
@@ -75,7 +75,7 @@ export const parseOptimalRule = (raw) => {
   return { type: "none" };
 };
 
-export const matchesOptimalRule = (value, rule) => {
+const matchesOptimalRule = (value, rule) => {
   if (value == null || !rule || rule.type === "none") return false;
   switch (rule.type) {
     case "range":
@@ -114,7 +114,7 @@ export const getMarkerStatus = (marker, rawValue) => {
   return "ok";
 };
 
-export const getLatestAnalyticsDate = (cats=[]) => {
+const getLatestAnalyticsDate = (cats=[]) => {
   const allD = sortAnalyticsDates(cats.flatMap(c=>c.markers.flatMap(m=>m.values.map(v=>v.date))));
   return allD[allD.length-1] || null;
 };

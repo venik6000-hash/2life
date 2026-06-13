@@ -126,13 +126,11 @@ const filterClientForPermissions = (client, permissions) => {
 };
 
 module.exports = {
-  CLIENT_OVERVIEW_FIELDS,
   CLIENT_OVERVIEW_FIELD_SET,
   STAGE_FIELD_SECTION_MAP,
   STAGE_FIELDS_BY_SECTION,
   PROTECTED_SECTIONS,
   isSectionReadable,
-  isSectionWritable,
   sectionsForStageObject,
   sectionsForClient,
   filterClientForPermissions,

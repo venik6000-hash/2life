@@ -1,6 +1,5 @@
 export const sevColors = { high: "dn", medium: "wr", low: "in" };
 export const sevLabels = { high: "Высокий", medium: "Средний", low: "Низкий" };
-export const jColors = { "Консультация": "#6366f1", "Старт": "#22c997", "Созвон": "#42a5f5", "Обследование": "#ffb74d", "Заметка": "#8892a4" };
 
 export const TH = {
   dark: { bg:"#06080e",bgC:"#0d1017",bgI:"#181d28",brd:"#1c2233",tx:"#e4e8f0",txS:"#7d89a1",txM:"#4e586d",ac:"#22c997",acD:"rgba(34,201,151,.1)",dn:"#ef5350",dnD:"rgba(239,83,80,.1)",wr:"#ffb74d",wrD:"rgba(255,183,77,.1)",in:"#42a5f5",inD:"rgba(66,165,245,.1)",pu:"#a78bfa",puD:"rgba(167,139,250,.1)",sh:"0 4px 24px rgba(0,0,0,.5)" },
