@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, useCallback } from "react";
+import { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
 import { clearPendingPassword } from "../utils/cryptoSession";
 import { withNoStoreCache, TimeoutError } from "../utils/fetchOptions";
 import { deepEqual } from "../utils/deepEqual";
@@ -27,6 +27,14 @@ export function AuthProvider({ children }) {
   const [permissions, setPermissions] = useState(null);
   const [checking,    setChecking]    = useState(true);
 
+  // A token that arrived from an interactive login already carries fresh
+  // user+permissions in state, so the immediate /api/auth/me re-validation below
+  // is redundant for it. Skipping that one request removes a competitor for the
+  // (often throttled) network right after login — the contention that let the
+  // first /api/clients load time out and flash the "Нет клиентов" screen. Tokens
+  // restored from localStorage on a cold start are still re-validated as before.
+  const freshLoginTokenRef = useRef(null);
+
   const clearSessionCache = useCallback(() => {
     try {
       for (let i = localStorage.length - 1; i >= 0; i--) {
@@ -53,6 +61,13 @@ export function AuthProvider({ children }) {
 
   useEffect(() => {
     if (!token) { setChecking(false); return; }
+    // Just logged in: user + permissions are already authoritative, skip the
+    // redundant re-validation (and free the network for /api/clients).
+    if (freshLoginTokenRef.current === token) {
+      freshLoginTokenRef.current = null;
+      setChecking(false);
+      return;
+    }
     const requestToken = token;
     const controller = (typeof AbortController !== "undefined") ? new AbortController() : null;
     const timer = controller ? setTimeout(() => controller.abort(), 10000) : null;
@@ -115,6 +130,9 @@ export function AuthProvider({ children }) {
     }
 
     applySession(data.token, data.user, data.permissions);
+    // Only skip the immediate /me when login actually returned permissions;
+    // otherwise let /me run so permissions are never left unset.
+    if (data.permissions) freshLoginTokenRef.current = data.token;
     return data.user;
   }, [applySession]);
 

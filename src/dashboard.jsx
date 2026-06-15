@@ -51,6 +51,8 @@ export default function Dashboard() {
     deficitPresets,
     labOrderTemplates,
     loaded,
+    bootstrapSlow,
+    retryBootstrap,
     cl: currentClient,
     st: currentStage,
     stageProfile,
@@ -106,7 +108,7 @@ export default function Dashboard() {
     setPri: setProtocolRevisionIndex,
   };
 
-  if(!loaded) return <LoadingScreen />;
+  if(!loaded) return <LoadingScreen slow={bootstrapSlow} onRetry={retryBootstrap} />;
   if(!currentClient||!currentStage) return (
     <NoClientsScreen
       canCreateClient={canCreateClient}

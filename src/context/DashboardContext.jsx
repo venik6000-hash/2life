@@ -56,6 +56,16 @@ export function DashboardProvider({ children }) {
   const [deficitPresets, setDeficitPresets] = useState([]);
   const [labOrderTemplates, setLabOrderTemplates] = useState([]);
   const [loaded, setLoaded] = useState(false);
+  // True once the first client-list load has been retrying past its first slow
+  // attempt — drives the "соединение медленное" hint + manual retry on the
+  // loading screen. `bootstrapNonce` lets that retry button re-run the bootstrap
+  // immediately; `loadedRef` tells the bootstrap whether this is the very first
+  // load (retry until authoritative) or a later refresh (single attempt, keep
+  // current list on a transient failure).
+  const [bootstrapSlow, setBootstrapSlow] = useState(false);
+  const [bootstrapNonce, setBootstrapNonce] = useState(0);
+  const loadedRef = useRef(false);
+  const retryBootstrap = useCallback(() => setBootstrapNonce((n) => n + 1), []);
   const [journalBadges, setJournalBadges] = useState({});
   const allowEmptyDoctorsSaveRef = useRef(false);
 
@@ -182,6 +192,7 @@ export function DashboardProvider({ children }) {
 
   useEffect(() => {
     let cancelled = false;
+    let retryTimer = null;
 
     const applyClients = (data) => {
       if (!Array.isArray(data) || data.length === 0) {
@@ -226,32 +237,58 @@ export function DashboardProvider({ children }) {
       setLabOrderTemplates(labItems || []);
     };
 
+    // One attempt at the client list. The verdict tells the caller whether the
+    // answer is AUTHORITATIVE (apply it) or a transient failure (timeout / network
+    // drop / 5xx / a body cut off mid-stream) that must be RETRIED rather than
+    // mistaken for "no clients". A 401 already cleared the session inside authFetch.
+    const fetchClientsOnce = async () => {
+      const res = await withTimeout(
+        authFetch("/api/clients").catch(() => null),
+        null,
+        BOOTSTRAP_REQUEST_TIMEOUT_MS
+      );
+      if (res && res.ok) {
+        const data = await res.json().catch(() => null);
+        // A 200 here is always a JSON array; a non-array body means the response
+        // was truncated (common under throttling) → transient, NOT empty.
+        if (Array.isArray(data)) return { status: "ok", clients: data };
+        return { status: "transient" };
+      }
+      if (res && res.status < 500) return { status: "empty" }; // authoritative 4xx
+      return { status: "transient" }; // res === null (timeout / network) or 5xx
+    };
+
+    const sleep = (ms) => new Promise((resolve) => { retryTimer = setTimeout(resolve, ms); });
+
     const loadInitialData = async () => {
-      try {
-        // Distinguish a transient failure (timeout / network drop / 5xx) from an
-        // authoritative response. On a transient failure we keep any already-loaded
-        // client list instead of blanking the dashboard. An authoritative 4xx (e.g.
-        // 403 "no readable section") still yields [] so revoked access clears the
-        // list as before; a 401 already cleared the session inside authFetch.
-        // The .catch on authFetch maps a network error to `null` (transient) and
-        // absorbs a late rejection if its own 10s abort fires after this 8s timeout.
-        let clients; // undefined ⇒ transient failure ⇒ keep current list
-        const res = await withTimeout(
-          authFetch("/api/clients").catch(() => null),
-          null,
-          BOOTSTRAP_REQUEST_TIMEOUT_MS
-        );
-        if (res && res.ok) {
-          const data = await res.json().catch(() => null);
-          clients = Array.isArray(data) ? data : [];
-        } else if (res && res.status < 500) {
-          clients = []; // authoritative no-access → clear
-        }
-        // res === null (timeout / network) or res.status >= 500 → leave undefined (transient)
+      if (loadedRef.current) {
+        // Refresh of an already-loaded dashboard (e.g. permissions changed live).
+        // Single attempt; on a transient failure keep the current list on screen
+        // instead of blanking it. `loaded` is already true.
+        const result = await fetchClientsOnce();
         if (cancelled) return;
-        if (clients !== undefined) applyClients(clients);
-      } finally {
-        if (!cancelled) setLoaded(true);
+        if (result.status === "ok") applyClients(result.clients);
+        else if (result.status === "empty") applyClients([]); // access revoked → clear
+        // transient → keep whatever is already shown
+      } else {
+        // First load: never flip `loaded` until we have an AUTHORITATIVE answer, so
+        // a slow/failed load can no longer surface the "Нет клиентов" screen. Keep
+        // retrying with capped backoff so the connection self-heals without a manual
+        // page reload; the empty screen appears only when the server truly returns none.
+        let attempt = 0;
+        while (!cancelled) {
+          const result = await fetchClientsOnce();
+          if (cancelled) return;
+          if (result.status === "ok") { applyClients(result.clients); break; }
+          if (result.status === "empty") { applyClients([]); break; }
+          attempt += 1;
+          setBootstrapSlow(true); // show "соединение медленное" + retry button
+          await sleep(Math.min(1000 * 2 ** (attempt - 1), 15000)); // 1,2,4,8,15s…
+        }
+        if (cancelled) return;
+        setBootstrapSlow(false);
+        loadedRef.current = true;
+        setLoaded(true);
       }
 
       try {
@@ -268,10 +305,18 @@ export function DashboardProvider({ children }) {
     };
 
     loadInitialData().catch(() => {
-      if (!cancelled) setLoaded(true);
+      // Last-resort guard: the loop only exits on an authoritative result or
+      // cancellation, so this should not normally run.
+      if (!cancelled) {
+        setBootstrapSlow(false);
+        if (!loadedRef.current) { loadedRef.current = true; setLoaded(true); }
+      }
     });
-    return () => { cancelled = true; };
-  }, [authFetch, fetchReferenceItems, normalizeDoctors, canReadSection]);
+    return () => {
+      cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
+    };
+  }, [authFetch, fetchReferenceItems, normalizeDoctors, canReadSection, bootstrapNonce]);
 
   const previousReferenceSectionRef = useRef(sec);
   useEffect(() => {
@@ -812,6 +857,7 @@ export function DashboardProvider({ children }) {
     cls, setCls, cid, setCid, si, setSi, sec, setSec,
     so, setSo, pk, setPk, md, setMd, pri, setPri, nri, setNri,
     doctors, setDoctors, deficitPresets, labOrderTemplates, loaded,
+    bootstrapSlow, retryBootstrap,
     visibleSections, canReadSection, canWriteSection, canWriteActiveSection,
     canCreateClient, canDeleteClient, canImportData, isAdmin,
     cl, st, stageProfile, autoBmiValue,
@@ -820,6 +866,7 @@ export function DashboardProvider({ children }) {
   }), [
     cls, cid, si, sec, so, pk, md, pri, nri,
     doctors, deficitPresets, labOrderTemplates, loaded,
+    bootstrapSlow, retryBootstrap,
     visibleSections, canReadSection, canWriteSection, canWriteActiveSection,
     canCreateClient, canDeleteClient, canImportData, isAdmin,
     cl, st, stageProfile, autoBmiValue,
