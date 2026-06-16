@@ -65,7 +65,7 @@ async function refreshAccessToken({ refreshToken, clientId, clientSecret }) {
 }
 async function tokenRequest(body) {
   const res = await fetch(WHOOP_TOKEN_URL, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body });
-  if (!res.ok) throw new Error(`WHOOP token ${res.status}: ${await res.text().catch(() => "")}`);
+  if (!res.ok) { const err = new Error(`WHOOP token ${res.status}: ${await res.text().catch(() => "")}`); err.status = res.status; throw err; }
   return res.json(); // { access_token, refresh_token, expires_in, scope, ... }
 }
 async function getJson(path, accessToken, query = {}) {
