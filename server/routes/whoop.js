@@ -21,6 +21,7 @@ const readState = (state) => { try { const s = JSON.parse(decryptText(state)); r
 router.get("/wave/whoop/status", requireAuth(), requireSectionRead("wave"), async (req, res) => {
   try {
     const clientId = String(req.query.cid || "");
+    if (!clientId) return res.status(400).json({ error: "Не указан клиент" });
     if (!(await canAccessClient(req.user, clientId))) return res.status(403).json({ error: "Нет доступа" });
     const conn = await store.getConnectionByClient(clientId);
     res.json({ ok: true, connected: !!(conn && conn.status === "active") });
@@ -30,6 +31,7 @@ router.get("/wave/whoop/status", requireAuth(), requireSectionRead("wave"), asyn
 router.get("/wave/whoop/connect", requireAuth(), requireSectionWrite("wave"), async (req, res) => {
   try {
     const clientId = String(req.query.cid || "");
+    if (!clientId) return res.status(400).json({ error: "Не указан клиент" });
     if (!CLIENT_ID || !REDIRECT_URI) return res.status(500).json({ error: "WHOOP не сконфигурирован" });
     if (!(await canAccessClient(req.user, clientId))) return res.status(403).json({ error: "Нет доступа" });
     res.redirect(whoop.buildAuthorizeUrl({ clientId: CLIENT_ID, redirectUri: REDIRECT_URI, state: makeState(clientId, req.user.id) }));
@@ -57,6 +59,8 @@ router.post("/wave/whoop/webhook", async (req, res) => {
   try {
     const ok = whoop.verifyWebhookSignature({ timestamp: req.get("X-WHOOP-Signature-Timestamp"), rawBody: req.rawBody, signature: req.get("X-WHOOP-Signature"), secret: CLIENT_SECRET });
     if (!ok) return res.status(401).end();
+    const tsMs = Number(req.get("X-WHOOP-Signature-Timestamp") || 0);
+    if (!tsMs || Math.abs(Date.now() - tsMs) > 300000) return res.status(401).end(); // reject replays / stale (>5 min)
     res.status(200).end(); // ack fast; process async
     const evt = req.body || {};
     if (!/^(recovery|sleep|workout)\./.test(String(evt.type || ""))) return;
@@ -76,6 +80,7 @@ router.post("/wave/whoop/webhook", async (req, res) => {
 router.post("/wave/whoop/disconnect", requireAuth(), requireSectionWrite("wave"), async (req, res) => {
   try {
     const clientId = String(req.body?.cid || "");
+    if (!clientId) return res.status(400).json({ error: "Не указан клиент" });
     if (!(await canAccessClient(req.user, clientId))) return res.status(403).json({ error: "Нет доступа" });
     await store.deleteConnection(clientId);
     if (req.body?.purge) await store.purgeObjective(clientId);
