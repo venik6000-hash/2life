@@ -16,6 +16,7 @@ const QuestionnaireSection = lazy(() => import("./sections/Questionnaire"));
 import ModalsSection from "./sections/Modals";
 const AdminSection = lazy(() => import("./sections/AdminSection"));
 const MessengerSection = lazy(() => import("./sections/Messenger"));
+const WaveSection = lazy(() => import("./sections/Wave"));
 import LoadingScreen from "./components/LoadingScreen";
 import NoClientsScreen from "./components/NoClientsScreen";
 import DashboardShell from "./components/DashboardShell";
@@ -256,6 +257,7 @@ export default function Dashboard() {
     lab: renderLabOrderSection,
     journal: renderJournalSection,
     messenger: () => <MessengerSection />,
+    wave: () => <WaveSection />,
     admin: () => <AdminSection />
   };
   const isSectionReadOnly = activeSectionId !== "admin" && !canWriteSection(activeSectionId);

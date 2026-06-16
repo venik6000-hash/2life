@@ -12,6 +12,7 @@ export const SECTIONS = [
   {id:"injections",ic:"💉",lb:"Инъекции"},
   {id:"analytics",ic:"📊",lb:"Анализы"},{id:"lab",ic:"🔬",lb:"Направление"},{id:"journal",ic:"📓",lb:"Журнал"},
   {id:"messenger",ic:"💬",lb:"Мессенджер"},
+  {id:"wave",ic:"🌊",lb:"Моя волна"},
 ];
 
 // Accepts a user-like object carrying the explicit is_client flag (set by the
