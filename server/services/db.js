@@ -928,6 +928,61 @@ const initSchema = async () => {
     if (result?.migrated > 0) console.log(`[journal] backfilled ${result.migrated} legacy entries`);
   });
 
+  await runOnce("2026-06_create_wave_tables", async (c) => {
+    await c.query(`
+      CREATE TABLE IF NOT EXISTS wave_checkins (
+        id            SERIAL PRIMARY KEY,
+        client_id     TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+        user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        checkin_date  DATE NOT NULL,
+        scores        JSONB NOT NULL DEFAULT '{}'::jsonb,
+        context_tags  JSONB NOT NULL DEFAULT '[]'::jsonb,
+        weight        NUMERIC,
+        resting_hr    INTEGER,
+        note          TEXT NOT NULL DEFAULT '',
+        objective     JSONB NOT NULL DEFAULT '{}'::jsonb,
+        source        TEXT NOT NULL DEFAULT 'manual',
+        ingested_at   TIMESTAMPTZ,
+        created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+        UNIQUE(client_id, checkin_date)
+      );
+
+      CREATE TABLE IF NOT EXISTS wave_reactions (
+        id              SERIAL PRIMARY KEY,
+        client_id       TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+        author_user_id  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        pinned_date     DATE NOT NULL,
+        kind            TEXT NOT NULL DEFAULT 'ack',
+        text            TEXT NOT NULL DEFAULT '',
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+      CREATE INDEX IF NOT EXISTS idx_wave_reactions_client ON wave_reactions(client_id, pinned_date);
+
+      CREATE TABLE IF NOT EXISTS wave_flags (
+        id          SERIAL PRIMARY KEY,
+        client_id   TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+        flag_date   DATE NOT NULL,
+        kind        TEXT NOT NULL,
+        metric      TEXT NOT NULL DEFAULT '',
+        magnitude   NUMERIC NOT NULL DEFAULT 0,
+        status      TEXT NOT NULL DEFAULT 'open',
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+        UNIQUE(client_id, flag_date, kind)
+      );
+      CREATE INDEX IF NOT EXISTS idx_wave_flags_open ON wave_flags(client_id, status);
+    `);
+  });
+
+  await runOnce("2026-06_wave_role_sections", async (c) => {
+    await c.query(`
+      INSERT INTO role_sections (role_id, section_id, can_read, can_write)
+      SELECT r.id, 'wave', true, true
+      FROM roles r
+      ON CONFLICT (role_id, section_id) DO UPDATE SET can_read = true, can_write = true
+    `);
+  });
+
 };
 
 // ─── Users ──────────────────────────────────────────────────────────────────
