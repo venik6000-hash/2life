@@ -35,6 +35,7 @@ export default function WaveSection() {
   useEffect(() => { load(); }, [load]);
 
   const submit = async () => {
+    if (!cid) return;
     setSaving(true);
     const res = await authFetch(`/api/clients/${encodeURIComponent(cid)}/wave/checkin`, {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -43,6 +44,7 @@ export default function WaveSection() {
     if (res && res.ok) await load();
   };
   const react = async (pinnedDate, kind, text) => {
+    if (!cid) return;
     const res = await authFetch(`/api/clients/${encodeURIComponent(cid)}/wave/reaction`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ pinnedDate, kind, text: text || "" }) }).catch(() => null);
@@ -86,8 +88,9 @@ export default function WaveSection() {
               const y = 16 + (H - 32) * (1 - (Number(d.value || 1) - 1) / 4);
               const pin = reactions.find((r) => r.pinnedDate === d.date);
               return (<g key={d.date}>
-                <circle cx={x} cy={y} r={pin ? 6 : 3} fill={pin ? $.ac : $.acD} stroke={$.ac} strokeWidth="1.5" />
-                {pin && <title>{pin.text || "Отметка врача"}</title>}</g>);
+                <circle cx={x} cy={y} r={pin ? 6 : 3} fill={pin ? $.ac : $.acD} stroke={$.ac} strokeWidth="1.5">
+                  {pin && <title>{pin.text || "Отметка врача"}</title>}
+                </circle></g>);
             })}
           </svg>
         )}
@@ -133,7 +136,7 @@ export default function WaveSection() {
       )}
 
       {!isClient && (
-        <DoctorReactionBar reactions={reactions} onReact={react} $={$} />
+        <DoctorReactionBar onReact={react} $={$} />
       )}
     </div>
   );
