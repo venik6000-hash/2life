@@ -30,8 +30,9 @@ async function main() {
   await store.upsertConnection({ clientId, userId, providerUserId: `puid-${s}`, accessToken: "AT-secret", refreshToken: "RT-secret", expiresIn: 3600, scopes: ["read:recovery", "offline"] });
   const conn = await store.getConnectionByClient(clientId);
   assert.equal(conn.accessToken, "AT-secret", "token decrypts back");
-  const raw = await pool.query("SELECT access_token_enc FROM integration_connections WHERE client_id=$1", [clientId]);
-  assert.ok(!raw.rows[0].access_token_enc.includes("AT-secret"), "token stored encrypted, not plaintext");
+  const raw = await pool.query("SELECT access_token_enc, refresh_token_enc FROM integration_connections WHERE client_id=$1", [clientId]);
+  assert.ok(!raw.rows[0].access_token_enc.includes("AT-secret"), "access token stored encrypted, not plaintext");
+  assert.ok(!raw.rows[0].refresh_token_enc.includes("RT-secret"), "refresh token stored encrypted, not plaintext");
   assert.equal((await store.getConnectionByProviderUserId(`puid-${s}`)).clientId, clientId);
 
   // sync writes objective without clobbering an existing manual mood

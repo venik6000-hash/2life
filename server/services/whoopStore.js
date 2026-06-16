@@ -3,7 +3,9 @@ const { encryptText, decryptText } = require("./messengerCrypto");
 const whoop = require("./whoopClient");
 const { detectMetricInflection, OBJECTIVE_FLAG_METRICS } = require("./waveMath");
 
-const isoDate = (d) => (d instanceof Date ? d.toISOString().slice(0, 10) : String(d).slice(0, 10));
+const isoDate = (d) => (d instanceof Date
+  ? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`
+  : String(d).slice(0, 10));
 
 async function upsertConnection({ clientId, userId, source = "whoop", providerUserId, accessToken, refreshToken, expiresIn, scopes = [] }) {
   const expiresAt = expiresIn ? new Date(Date.now() + Number(expiresIn) * 1000).toISOString() : null;
