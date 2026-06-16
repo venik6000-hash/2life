@@ -72,7 +72,7 @@ async function getJson(path, accessToken, query = {}) {
   const u = new URL(WHOOP_API_BASE + path);
   for (const [k, v] of Object.entries(query)) if (v != null) u.searchParams.set(k, v);
   const res = await fetch(u, { headers: { Authorization: `Bearer ${accessToken}` } });
-  if (!res.ok) throw new Error(`WHOOP GET ${path} ${res.status}`);
+  if (!res.ok) { const err = new Error(`WHOOP GET ${path} ${res.status}`); err.status = res.status; throw err; }
   return res.json();
 }
 // Collection endpoints return { records: [...], next_token }. We page lightly (latest window).

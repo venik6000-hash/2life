@@ -7,6 +7,9 @@ const isoDate = (d) => (d instanceof Date
   ? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`
   : String(d).slice(0, 10));
 
+const whoopClientId = () => process.env.WHOOP_CLIENT_ID || "";
+const whoopClientSecret = () => process.env.WHOOP_CLIENT_SECRET || "";
+
 async function upsertConnection({ clientId, userId, source = "whoop", providerUserId, accessToken, refreshToken, expiresIn, scopes = [] }) {
   const expiresAt = expiresIn ? new Date(Date.now() + Number(expiresIn) * 1000).toISOString() : null;
   await pool.query(
@@ -52,15 +55,40 @@ async function upsertObjective({ clientId, userId, date, objective }) {
     [clientId, userId, isoDate(date), JSON.stringify(objective || {})]);
 }
 
+// Refresh the access token via the stored refresh token, persist the re-encrypted
+// tokens (and reactivate the connection), return the new access token.
+async function refreshConnectionToken(conn, client) {
+  if (!conn.refreshToken) throw new Error("WHOOP refresh: no stored refresh token");
+  const tok = await client.refreshAccessToken({ refreshToken: conn.refreshToken, clientId: whoopClientId(), clientSecret: whoopClientSecret() });
+  await upsertConnection({
+    clientId: conn.clientId, userId: conn.userId, source: conn.source || "whoop",
+    providerUserId: conn.providerUserId,
+    accessToken: tok.access_token,
+    refreshToken: tok.refresh_token || conn.refreshToken, // WHOOP may rotate the refresh token or not
+    expiresIn: tok.expires_in,
+    scopes: conn.scopes || [],
+  });
+  return tok.access_token;
+}
+
 // Pull recent WHOOP data and write per-day objective. `client` is injectable for tests.
+// On a 401 (expired access token) it refreshes via the stored refresh token and retries once.
 async function syncConnection(conn, { days = 14, client = whoop } = {}) {
   if (!conn) return { days: 0 };
   const startIso = new Date(Date.now() - days * 86400000).toISOString();
-  const [rec, slp, cyc] = await Promise.all([
-    client.fetchRecovery(conn.accessToken, startIso),
-    client.fetchSleep(conn.accessToken, startIso),
-    client.fetchCycle(conn.accessToken, startIso),
+  const fetchAll = (token) => Promise.all([
+    client.fetchRecovery(token, startIso),
+    client.fetchSleep(token, startIso),
+    client.fetchCycle(token, startIso),
   ]);
+  let rec, slp, cyc;
+  try {
+    [rec, slp, cyc] = await fetchAll(conn.accessToken);
+  } catch (e) {
+    if (e?.status !== 401 || !conn.refreshToken) throw e;
+    const newToken = await refreshConnectionToken(conn, client);
+    [rec, slp, cyc] = await fetchAll(newToken); // retry once with the refreshed token
+  }
   const byDay = new Map(); // date -> { recovery, sleep, cycle }
   const put = (rows, key) => { for (const r of rows || []) { const d = client.whoopDayKey(r); if (!d) continue; if (!byDay.has(d)) byDay.set(d, {}); byDay.get(d)[key] = r; } };
   put(rec.records, "recovery"); put(slp.records, "sleep"); put(cyc.records, "cycle");

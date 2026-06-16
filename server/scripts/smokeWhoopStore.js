@@ -57,6 +57,27 @@ async function main() {
   assert.deepEqual(after.objective, {}, "objective purged");
   assert.equal(after.scores.mood, 4, "mood survives purge");
 
+  // --- token refresh on 401: an expired access token triggers a refresh + retry, persisting new encrypted tokens ---
+  let refreshArgs = null;
+  const auth401 = () => { const e = new Error("WHOOP 401"); e.status = 401; throw e; };
+  const expiringClient = {
+    whoopDayKey: real.whoopDayKey, mapWhoopToObjective: real.mapWhoopToObjective,
+    refreshAccessToken: async (args) => { refreshArgs = args; return { access_token: "AT-refreshed", refresh_token: "RT-refreshed", expires_in: 3600 }; },
+    fetchRecovery: async (tok) => (tok === "AT-secret" ? auth401() : { records: [{ created_at: "2026-06-14T07:00:00Z", score: { recovery_score: 55 } }] }),
+    fetchSleep: async (tok) => (tok === "AT-secret" ? auth401() : { records: [] }),
+    fetchCycle: async (tok) => (tok === "AT-secret" ? auth401() : { records: [] }),
+  };
+  const connForRefresh = await store.getConnectionByClient(clientId); // still holds AT-secret / RT-secret
+  assert.equal(connForRefresh.accessToken, "AT-secret", "pre-refresh access token");
+  const r2 = await store.syncConnection(connForRefresh, { days: 7, client: expiringClient });
+  assert.ok(r2.days >= 1, "synced after refresh-on-401");
+  assert.equal(refreshArgs?.refreshToken, "RT-secret", "refresh used the stored refresh token");
+  const afterRefresh = await store.getConnectionByClient(clientId);
+  assert.equal(afterRefresh.accessToken, "AT-refreshed", "refreshed access token persisted + decrypts");
+  assert.equal(afterRefresh.refreshToken, "RT-refreshed", "rotated refresh token persisted");
+  const rawTok = await pool.query("SELECT access_token_enc FROM integration_connections WHERE client_id=$1", [clientId]);
+  assert.ok(!rawTok.rows[0].access_token_enc.includes("AT-refreshed"), "refreshed token stored encrypted, not plaintext");
+
   await pool.query("DELETE FROM clients WHERE id=$1", [clientId]);
   await pool.query("DELETE FROM users WHERE id=$1", [userId]);
   console.log("whoop store ok");
