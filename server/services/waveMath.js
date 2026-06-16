@@ -18,7 +18,7 @@ const mean = (arr) => (arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length 
 // series: [{date, value}] ascending. Returns flags for the LATEST day. Deterministic.
 function detectInflection(series, opts = {}) {
   const { window = 3, threshold = 0.8, severeLow = 2 } = opts;
-  const clean = (series || []).filter((d) => Number.isFinite(Number(d.value)));
+  const clean = (series || []).filter((d) => d.value != null && Number.isFinite(Number(d.value)));
   if (!clean.length) return [];
   const latest = clean[clean.length - 1];
   const flags = [];
@@ -36,6 +36,7 @@ function detectInflection(series, opts = {}) {
 }
 
 // Direction semantics: 'down_bad' (recovery/sleep/hrv: a drop is the concern); 'up_bad' (rhr: a rise is the concern).
+// `threshold` is caller policy, not metric identity — callers (e.g. whoopStore.scanObjectiveInflections) supply domain-appropriate values (recovery/sleep ~6, hrv ~5, rhr ~3).
 const OBJECTIVE_FLAG_METRICS = [
   { metric: "recovery", direction: "down_bad" },
   { metric: "sleep_perf", direction: "down_bad" },
@@ -44,7 +45,7 @@ const OBJECTIVE_FLAG_METRICS = [
 ];
 
 function detectMetricInflection(series, { metric, direction = "down_bad", window = 3, threshold = 0.8 } = {}) {
-  const clean = (series || []).filter((d) => Number.isFinite(Number(d.value)));
+  const clean = (series || []).filter((d) => d.value != null && Number.isFinite(Number(d.value)));
   if (clean.length < window * 2) return [];
   const latest = clean[clean.length - 1];
   const recent = mean(clean.slice(-window).map((d) => Number(d.value)));
@@ -54,6 +55,7 @@ function detectMetricInflection(series, { metric, direction = "down_bad", window
   let kind = null;
   if (direction === "down_bad") { if (fell) kind = "inflection_down"; else if (rose) kind = "inflection_up"; }
   else { if (rose) kind = "inflection_down"; else if (fell) kind = "inflection_up"; } // up_bad
+  // magnitude is the raw delta (recent - prior): positive for a rise, negative for a fall — independent of the clinical direction mapping (e.g. up_bad concern => inflection_down with a POSITIVE magnitude).
   return kind ? [{ flag_date: latest.date, kind, metric, magnitude: delta }] : [];
 }
 

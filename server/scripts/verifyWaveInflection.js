@@ -58,4 +58,16 @@ const cf = detectInflection(crash);
 assert.ok(cf.some((f) => f.kind === "severe_low") && cf.some((f) => f.kind === "inflection_down"), "severe_low + inflection_down co-occur");
 assert.ok(cf.every((f) => f.flag_date === "d6"), "co-occurring flags pinned to latest day");
 
+// null/missing values are EXCLUDED (not counted as 0) — guards against a false severe_low on an objective-only day
+assert.deepEqual(detectInflection([{ date: "d1", value: 5 }, { date: "d2", value: null }]), [], "null value excluded, not counted as 0");
+assert.deepEqual(
+  detectMetricInflection(
+    [{ date: "d1", value: 60 }, { date: "d2", value: null }, { date: "d3", value: 58 }, { date: "d4", value: 55 }, { date: "d5", value: 52 }, { date: "d6", value: 50 }],
+    { metric: "recovery", direction: "down_bad", threshold: 4 }
+  ), [], "null excluded -> fewer than window*2 clean values -> no flag"
+);
+// up_bad positive path: rhr FALLING is good news -> inflection_up
+const rhrFall = [60, 58, 60, 55, 52, 50].map((v, i) => ({ date: `2026-06-0${i + 1}`, value: v }));
+assert.ok(detectMetricInflection(rhrFall, { metric: "rhr_bpm", direction: "up_bad", threshold: 4 }).some((f) => f.kind === "inflection_up"), "rhr fall = positive (inflection_up)");
+
 console.log("wave inflection ok");
