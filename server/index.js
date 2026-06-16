@@ -33,6 +33,7 @@ const menuRouter           = require("./routes/menu");
 const analyticsFilesRouter = require("./routes/analyticsFiles");
 const journalRouter        = require("./routes/journal");
 const waveRouter           = require("./routes/wave");
+const whoopRouter          = require("./routes/whoop");
 
 const app  = express();
 const PORT = 3001;
@@ -50,7 +51,7 @@ app.use(cors({
   origin: process.env.CORS_ORIGIN || "http://localhost:3000",
   credentials: true,
 }));
-app.use(express.json({ limit: "50mb" }));
+app.use(express.json({ limit: "50mb", verify: (req, _res, buf) => { req.rawBody = buf; } }));
 
 // Health endpoint — always reachable, even before init completes
 app.get("/api/health", (req, res) => res.json({ ready: appReady, ts: Date.now() }));
@@ -70,6 +71,7 @@ app.use("/api", menuRouter);
 app.use("/api", analyticsFilesRouter);
 app.use("/api", journalRouter);
 app.use("/api", waveRouter);
+app.use("/api", whoopRouter);
 
 async function start() {
   // Bind listen early so the port is open during DB-wait/init (returns 503 until appReady flips)
