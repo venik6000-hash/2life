@@ -983,6 +983,28 @@ const initSchema = async () => {
     `);
   });
 
+  await runOnce("2026-06_create_integration_connections", async (c) => {
+    await c.query(`
+      CREATE TABLE IF NOT EXISTS integration_connections (
+        id                SERIAL PRIMARY KEY,
+        client_id         TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+        user_id           INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        source            TEXT NOT NULL,
+        provider_user_id  TEXT,
+        access_token_enc  TEXT NOT NULL,
+        refresh_token_enc TEXT NOT NULL,
+        token_expires_at  TIMESTAMPTZ,
+        scopes            JSONB NOT NULL DEFAULT '[]'::jsonb,
+        status            TEXT NOT NULL DEFAULT 'active',
+        connected_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+        last_sync_at      TIMESTAMPTZ,
+        last_error        TEXT,
+        UNIQUE(client_id, source)
+      );
+      CREATE INDEX IF NOT EXISTS idx_integration_provider ON integration_connections(source, provider_user_id);
+    `);
+  });
+
 };
 
 // ─── Users ──────────────────────────────────────────────────────────────────
