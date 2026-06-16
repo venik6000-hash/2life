@@ -968,7 +968,7 @@ const initSchema = async () => {
         magnitude   NUMERIC NOT NULL DEFAULT 0,
         status      TEXT NOT NULL DEFAULT 'open',
         created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-        UNIQUE(client_id, flag_date, kind)
+        UNIQUE(client_id, flag_date, kind, metric)
       );
       CREATE INDEX IF NOT EXISTS idx_wave_flags_open ON wave_flags(client_id, status);
     `);

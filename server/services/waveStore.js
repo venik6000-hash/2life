@@ -1,4 +1,4 @@
-const { pool } = require("./db");
+const { pool, withTransaction } = require("./db");
 const { METRIC_KEYS, computeDayMomentum, detectInflection } = require("./waveMath");
 
 const isoDate = (d) => (d instanceof Date
@@ -70,14 +70,17 @@ async function listReactions(clientId) {
 
 async function addReaction({ clientId, authorUserId, pinnedDate, kind, text = "" }) {
   const safeKind = kind === "note" ? "note" : "ack";
-  const res = await pool.query(
-    `INSERT INTO wave_reactions (client_id, author_user_id, pinned_date, kind, text)
-     VALUES ($1,$2,$3::date,$4,$5) RETURNING *`,
-    [clientId, authorUserId, isoDate(pinnedDate), safeKind, String(text || "")]);
-  await pool.query(
-    "UPDATE wave_flags SET status='addressed' WHERE client_id=$1 AND flag_date=$2::date AND status='open'",
-    [clientId, isoDate(pinnedDate)]);
-  const r = res.rows[0];
+  const safeDate = isoDate(pinnedDate);
+  const r = await withTransaction(async (c) => {
+    const ins = await c.query(
+      `INSERT INTO wave_reactions (client_id, author_user_id, pinned_date, kind, text)
+       VALUES ($1,$2,$3::date,$4,$5) RETURNING *`,
+      [clientId, authorUserId, safeDate, safeKind, String(text || "")]);
+    await c.query(
+      "UPDATE wave_flags SET status='addressed' WHERE client_id=$1 AND flag_date=$2::date AND status='open'",
+      [clientId, safeDate]);
+    return ins.rows[0];
+  });
   return { id: r.id, pinnedDate: isoDate(r.pinned_date), kind: r.kind, text: r.text || "" };
 }
 
@@ -110,7 +113,7 @@ async function scanInflectionsForAllClients(today, lookbackDays = 14) {
     for (const f of detectInflection(series)) {
       const ins = await pool.query(
         `INSERT INTO wave_flags (client_id, flag_date, kind, metric, magnitude, status)
-         VALUES ($1,$2::date,$3,$4,$5,'open') ON CONFLICT (client_id, flag_date, kind) DO NOTHING RETURNING id`,
+         VALUES ($1,$2::date,$3,$4,$5,'open') ON CONFLICT (client_id, flag_date, kind, metric) DO NOTHING RETURNING id`,
         [clientId, f.flag_date, f.kind, f.metric, f.magnitude]);
       if (ins.rowCount > 0) written += 1;
     }
