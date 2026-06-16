@@ -161,12 +161,12 @@ export default function WaveSection() {
               const x = n === 1 ? 16 : 16 + ((W - 32) * i) / (n - 1);
               const pin = reactions.find((r) => r.pinnedDate === d.date);
               return (<g key={d.date}>
+                {Number.isFinite(Number(d.mood)) && (
+                  <circle cx={x} cy={normY(d.value)} r={pin ? 9 : 6} fill={d.mood >= 4 ? $.ac : d.mood <= 2 ? $.dn : $.txM} opacity="0.35" />
+                )}
                 <circle cx={x} cy={normY(d.value)} r={pin ? 6 : 3} fill={pin ? $.ac : $.acD} stroke={$.ac} strokeWidth="1.5">
                   {pin && <title>{pin.text || "Отметка врача"}</title>}
                 </circle>
-                {Number.isFinite(Number(d.mood)) && (
-                  <circle cx={x} cy={normY(d.value)} r="2.5" fill={d.mood >= 4 ? $.ac : d.mood <= 2 ? $.dn : $.txM} />
-                )}
               </g>);
             })}
           </svg>
