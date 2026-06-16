@@ -5,6 +5,7 @@ const {
   recordJournalNotificationDelivery,
   wasJournalNotificationDelivered,
 } = require("./journalStore");
+const waveStore = require("./waveStore");
 
 const todayIso = (now = new Date()) =>
   `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
@@ -45,12 +46,32 @@ async function runJournalExactReminders(now = new Date()) {
   return { scanned: rows.length, sent };
 }
 
+async function runWaveCheckinReminders(now = new Date()) {
+  const today = todayIso(now);
+  const due = await waveStore.listDueWaveCheckinReminders(today);
+  let sent = 0;
+  for (const row of due) {
+    if (await wasJournalNotificationDelivered({ userId: row.user_id, kind: "wave_checkin", deliveryKey: today })) continue;
+    await sendPushToUsers({ userIds: [row.user_id], title: "2life", body: "Как ты сегодня? Отметь за 60 секунд",
+      url: `/?cid=${encodeURIComponent(row.client_id)}&sec=wave` });
+    await recordJournalNotificationDelivery({ userId: row.user_id, kind: "wave_checkin", deliveryKey: today });
+    sent += 1;
+  }
+  return { due: due.length, sent };
+}
+
+async function runWaveInflectionScan(now = new Date()) {
+  return waveStore.scanInflectionsForAllClients(todayIso(now));
+}
+
 function startJournalNotificationScheduler() {
   const tick = () => {
     runJournalExactReminders().catch((error) => console.warn("[journal] exact reminder failed", error?.message || error));
     const now = new Date();
     if (now.getHours() === 9 && now.getMinutes() < 5) {
       runJournalDigest(now).catch((error) => console.warn("[journal] digest failed", error?.message || error));
+      runWaveInflectionScan(now).catch((e) => console.warn("[wave] inflection scan failed", e?.message || e));
+      runWaveCheckinReminders(now).catch((e) => console.warn("[wave] checkin reminder failed", e?.message || e));
     }
   };
   const timer = setInterval(tick, 5 * 60 * 1000);
@@ -58,4 +79,4 @@ function startJournalNotificationScheduler() {
   return timer;
 }
 
-module.exports = { runJournalDigest, runJournalExactReminders, startJournalNotificationScheduler };
+module.exports = { runJournalDigest, runJournalExactReminders, startJournalNotificationScheduler, runWaveCheckinReminders, runWaveInflectionScan };
