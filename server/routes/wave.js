@@ -48,7 +48,8 @@ router.post("/clients/:clientId/wave/reaction", requireAuth(), requireSectionWri
   try { if (!(await guard(req, res))) return;
     const { pinnedDate, kind, text } = req.body || {};
     if (!/^\d{4}-\d{2}-\d{2}$/.test(pinnedDate || "")) return res.status(400).json({ error: "Некорректная дата" });
-    const reaction = await store.addReaction({ clientId: req.params.clientId, authorUserId: req.user.id, pinnedDate, kind, text });
+    const safeText = String(text || "").slice(0, 2000);
+    const reaction = await store.addReaction({ clientId: req.params.clientId, authorUserId: req.user.id, pinnedDate, kind, text: safeText });
     const clientUserIds = await store.listClientUserIdsForClient(req.params.clientId);
     if (clientUserIds.length) {
       sendPushToUsers({ userIds: clientUserIds, title: "2life", body: "Ваш врач отметил вашу волну", url: `/?cid=${encodeURIComponent(req.params.clientId)}&sec=wave` }).catch(() => {});
