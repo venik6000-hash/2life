@@ -25,7 +25,10 @@
     "verify:messenger-read-delivery": "node scripts/verifyMessengerReadDelivery.js",
     "verify:client-role-hard-limits": "node scripts/verifyClientRoleHardLimits.js",
     "verify:app-db-role": "node scripts/verifyAppDbRole.js",
-    "verify:admin-stats-query": "node scripts/verifyAdminStatsQuery.js"
+    "verify:admin-stats-query": "node scripts/verifyAdminStatsQuery.js",
+    "verify:wave-inflection": "node scripts/verifyWaveInflection.js",
+    "verify:wave-perms": "node scripts/verifyWaveCheckinPerms.js",
+    "smoke:wave-store": "node scripts/smokeWaveStore.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
