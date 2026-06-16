@@ -39,6 +39,7 @@
     "verify:print-security": "node scripts/verifyPrintSecurity.mjs",
     "verify:wave-curve": "node scripts/verifyWaveCurve.mjs",
     "verify:wave-static": "node scripts/verifyWaveStatic.mjs",
+    "verify:whoop-static": "node scripts/verifyWhoopStatic.mjs",
     "build": "vite build",
     "preview": "vite preview"
   },
