@@ -6,6 +6,7 @@ const {
   wasJournalNotificationDelivered,
 } = require("./journalStore");
 const waveStore = require("./waveStore");
+const whoopStore = require("./whoopStore");
 
 const todayIso = (now = new Date()) =>
   `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
@@ -64,6 +65,19 @@ async function runWaveInflectionScan(now = new Date()) {
   return waveStore.scanInflectionsForAllClients(todayIso(now));
 }
 
+async function runWhoopReconcile(now = new Date()) {
+  const today = todayIso(now);
+  const conns = await whoopStore.listActiveConnections();
+  let synced = 0;
+  for (const conn of conns) {
+    const stale = !conn.lastSyncAt || (now - new Date(conn.lastSyncAt)) > 20 * 3600 * 1000;
+    if (!stale) continue;
+    try { await whoopStore.syncConnection(conn, { days: 3 }); await whoopStore.scanObjectiveInflections(conn.clientId, today); synced += 1; }
+    catch (e) { await whoopStore.setStatus(conn.clientId, "error", String(e?.message || e)).catch(() => {}); }
+  }
+  return { connections: conns.length, synced };
+}
+
 function startJournalNotificationScheduler() {
   const tick = () => {
     runJournalExactReminders().catch((error) => console.warn("[journal] exact reminder failed", error?.message || error));
@@ -72,6 +86,7 @@ function startJournalNotificationScheduler() {
       runJournalDigest(now).catch((error) => console.warn("[journal] digest failed", error?.message || error));
       runWaveInflectionScan(now).catch((e) => console.warn("[wave] inflection scan failed", e?.message || e));
       runWaveCheckinReminders(now).catch((e) => console.warn("[wave] checkin reminder failed", e?.message || e));
+      runWhoopReconcile(now).catch((e) => console.warn("[whoop] reconcile failed", e?.message || e));
     }
   };
   const timer = setInterval(tick, 5 * 60 * 1000);
@@ -79,4 +94,4 @@ function startJournalNotificationScheduler() {
   return timer;
 }
 
-module.exports = { runJournalDigest, runJournalExactReminders, startJournalNotificationScheduler, runWaveCheckinReminders, runWaveInflectionScan };
+module.exports = { runJournalDigest, runJournalExactReminders, startJournalNotificationScheduler, runWaveCheckinReminders, runWaveInflectionScan, runWhoopReconcile };
