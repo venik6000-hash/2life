@@ -73,7 +73,10 @@ async function runWhoopReconcile(now = new Date()) {
     const stale = !conn.lastSyncAt || (now - new Date(conn.lastSyncAt)) > 20 * 3600 * 1000;
     if (!stale) continue;
     try { await whoopStore.syncConnection(conn, { days: 3 }); await whoopStore.scanObjectiveInflections(conn.clientId, today); synced += 1; }
-    catch (e) { await whoopStore.setStatus(conn.clientId, "error", String(e?.message || e)).catch(() => {}); }
+    catch (e) {
+      console.warn("[whoop] reconcile error for client", conn.clientId, e?.message || e);
+      await whoopStore.setStatus(conn.clientId, "error", String(e?.message || e)).catch(() => {});
+    }
   }
   return { connections: conns.length, synced };
 }
