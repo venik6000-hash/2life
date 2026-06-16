@@ -32,6 +32,7 @@ const messengerRouter = require("./routes/messenger");
 const menuRouter           = require("./routes/menu");
 const analyticsFilesRouter = require("./routes/analyticsFiles");
 const journalRouter        = require("./routes/journal");
+const waveRouter           = require("./routes/wave");
 
 const app  = express();
 const PORT = 3001;
@@ -68,6 +69,7 @@ app.use("/api", messengerRouter);
 app.use("/api", menuRouter);
 app.use("/api", analyticsFilesRouter);
 app.use("/api", journalRouter);
+app.use("/api", waveRouter);
 
 async function start() {
   // Bind listen early so the port is open during DB-wait/init (returns 503 until appReady flips)
