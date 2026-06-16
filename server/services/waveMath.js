@@ -35,4 +35,26 @@ function detectInflection(series, opts = {}) {
   return flags;
 }
 
-module.exports = { METRIC_KEYS, computeDayMomentum, detectInflection };
+// Direction semantics: 'down_bad' (recovery/sleep/hrv: a drop is the concern); 'up_bad' (rhr: a rise is the concern).
+const OBJECTIVE_FLAG_METRICS = [
+  { metric: "recovery", direction: "down_bad" },
+  { metric: "sleep_perf", direction: "down_bad" },
+  { metric: "hrv_ms", direction: "down_bad" },
+  { metric: "rhr_bpm", direction: "up_bad" },
+];
+
+function detectMetricInflection(series, { metric, direction = "down_bad", window = 3, threshold = 0.8 } = {}) {
+  const clean = (series || []).filter((d) => Number.isFinite(Number(d.value)));
+  if (clean.length < window * 2) return [];
+  const latest = clean[clean.length - 1];
+  const recent = mean(clean.slice(-window).map((d) => Number(d.value)));
+  const prior = mean(clean.slice(-window * 2, -window).map((d) => Number(d.value)));
+  const delta = round2(recent - prior);
+  const rose = delta >= threshold, fell = delta <= -threshold;
+  let kind = null;
+  if (direction === "down_bad") { if (fell) kind = "inflection_down"; else if (rose) kind = "inflection_up"; }
+  else { if (rose) kind = "inflection_down"; else if (fell) kind = "inflection_up"; } // up_bad
+  return kind ? [{ flag_date: latest.date, kind, metric, magnitude: delta }] : [];
+}
+
+module.exports = { METRIC_KEYS, computeDayMomentum, detectInflection, OBJECTIVE_FLAG_METRICS, detectMetricInflection };
