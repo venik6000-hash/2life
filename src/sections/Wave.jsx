@@ -7,6 +7,14 @@ import { toPolylinePoints, deltaVsFirstWeek, METRIC_LABELS } from "../utils/wave
 const METRICS = ["energy", "sleep", "mood", "focus", "calm"];
 const CONTEXT_CHIPS = ["плохо спал", "перелёт", "тренировка", "стресс"];
 const DISCLAIMER = "Это как ты себя чувствуешь, не диагноз. Срочное — в мессенджер или звонок врачу.";
+const OBJ_LINES = [
+  { key: "recovery", label: "Восстановление", min: 0, max: 100 },
+  { key: "sleep_perf", label: "Сон %", min: 0, max: 100 },
+  { key: "rhr_bpm", label: "Пульс покоя", min: 40, max: 90 },
+  { key: "hrv_ms", label: "ВСР", min: 0, max: 150 },
+  { key: "strain", label: "Нагрузка", min: 0, max: 21 },
+];
+const MOODS = [{ e: "😣", v: 1 }, { e: "😕", v: 2 }, { e: "😐", v: 3 }, { e: "🙂", v: 4 }, { e: "😀", v: 5 }];
 
 export default function WaveSection() {
   const { cid } = useDashboard();
@@ -20,6 +28,8 @@ export default function WaveSection() {
   const [draft, setDraft] = useState({ energy: 3, sleep: 3, mood: 3, focus: 3, calm: 3 });
   const [tags, setTags] = useState([]);
   const [saving, setSaving] = useState(false);
+  const [whoopConnected, setWhoopConnected] = useState(false);
+  const [metric, setMetric] = useState("recovery");
 
   const load = useCallback(async () => {
     if (!cid) return;
@@ -31,7 +41,11 @@ export default function WaveSection() {
     if (tRes && tRes.ok) { const d = await tRes.json(); setToday(d);
       if (d.checkin?.scores) setDraft((p) => ({ ...p, ...d.checkin.scores }));
       if (d.checkin?.contextTags) setTags(d.checkin.contextTags); }
-  }, [cid, authFetch]);
+    if (isClient) {
+      const wRes = await authFetch(`/api/wave/whoop/status?cid=${encodeURIComponent(cid)}`).catch(() => null);
+      if (wRes && wRes.ok) setWhoopConnected(!!(await wRes.json()).connected);
+    }
+  }, [cid, authFetch, isClient]);
   useEffect(() => { load(); }, [load]);
 
   const submit = async () => {
@@ -43,6 +57,15 @@ export default function WaveSection() {
     setSaving(false);
     if (res && res.ok) await load();
   };
+  const tapMood = async (v) => {
+    if (!cid) return;
+    setSaving(true);
+    const res = await authFetch(`/api/clients/${encodeURIComponent(cid)}/wave/checkin`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scores: { mood: v } }) }).catch(() => null);
+    setSaving(false);
+    if (res && res.ok) await load();
+  };
   const react = async (pinnedDate, kind, text) => {
     if (!cid) return;
     const res = await authFetch(`/api/clients/${encodeURIComponent(cid)}/wave/reaction`, {
@@ -50,10 +73,29 @@ export default function WaveSection() {
       body: JSON.stringify({ pinnedDate, kind, text: text || "" }) }).catch(() => null);
     if (res && res.ok) await load();
   };
+  const connectWhoop = async () => {
+    if (!cid) return;
+    const r = await authFetch(`/api/wave/whoop/connect?cid=${encodeURIComponent(cid)}`).catch(() => null);
+    if (r && r.ok) { const d = await r.json().catch(() => null); if (d && d.url) window.location.href = d.url; }
+  };
+  const disconnectWhoop = async () => {
+    if (!cid || !window.confirm("Отключить WHOOP?")) return;
+    const purge = window.confirm("Также удалить уже собранные данные WHOOP? OK — удалить, Отмена — оставить.");
+    await authFetch(`/api/wave/whoop/disconnect`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cid, purge }) }).catch(() => null);
+    await load();
+  };
 
   const W = 640, H = 180;
-  const curveSeries = series.map((d) => ({ ...d, value: d.momentum }));
-  const points = toPolylinePoints(curveSeries, { width: W, height: H, pad: 16, maxScore: 5 });
+  const hasObjective = series.some((d) => d.objective && Object.keys(d.objective).length);
+  const activeLine = hasObjective
+    ? (OBJ_LINES.find((l) => l.key === metric) || OBJ_LINES[0])
+    : { key: "momentum", label: "Самочувствие", min: 1, max: 5 };
+  const curveSeries = (hasObjective
+    ? series.map((d) => ({ date: d.date, value: d.objective?.[activeLine.key], mood: d.scores?.mood }))
+    : series.map((d) => ({ date: d.date, value: d.momentum, mood: d.scores?.mood }))
+  ).filter((d) => Number.isFinite(Number(d.value)));
+  const points = toPolylinePoints(curveSeries, { width: W, height: H, pad: 16, minScore: activeLine.min, maxScore: activeLine.max });
+  const normY = (v) => 16 + (H - 32) * (1 - Math.max(0, Math.min(1, (Number(v) - activeLine.min) / ((activeLine.max - activeLine.min) || 1))));
   const deltas = deltaVsFirstWeek(series);
   const card = { background: $.bgC, border: `1px solid ${$.brd}`, borderRadius: 14, padding: 16, marginBottom: 14 };
 
@@ -62,7 +104,26 @@ export default function WaveSection() {
       <div style={{ fontSize: 20, fontWeight: 700, color: $.tx, marginBottom: 4 }}>🌊 Моя волна</div>
       <div style={{ fontSize: 12, color: $.txM, marginBottom: 14 }}>{DISCLAIMER}</div>
 
-      {deltas.length > 0 && series.length > 1 && (
+      {isClient && !whoopConnected && (
+        <div style={card}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: $.tx, marginBottom: 6 }}>Подключи WHOOP — волна заполнится сама</div>
+          <div style={{ fontSize: 12, color: $.txM, lineHeight: 1.5, marginBottom: 12 }}>
+            Мы будем получать из твоего WHOOP: сон, пульс покоя, ВСР, восстановление, нагрузку и вес (если он есть).
+            Эти данные видит только твой врач. Отключить WHOOP и удалить собранные данные можно в любой момент — кнопкой ниже после подключения.
+          </div>
+          <button onClick={connectWhoop} disabled={!cid}
+            style={{ padding: "10px 16px", background: $.ac, color: "#fff", border: "none", borderRadius: 10, fontWeight: 700, cursor: "pointer" }}>Подключить WHOOP</button>
+        </div>
+      )}
+      {isClient && whoopConnected && (
+        <div style={{ ...card, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <span style={{ fontSize: 13, color: $.ac }}>✓ WHOOP подключён</span>
+          <button onClick={disconnectWhoop}
+            style={{ padding: "8px 12px", background: "transparent", color: $.txM, border: `1px solid ${$.brd}`, borderRadius: 8, cursor: "pointer" }}>Отключить</button>
+        </div>
+      )}
+
+      {deltas.length > 0 && series.length > 1 && !hasObjective && (
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
           {deltas.map((d) => (
             <div key={d.key} style={{ background: $.bgI, borderRadius: 10, padding: "8px 12px", minWidth: 86 }}>
@@ -75,6 +136,19 @@ export default function WaveSection() {
       )}
 
       <div style={card}>
+        <div style={{ fontSize: 14, fontWeight: 700, color: $.tx, marginBottom: 10 }}>
+          {activeLine.label}{hasObjective ? " (WHOOP)" : ""}
+        </div>
+        {hasObjective && (
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+            {OBJ_LINES.map((l) => (
+              <button key={l.key} onClick={() => setMetric(l.key)}
+                style={{ fontSize: 12, padding: "5px 10px", borderRadius: 999, cursor: "pointer",
+                  color: metric === l.key ? "#fff" : $.txS, background: metric === l.key ? $.ac : "transparent",
+                  border: `1px solid ${metric === l.key ? $.ac : $.brd}` }}>{l.label}</button>
+            ))}
+          </div>
+        )}
         {series.length === 0 ? (
           <div style={{ fontSize: 14, color: $.txM, textAlign: "center", padding: "24px 0" }}>
             Пока нет отметок. {isClient ? "Сделай первый чек-ин ниже — и твоя кривая начнёт расти." : "Клиент ещё не отмечался."}
@@ -85,12 +159,15 @@ export default function WaveSection() {
             {curveSeries.map((d, i) => {
               const n = curveSeries.length;
               const x = n === 1 ? 16 : 16 + ((W - 32) * i) / (n - 1);
-              const y = 16 + (H - 32) * (1 - (Number(d.value || 1) - 1) / 4);
               const pin = reactions.find((r) => r.pinnedDate === d.date);
               return (<g key={d.date}>
-                <circle cx={x} cy={y} r={pin ? 6 : 3} fill={pin ? $.ac : $.acD} stroke={$.ac} strokeWidth="1.5">
+                <circle cx={x} cy={normY(d.value)} r={pin ? 6 : 3} fill={pin ? $.ac : $.acD} stroke={$.ac} strokeWidth="1.5">
                   {pin && <title>{pin.text || "Отметка врача"}</title>}
-                </circle></g>);
+                </circle>
+                {Number.isFinite(Number(d.mood)) && (
+                  <circle cx={x} cy={normY(d.value)} r="2.5" fill={d.mood >= 4 ? $.ac : d.mood <= 2 ? $.dn : $.txM} />
+                )}
+              </g>);
             })}
           </svg>
         )}
@@ -108,7 +185,22 @@ export default function WaveSection() {
         </div>
       )}
 
-      {isClient && (
+      {isClient && whoopConnected && (
+        <div style={card}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: $.tx, marginBottom: 10 }}>Как настроение сегодня?</div>
+          <div style={{ display: "flex", gap: 10, justifyContent: "space-between" }}>
+            {MOODS.map((m) => (
+              <button key={m.v} onClick={() => tapMood(m.v)} disabled={saving}
+                style={{ flex: 1, fontSize: 28, padding: "10px 0", borderRadius: 12, cursor: "pointer",
+                  border: `2px solid ${today?.checkin?.scores?.mood === m.v ? $.ac : $.brd}`,
+                  background: today?.checkin?.scores?.mood === m.v ? $.acD : "transparent" }}>{m.e}</button>
+            ))}
+          </div>
+          <div style={{ fontSize: 12, color: $.txM, marginTop: 8 }}>Тело подтянулось из WHOOP автоматически.</div>
+        </div>
+      )}
+
+      {isClient && !whoopConnected && (
         <div style={card}>
           <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}>
             <span style={{ fontSize: 15, fontWeight: 700, color: $.tx }}>Как ты сегодня?</span>

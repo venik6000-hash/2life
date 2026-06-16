@@ -34,7 +34,7 @@ router.get("/wave/whoop/connect", requireAuth(), requireSectionWrite("wave"), as
     if (!clientId) return res.status(400).json({ error: "Не указан клиент" });
     if (!CLIENT_ID || !REDIRECT_URI) return res.status(500).json({ error: "WHOOP не сконфигурирован" });
     if (!(await canAccessClient(req.user, clientId))) return res.status(403).json({ error: "Нет доступа" });
-    res.redirect(whoop.buildAuthorizeUrl({ clientId: CLIENT_ID, redirectUri: REDIRECT_URI, state: makeState(clientId, req.user.id) }));
+    res.json({ ok: true, url: whoop.buildAuthorizeUrl({ clientId: CLIENT_ID, redirectUri: REDIRECT_URI, state: makeState(clientId, req.user.id) }) });
   } catch (e) { console.error(e); res.status(500).json({ error: "Внутренняя ошибка сервера" }); }
 });
 
