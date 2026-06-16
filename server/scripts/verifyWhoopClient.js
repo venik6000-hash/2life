@@ -35,4 +35,10 @@ const good = crypto.createHmac("sha256", secret).update(Buffer.concat([Buffer.fr
 assert.equal(verifyWebhookSignature({ timestamp: ts, rawBody: Buffer.from(body), signature: good, secret }), true);
 assert.equal(verifyWebhookSignature({ timestamp: ts, rawBody: Buffer.from(body), signature: "wrong", secret }), false);
 
+// null/empty WHOOP scores must be omitted (not written as 0), but a real 0 is kept
+assert.deepEqual(mapWhoopToObjective({ recovery: { score: { recovery_score: null, resting_heart_rate: 50 } } }), { rhr_bpm: 50 });
+assert.deepEqual(mapWhoopToObjective({ cycle: { score: { strain: 0 } } }), { strain: 0 });
+// webhook verification fails closed when the secret is missing/empty
+assert.equal(verifyWebhookSignature({ timestamp: ts, rawBody: Buffer.from(body), signature: good, secret: "" }), false);
+
 console.log("whoop client ok");

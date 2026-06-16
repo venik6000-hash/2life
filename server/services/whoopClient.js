@@ -17,7 +17,11 @@ function buildAuthorizeUrl({ clientId, redirectUri, state, scopes = SCOPES }) {
   return u.toString();
 }
 
-const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : undefined; };
+const num = (v) => {
+  if (v == null || v === "") return undefined;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : undefined;
+};
 const r1 = (n) => (n == null ? undefined : Math.round(n * 10) / 10);
 
 // Map verified v2 fields. Stores raw numbers; NO interpretation (no AI, no verdict).
@@ -43,6 +47,7 @@ function whoopDayKey(record) {
 }
 
 function verifyWebhookSignature({ timestamp, rawBody, signature, secret }) {
+  if (!secret) return false;
   const bodyBuf = Buffer.isBuffer(rawBody) ? rawBody : Buffer.from(String(rawBody || ""), "utf8");
   const mac = crypto.createHmac("sha256", secret).update(Buffer.concat([Buffer.from(String(timestamp)), bodyBuf])).digest("base64");
   const a = Buffer.from(mac), b = Buffer.from(String(signature || ""));
