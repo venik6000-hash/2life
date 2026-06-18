@@ -69,6 +69,7 @@ export default function Dashboard() {
   } = useDashboard();
   const { user } = useAuth();
   const isClient = isClientRole(user);
+  const isAdmin = user?.role === "admin";
   const [isDeficitPickerOpen, setIsDeficitPickerOpen] = useState(false);
   const [analyticsJumpTarget, setAnalyticsJumpTarget] = useState(null);
   const [protocolMode, setProtocolMode] = useState("builder");
@@ -110,10 +111,17 @@ export default function Dashboard() {
   };
 
   if(!loaded) return <LoadingScreen slow={bootstrapSlow} onRetry={retryBootstrap} />;
-  if(!currentClient||!currentStage) return (
+  // With no client selected (typically an empty DB), the client-centric sections
+  // can't render — but an admin must still reach the admin panel to create the
+  // first users/roles/doctors or import data. Show the empty screen UNLESS an
+  // admin has navigated into the admin section, in which case fall through to the
+  // full shell (its sidebar + AdminSection render fine without a current client).
+  if((!currentClient||!currentStage) && !(isAdmin && activeSectionId === "admin")) return (
     <NoClientsScreen
       canCreateClient={canCreateClient}
       onCreateClient={() => setActiveModalId("newCl")}
+      canOpenAdmin={isAdmin}
+      onOpenAdmin={() => setActiveSectionId("admin")}
     >
       <ModalsSection md={activeModalId==="newCl" ? "newCl" : null} {...modalsProps} />
     </NoClientsScreen>

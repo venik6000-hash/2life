@@ -1,7 +1,7 @@
 import { useTheme } from "../context/ThemeContext";
 import Button from "./Button";
 
-export default function NoClientsScreen({ canCreateClient, onCreateClient, children }) {
+export default function NoClientsScreen({ canCreateClient, onCreateClient, canOpenAdmin, onOpenAdmin, children }) {
   const { $ } = useTheme();
   return (
     <div style={{
@@ -14,6 +14,14 @@ export default function NoClientsScreen({ canCreateClient, onCreateClient, child
         {canCreateClient && (
           <div style={{ marginTop: 12 }}>
             <Button onClick={onCreateClient}>+ Создать клиента</Button>
+          </div>
+        )}
+        {/* An admin on an empty DB must still be able to reach the admin panel
+            (create users/roles/doctors, import data) — the rest of the dashboard
+            has nothing to show without a client. */}
+        {canOpenAdmin && (
+          <div style={{ marginTop: 12 }}>
+            <Button onClick={onOpenAdmin}>Открыть админку</Button>
           </div>
         )}
         {children}

@@ -77,13 +77,13 @@ export default function SidebarClientPicker({
           background: $.bgI,
         }}
       >
-        <ClientAvatar color={client.color} avatar={client.avatar} />
+        <ClientAvatar color={client?.color} avatar={client?.avatar} />
         {expanded && (
           <div style={{ flex: 1, overflow: "hidden" }}>
             <div style={{ fontSize: 12, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              {client.shortName}
+              {client ? client.shortName : "Нет клиента"}
             </div>
-            <div style={{ fontSize: 10, color: $.txM }}>{city || "—"}</div>
+            <div style={{ fontSize: 10, color: $.txM }}>{client ? (city || "—") : "—"}</div>
           </div>
         )}
       </div>

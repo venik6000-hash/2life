@@ -77,7 +77,7 @@ export default function Sidebar() {
           onCreateClient={handleCreateClient}
         />
       )}
-      stages={so ? (
+      stages={so && cl ? (
         <SidebarStageList
           stages={cl.stages}
           activeIndex={si}

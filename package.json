@@ -41,7 +41,8 @@
     "verify:wave-static": "node scripts/verifyWaveStatic.mjs",
     "verify:whoop-static": "node scripts/verifyWhoopStatic.mjs",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "verify:admin-empty-db": "node scripts/verifyAdminEmptyDbAccess.mjs"
   },
   "dependencies": {
     "react": "^18.2.0",
