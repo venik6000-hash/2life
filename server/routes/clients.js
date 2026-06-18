@@ -1,7 +1,7 @@
 const express = require("express");
 const router  = express.Router();
 
-const { getClients, getOneClient, getClientsForUser, saveClients, saveOneClient, patchClientLocked, deleteOneClient, saveAnalyticsForClient } = require("../services/clientStore");
+const { getClients, getOneClient, getClientsForUser, saveClients, saveOneClient, createOneClientExclusive, patchClientLocked, deleteOneClient, saveAnalyticsForClient } = require("../services/clientStore");
 const { buildActionLogs, appendActivityLog } = require("../services/logger");
 const { createBackupSnapshot } = require("../services/backup");
 const { requireAuth, requirePermission, requireSectionWrite, requireAnySectionRead, requireAnySectionWrite, hasSectionWrite } = require("../middleware/auth");
@@ -136,6 +136,16 @@ router.put("/clients/:clientId", requireAuth(), requireAnySectionWrite(), async 
       if (deniedSections.length) {
         return res.status(403).json({ error: "Недостаточно прав на создание клиента", code: "PUT_FORBIDDEN_SECTIONS", deniedSections });
       }
+      // Atomic claim closes the create TOCTOU: a concurrent second "creator"
+      // (whose getOneClient also saw null) now gets a 409 instead of silently
+      // overwriting the winner via ON CONFLICT DO UPDATE.
+      const { created } = await createOneClientExclusive(client);
+      if (!created) {
+        return res.status(409).json({ error: "Клиент с таким ID уже существует", code: "CLIENT_ALREADY_EXISTS" });
+      }
+      if (req.user?.id && req.user?.role !== "admin") {
+        await upsertClientAssignment(req.user.id, client.id, req.user.id);
+      }
     } else {
       const touchedSections = collectTouchedSectionsForPut(prev, client);
       const deniedSections = touchedSections.filter((sectionId) => !hasSectionWrite(permissions, sectionId));
@@ -146,12 +156,9 @@ router.put("/clients/:clientId", requireAuth(), requireAnySectionWrite(), async 
           deniedSections
         });
       }
+      await saveOneClient(client);
     }
     const actionEntries = buildActionLogs(prev ? [prev] : [], [client], req);
-    await saveOneClient(client);
-    if (!prev && req.user?.id && req.user?.role !== "admin") {
-      await upsertClientAssignment(req.user.id, client.id, req.user.id);
-    }
     await appendActivityLog(actionEntries);
     await autoAssignDoctors(client.id, req.user.id, client.stages);
     broadcast("client-updated", { clientId: req.params.clientId }, res);

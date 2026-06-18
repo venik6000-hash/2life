@@ -318,6 +318,33 @@ const saveOneClient = async (client) => {
   });
 };
 
+// Atomic create that CLAIMS the id with INSERT ... ON CONFLICT DO NOTHING.
+// The bare existence check in the PUT route (getOneClient → null) is a TOCTOU:
+// two requests can both see "no such client" and both call saveOneClient, whose
+// ON CONFLICT DO UPDATE makes the loser silently overwrite the winner — or a
+// pre-existing client the loser has no access to. Claiming the row in one
+// statement closes that window: the loser gets { created: false } and the route
+// answers 409 instead of clobbering. Returns { created: true } when THIS call
+// inserted the row.
+const createOneClientExclusive = async (client) => {
+  const clientId = toStr(client.id);
+  return await withTransaction(async (pgClient) => {
+    const claim = await pgClient.query(
+      `INSERT INTO clients (id, name, short_name, dob, age, sex, avatar, color)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       ON CONFLICT (id) DO NOTHING
+       RETURNING id`,
+      [clientId, toStr(client.name), toStr(client.shortName), toStr(client.dob), toInt(client.age), toStr(client.sex), toStr(client.avatar), toStr(client.color)]
+    );
+    if (!claim.rows.length) return { created: false };
+    // We hold the freshly-inserted row inside this transaction; _writeOneClient
+    // fills stages/journal. Its leading clients-row upsert is a harmless no-op
+    // UPDATE of the row we just inserted.
+    await _writeOneClient(client, pgClient);
+    return { created: true };
+  });
+};
+
 // Atomically patches a client: locks the row, reads fresh state, calls applyFn,
 // then saves the result. Returns { prev, next }, or null if client not found
 // or applyFn declines the update.
@@ -484,4 +511,4 @@ const saveAnalyticsForClient = async (clientId, categories) => {
   });
 };
 
-module.exports = { getClients, getOneClient, getClientsForUser, saveClients, saveOneClient, patchClientLocked, deleteOneClient, getDoctors, saveDoctors, saveAnalyticsForClient };
+module.exports = { getClients, getOneClient, getClientsForUser, saveClients, saveOneClient, createOneClientExclusive, patchClientLocked, deleteOneClient, getDoctors, saveDoctors, saveAnalyticsForClient };

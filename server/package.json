@@ -30,7 +30,12 @@
     "verify:wave-perms": "node scripts/verifyWaveCheckinPerms.js",
     "smoke:wave-store": "node scripts/smokeWaveStore.js",
     "verify:whoop-client": "node scripts/verifyWhoopClient.js",
-    "smoke:whoop-store": "node scripts/smokeWhoopStore.js"
+    "smoke:whoop-store": "node scripts/smokeWhoopStore.js",
+    "verify:client-create-race": "node scripts/verifyClientCreateRace.js",
+    "verify:sse-client-scope": "node scripts/verifySseClientScope.js",
+    "verify:doctors-access": "node scripts/verifyDoctorsAccess.js",
+    "verify:role-perms-concurrency": "node scripts/verifyRolePermsConcurrency.js",
+    "verify:doctor-sync-batch": "node scripts/verifyDoctorSyncBatch.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
