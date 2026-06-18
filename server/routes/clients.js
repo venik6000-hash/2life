@@ -151,13 +151,12 @@ router.put("/clients/:clientId", requireAuth(), requireAnySectionWrite(), async 
       }
       // Atomic claim closes the create TOCTOU: a concurrent second "creator"
       // (whose getOneClient also saw null) now gets a 409 instead of silently
-      // overwriting the winner via ON CONFLICT DO UPDATE.
-      const { created } = await createOneClientExclusive(client);
+      // overwriting the winner via ON CONFLICT DO UPDATE. The creator's own
+      // assignment is granted inside the same transaction (non-admin only).
+      const assignToUserId = (req.user?.id && req.user?.role !== "admin") ? req.user.id : null;
+      const { created } = await createOneClientExclusive(client, { assignToUserId });
       if (!created) {
         return res.status(409).json({ error: "Клиент с таким ID уже существует", code: "CLIENT_ALREADY_EXISTS" });
-      }
-      if (req.user?.id && req.user?.role !== "admin") {
-        await upsertClientAssignment(req.user.id, client.id, req.user.id);
       }
     } else {
       const touchedSections = collectTouchedSectionsForPut(prev, client);

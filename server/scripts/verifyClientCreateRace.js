@@ -45,6 +45,19 @@ const { createOneClientExclusive, getOneClient } = require("../services/clientSt
   assert.equal(stored1.stages[0].title, "Этап 1", "stage data must persist");
   console.log("✓ new id creates + writes stages");
 
+  // 1b. The creator's assignment is written in the SAME transaction.
+  await pool.query("INSERT INTO users (username, password_hash, role) VALUES ('race_creator','x','doctor') ON CONFLICT DO NOTHING");
+  const creatorId = (await pool.query("SELECT id FROM users WHERE username='race_creator'")).rows[0].id;
+  const assigned = await createOneClientExclusive(
+    { id: "race_assigned", name: "Assigned", shortName: "A", dob: "", age: 1, sex: "", avatar: "", color: "", stages: [] },
+    { assignToUserId: creatorId }
+  );
+  assert.equal(assigned.created, true, "create with assignToUserId succeeds");
+  const asg = await pool.query("SELECT assignment_source FROM client_assignments WHERE user_id=$1 AND client_id='race_assigned'", [creatorId]);
+  assert.equal(asg.rowCount, 1, "creator assignment written atomically with the create");
+  assert.equal(asg.rows[0].assignment_source, "manual", "creator assignment is a manual source");
+  console.log("✓ creator assignment is atomic with the create");
+
   // 2. Two concurrent creates of the SAME id — only one wins, loser must NOT overwrite.
   const winner = { id: "race_dup", name: "WINNER", shortName: "W", dob: "", age: 1, sex: "", avatar: "", color: "", stages: [] };
   const loser  = { id: "race_dup", name: "LOSER",  shortName: "L", dob: "", age: 2, sex: "", avatar: "", color: "", stages: [] };

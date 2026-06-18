@@ -209,10 +209,19 @@ router.put("/admin/roles/:id/sections", requireAuth("admin"), async (req, res) =
         });
       }
     }
+    // The optimistic-concurrency guard is MANDATORY: a missing/invalid version
+    // must hard-fail rather than silently bump unconditionally (which would
+    // re-open the exact lost-update this endpoint closes). A stale pre-deploy tab
+    // hits this and the admin just reloads.
+    if (!Number.isInteger(expectedVersion)) {
+      return res.status(400).json({
+        error: "Не передана версия роли. Обновите страницу и повторите.",
+        code: "ROLE_VERSION_REQUIRED",
+      });
+    }
     // Sections + permissions + the version bump are saved atomically (all-or-
     // nothing) so a partial failure can't leave half the checkboxes saved, and so
     // the optimistic-concurrency guard can't bump without the edits landing.
-    const expVer = Number.isInteger(expectedVersion) ? expectedVersion : null;
     const VERSION_CONFLICT = Symbol("role_version_conflict");
     let newVersion = null;
     let conflict = false;
@@ -220,7 +229,7 @@ router.put("/admin/roles/:id/sections", requireAuth("admin"), async (req, res) =
       await withTransaction(async (db) => {
         // Guarded bump first: if another admin saved since this tab loaded the
         // role (expectedVersion stale), abort the whole transaction → 409.
-        newVersion = await bumpRoleVersion(db, roleId, expVer);
+        newVersion = await bumpRoleVersion(db, roleId, expectedVersion);
         if (newVersion === null) { conflict = true; throw VERSION_CONFLICT; }
         if (sections && typeof sections === "object") {
           const existingSections = await getRoleSections(roleId, db);

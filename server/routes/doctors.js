@@ -71,8 +71,10 @@ const syncDoctorAssignmentsForAllClients = async (assignedByUserId) => {
   }
 
   // One batched name → linked user_id map (replaces the per-name getDoctorByName).
+  // ORDER BY id so a case-only-duplicate name resolves deterministically (last
+  // wins by id) rather than by arbitrary scan order.
   const doctorRows = await pool.query(
-    "SELECT LOWER(name) AS lname, user_id FROM doctors WHERE user_id IS NOT NULL"
+    "SELECT LOWER(name) AS lname, user_id FROM doctors WHERE user_id IS NOT NULL ORDER BY id"
   );
   const userIdByName = new Map(doctorRows.rows.map((r) => [r.lname, Number(r.user_id)]));
 

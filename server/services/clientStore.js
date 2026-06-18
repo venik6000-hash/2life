@@ -2,7 +2,8 @@ const {
   pool, withTransaction,
   deleteClient, getClientById,
   listDoctors,
-  getAssignmentsByUser, hasAllClientsAccess
+  getAssignmentsByUser, hasAllClientsAccess,
+  upsertClientAssignment
 } = require("./db");
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -326,7 +327,7 @@ const saveOneClient = async (client) => {
 // statement closes that window: the loser gets { created: false } and the route
 // answers 409 instead of clobbering. Returns { created: true } when THIS call
 // inserted the row.
-const createOneClientExclusive = async (client) => {
+const createOneClientExclusive = async (client, { assignToUserId = null } = {}) => {
   const clientId = toStr(client.id);
   return await withTransaction(async (pgClient) => {
     const claim = await pgClient.query(
@@ -341,6 +342,12 @@ const createOneClientExclusive = async (client) => {
     // fills stages/journal. Its leading clients-row upsert is a harmless no-op
     // UPDATE of the row we just inserted.
     await _writeOneClient(client, pgClient);
+    // Grant the creator access in the SAME transaction so a crash can't leave a
+    // committed client with no assignment (a non-admin creator unable to see the
+    // client they just created).
+    if (assignToUserId) {
+      await upsertClientAssignment(assignToUserId, clientId, assignToUserId, "manual", pgClient);
+    }
     return { created: true };
   });
 };
