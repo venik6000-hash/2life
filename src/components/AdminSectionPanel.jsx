@@ -6,6 +6,7 @@ import { setPendingPassword } from "../utils/cryptoSession";
 import { ANALYTICS_MARKER_DEFAULTS, ANALYTICS_MARKER_FALLBACK_DEFAULTS, normalizeAnalyticsKey } from "../data/analyticsData";
 import { parseDeficitPresetPayload, serializeDeficitPresetPayload } from "../utils/analyticsUtils";
 import { sortClientsByName } from "../utils/clientSort";
+import { subtractSavedRoleChanges } from "../utils/rolePermsPending";
 import AdminSectionHeader from "../components/AdminSectionHeader";
 import Button from "../components/Button";
 import Card from "../components/Card";
@@ -531,10 +532,12 @@ export default function AdminSection() {
   };
 
   const handleSaveRolePerms = async (roleId) => {
+    // Snapshot exactly what we send; clicks made DURING the await are preserved
+    // (subtractSavedRoleChanges drops only the saved fields, not the whole entry).
     const changes = pendingRoleChanges[roleId];
     if (!changes) return;
     const role = rolesData.find(r => r.id === roleId);
-    const payload = { ...changes };
+    const payload = { ...changes, expectedVersion: role?.version };
     if (changes.sections) {
       const mergedSections = {};
       for (const [secId, perms] of Object.entries(changes.sections)) {
@@ -548,11 +551,18 @@ export default function AdminSection() {
     }
     const r = await authFetch(`/api/admin/roles/${roleId}/sections`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
     const d = await readResponseSafe(r);
+    if (r.status === 409) {
+      // Another admin saved first. Reload the fresh version + base; keep the
+      // pending edits so the admin can re-apply them against the new state.
+      alert(d.error || "Роль изменена другим администратором. Страница обновлена — проверьте и сохраните снова.");
+      fetchRoles();
+      return;
+    }
     if (!r.ok) {
       alert(d.error || "Ошибка сохранения прав");
       return;
     }
-    setPendingRoleChanges(prev => { const n = { ...prev }; delete n[roleId]; return n; });
+    setPendingRoleChanges(prev => subtractSavedRoleChanges(prev, roleId, changes));
     fetchRoles();
   };
 

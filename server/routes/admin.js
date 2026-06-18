@@ -2,7 +2,7 @@ const express = require("express");
 const router = express.Router();
 const { requireAuth } = require("../middleware/auth");
 const { pool, withTransaction, getRoleById, countUsersByRole, insertRole, updateRoleDisplayName, deleteRole,
-        getRoleSections, upsertRoleSection,
+        getRoleSections, upsertRoleSection, bumpRoleVersion,
         upsertRolePermission,
         listRefData, insertRefData, updateRefData, deleteRefData, listDistinctAnalyticsMarkers,
         insertDoctor, listDoctors, listClientIdsByDoctorName, upsertClientAssignment, deleteDoctorClientAssignments } = require("../services/db");
@@ -52,7 +52,7 @@ const cleanupDoctorUserAssignments = async ({ doctorName, userId }) => {
 router.get("/admin/roles", requireAuth("admin"), async (req, res) => {
   try {
     const r = await pool.query(`
-      SELECT ro.id, ro.name, ro.display_name, ro.is_system, ro.is_client,
+      SELECT ro.id, ro.name, ro.display_name, ro.is_system, ro.is_client, ro.version,
              rs.section_id, rs.can_read, rs.can_write,
              rp.permission, rp.granted
       FROM roles ro
@@ -66,7 +66,7 @@ router.get("/admin/roles", requireAuth("admin"), async (req, res) => {
     for (const row of r.rows) {
       let role = byId.get(row.id);
       if (!role) {
-        role = { id: row.id, name: row.name, displayName: row.display_name, isSystem: row.is_system, isClient: !!row.is_client, sections: {}, permissions: {} };
+        role = { id: row.id, name: row.name, displayName: row.display_name, isSystem: row.is_system, isClient: !!row.is_client, version: row.version ?? 0, sections: {}, permissions: {} };
         byId.set(row.id, role);
       }
       if (row.section_id != null) role.sections[row.section_id] = { read: row.can_read, write: row.can_write };
@@ -135,7 +135,9 @@ router.patch("/admin/roles/:id", requireAuth("admin"), async (req, res) => {
         if (isClient) {
           revokedAllAccessUserIds = await stripClientRoleDangerousGrants(db, role);
         }
-        await db.query("UPDATE roles SET is_client = $1 WHERE id = $2", [isClient, roleId]);
+        // Bump version too: changing is_client changes the effective permissions,
+        // so a concurrent sections-save holding a stale version must 409.
+        await db.query("UPDATE roles SET is_client = $1, version = version + 1 WHERE id = $2", [isClient, roleId]);
       });
       invalidateRoleFlagsCache();
       invalidatePermissionsCache();
@@ -188,7 +190,7 @@ router.put("/admin/roles/:id/sections", requireAuth("admin"), async (req, res) =
     const roleId = Number(req.params.id);
     const role = await getRoleById(roleId);
     if (!role) return res.status(404).json({ error: "Роль не найдена" });
-    const { sections, permissions } = req.body || {};
+    const { sections, permissions, expectedVersion } = req.body || {};
     if (role.is_client) {
       // Hidden in the UI; anything arriving here is a stale tab or a crafted
       // request — refuse rather than silently drop.
@@ -207,33 +209,54 @@ router.put("/admin/roles/:id/sections", requireAuth("admin"), async (req, res) =
         });
       }
     }
-    // Sections + permissions are saved atomically (all-or-nothing) so a partial
-    // failure can't leave half the checkboxes saved and half not.
-    await withTransaction(async (db) => {
-      if (sections && typeof sections === "object") {
-        const existingSections = await getRoleSections(roleId, db);
-        const existingById = {};
-        for (const row of existingSections) existingById[row.section_id] = row;
-        for (const [secId, perms] of Object.entries(sections)) {
-          if (!perms || typeof perms !== "object") continue;
-          const prev = existingById[secId];
-          let canRead = perms.read === undefined ? !!prev?.can_read : !!perms.read;
-          const canWrite = perms.write === undefined ? !!prev?.can_write : !!perms.write;
-          // Write implies read — never persist write=true with read=false.
-          if (canWrite) canRead = true;
-          await upsertRoleSection(roleId, secId, canRead, canWrite, db);
+    // Sections + permissions + the version bump are saved atomically (all-or-
+    // nothing) so a partial failure can't leave half the checkboxes saved, and so
+    // the optimistic-concurrency guard can't bump without the edits landing.
+    const expVer = Number.isInteger(expectedVersion) ? expectedVersion : null;
+    const VERSION_CONFLICT = Symbol("role_version_conflict");
+    let newVersion = null;
+    let conflict = false;
+    try {
+      await withTransaction(async (db) => {
+        // Guarded bump first: if another admin saved since this tab loaded the
+        // role (expectedVersion stale), abort the whole transaction → 409.
+        newVersion = await bumpRoleVersion(db, roleId, expVer);
+        if (newVersion === null) { conflict = true; throw VERSION_CONFLICT; }
+        if (sections && typeof sections === "object") {
+          const existingSections = await getRoleSections(roleId, db);
+          const existingById = {};
+          for (const row of existingSections) existingById[row.section_id] = row;
+          for (const [secId, perms] of Object.entries(sections)) {
+            if (!perms || typeof perms !== "object") continue;
+            const prev = existingById[secId];
+            let canRead = perms.read === undefined ? !!prev?.can_read : !!perms.read;
+            const canWrite = perms.write === undefined ? !!prev?.can_write : !!perms.write;
+            // Write implies read — never persist write=true with read=false.
+            if (canWrite) canRead = true;
+            await upsertRoleSection(roleId, secId, canRead, canWrite, db);
+          }
         }
-      }
-      if (permissions) {
-        for (const [perm, granted] of Object.entries(permissions)) {
-          await upsertRolePermission(roleId, perm, granted ? true : false, db);
+        if (permissions) {
+          for (const [perm, granted] of Object.entries(permissions)) {
+            await upsertRolePermission(roleId, perm, granted ? true : false, db);
+          }
         }
-      }
-    });
+      });
+    } catch (e) {
+      if (e !== VERSION_CONFLICT) throw e;
+    }
+    if (conflict) {
+      const cur = await getRoleById(roleId);
+      return res.status(409).json({
+        error: "Роль изменена другим администратором. Обновите страницу и повторите.",
+        code: "ROLE_VERSION_CONFLICT",
+        currentVersion: cur?.version ?? null,
+      });
+    }
     invalidatePermissionsCache();
     // Live revocation: every open tab of users with this role re-reads perms.
     try { sseBroadcast("permissions-updated", { roleName: role.name }); } catch (_) {}
-    res.json({ ok: true });
+    res.json({ ok: true, version: newVersion });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

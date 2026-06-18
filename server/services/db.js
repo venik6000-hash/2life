@@ -529,6 +529,14 @@ const initSchema = async () => {
   // Idempotent catalog no-op after the first boot, so it's safe outside runOnce.
   await pool.query(`ALTER TABLE roles ADD COLUMN IF NOT EXISTS is_client BOOLEAN NOT NULL DEFAULT false`);
 
+  // Optimistic-concurrency counter for role permission edits. Bumped on every
+  // sections/permissions save and on is_client toggle so two admins editing the
+  // same role can't silently overwrite each other (the second save 409s).
+  // NOTE: this is roles.version — deliberately NOT users.token_version. Role/perm
+  // changes must NOT bump token_version (HTTP/WS re-read the role live; the SSE
+  // sweep compares it) — bumping it would break that live-reload revocation path.
+  await pool.query(`ALTER TABLE roles ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 0`);
+
   // One-time backfill: the legacy client roles were identified by NAME
   // ('viewer'/'client'); mark them with the explicit flag. Behind runOnce so an
   // admin can later untick the flag without it being re-applied on every boot.
@@ -1128,6 +1136,26 @@ const updateRoleDisplayName = async (displayName, id) => {
 
 const updateRoleIsClient = async (isClient, id) => {
   await pool.query("UPDATE roles SET is_client = $1 WHERE id = $2", [!!isClient, id]);
+};
+
+// Optimistic-concurrency bump for role permission edits. Returns the NEW version,
+// or null when expectedVersion is given and no longer matches (another admin
+// saved first) — the caller turns that into a 409. With expectedVersion null it
+// bumps unconditionally. Run inside the caller's transaction so the bump and the
+// section/permission writes commit (or roll back) together.
+const bumpRoleVersion = async (db, roleId, expectedVersion = null) => {
+  if (Number.isInteger(expectedVersion)) {
+    const r = await db.query(
+      "UPDATE roles SET version = version + 1 WHERE id = $1 AND version = $2 RETURNING version",
+      [roleId, expectedVersion]
+    );
+    return r.rows.length ? r.rows[0].version : null;
+  }
+  const r = await db.query(
+    "UPDATE roles SET version = version + 1 WHERE id = $1 RETURNING version",
+    [roleId]
+  );
+  return r.rows[0]?.version ?? null;
 };
 
 const deleteRole = async (id) => {
@@ -2172,7 +2200,7 @@ module.exports = {
   // doctors
   insertDoctor, listDoctors, getDoctorByName,
   // roles
-  getRoleByName, getRoleById, countUsersByRole, insertRole, updateRoleDisplayName, updateRoleIsClient, deleteRole,
+  getRoleByName, getRoleById, countUsersByRole, insertRole, updateRoleDisplayName, updateRoleIsClient, bumpRoleVersion, deleteRole,
   // role sections
   getRoleSections, upsertRoleSection,
   // role permissions

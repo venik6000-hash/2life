@@ -42,7 +42,8 @@
     "verify:whoop-static": "node scripts/verifyWhoopStatic.mjs",
     "build": "vite build",
     "preview": "vite preview",
-    "verify:admin-empty-db": "node scripts/verifyAdminEmptyDbAccess.mjs"
+    "verify:admin-empty-db": "node scripts/verifyAdminEmptyDbAccess.mjs",
+    "verify:role-perms-pending": "node scripts/verifyRolePermsPending.mjs"
   },
   "dependencies": {
     "react": "^18.2.0",
