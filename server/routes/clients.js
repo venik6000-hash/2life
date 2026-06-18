@@ -7,9 +7,22 @@ const { createBackupSnapshot } = require("../services/backup");
 const { requireAuth, requirePermission, requireSectionWrite, requireAnySectionRead, requireAnySectionWrite, hasSectionWrite } = require("../middleware/auth");
 const { getPermissionsForRole } = require("../services/permissions");
 const { pool, withTransaction, upsertClientAssignment, deleteClientAssignment, getClientAssignment, getAssignmentsByClient, hasAllClientsAccess, replaceDoctorClientAssignments } = require("../services/db");
-const { syncUserChatAccessByClientPermissions } = require("../services/chatAccessSync");
+const { syncUserChatAccessByClientPermissions, getUsersWithClientAccess } = require("../services/chatAccessSync");
 const { notifyUserChatAccessChanges } = require("../services/messengerAccessNotifications");
-const { addConnection, removeConnection, broadcast } = require("../services/sse");
+const { addConnection, removeConnection, broadcast, broadcastToClientWatchers } = require("../services/sse");
+
+// Deliver a "client-updated" SSE event only to streams whose user can access the
+// client (admin / all_clients_access / explicit assignment — same predicate as
+// canAccessClient). Fire-and-forget so it never delays the HTTP response.
+const broadcastClientUpdate = (clientId, res) => {
+  broadcastToClientWatchers(
+    "client-updated",
+    clientId,
+    { clientId },
+    (cid) => getUsersWithClientAccess(pool, cid),
+    res
+  ).catch(() => {});
+};
 const { canAccessClient } = require("../services/clientAccess");
 const {
   CLIENT_OVERVIEW_FIELD_SET,
@@ -161,7 +174,7 @@ router.put("/clients/:clientId", requireAuth(), requireAnySectionWrite(), async 
     const actionEntries = buildActionLogs(prev ? [prev] : [], [client], req);
     await appendActivityLog(actionEntries);
     await autoAssignDoctors(client.id, req.user.id, client.stages);
-    broadcast("client-updated", { clientId: req.params.clientId }, res);
+    broadcastClientUpdate(req.params.clientId, res);
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -216,7 +229,7 @@ router.patch("/clients/:clientId", requireAuth(), requireAnySectionWrite(), asyn
     const actionEntries = buildActionLogs([result.prev], [result.next], req);
     await appendActivityLog(actionEntries);
     await autoAssignDoctors(req.params.clientId, req.user.id, result.next?.stages);
-    broadcast("client-updated", { clientId: req.params.clientId }, res);
+    broadcastClientUpdate(req.params.clientId, res);
     res.json({ ok: true, applied: ops.length, loggedActions: actionEntries.length });
   } catch (e) {
     const msg = String(e?.message || "Ошибка патча");
@@ -256,7 +269,7 @@ router.put("/clients/:clientId/analytics", requireAuth(), requireSectionWrite("a
       return res.status(400).json({ error: "categories обязательны" });
     }
     await saveAnalyticsForClient(req.params.clientId, categories);
-    broadcast("client-updated", { clientId: req.params.clientId }, res);
+    broadcastClientUpdate(req.params.clientId, res);
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: e.message });

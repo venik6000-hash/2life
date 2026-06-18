@@ -447,4 +447,5 @@ module.exports = {
   syncUserChatAccessByClientPermissions,
   syncChatParticipantsByClientAccess,
   userHasClientAccess,
+  getUsersWithClientAccess,
 };

@@ -46,6 +46,42 @@ const broadcast = (event, data, excludeRes = null) => {
   }
 };
 
+// Like broadcast(), but for events scoped to a single client: only streams whose
+// authenticated user may SEE that client receive it. Without this, a
+// "client-updated" event (carrying the clientId) fans out to every staff stream
+// — including users with no access to that client — leaking client-id existence
+// and edit-activity timing. Mirrors the iter3 messenger.read delivery filter.
+//
+// `resolveAllowedUserIds(clientId)` is injected (returns an iterable of allowed
+// user ids) so this module keeps its tiny dependency surface; the caller binds
+// it to getUsersWithClientAccess(pool, …). Fails CLOSED: if access can't be
+// resolved, nothing is sent rather than risking a leak.
+const broadcastToClientWatchers = async (event, clientId, data, resolveAllowedUserIds, excludeRes = null) => {
+  let allowed;
+  try {
+    const ids = await resolveAllowedUserIds(clientId);
+    allowed = new Set(Array.from(ids || []).map(Number));
+  } catch (_) {
+    return; // fail closed — never leak a scoped event on a resolver error
+  }
+  const message = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+  for (const res of connections) {
+    if (res === excludeRes) continue;
+    const auth = res.__sseAuth;
+    const jti = auth?.jti;
+    // Same instant-revocation guard as broadcast().
+    if (jti && isBlacklisted(jti)) { dropConnection(res); continue; }
+    // Unauthenticated/legacy streams (no userId) are in no allow-set, so they
+    // never receive client-scoped events — the safe default.
+    if (!auth || !allowed.has(Number(auth.userId))) continue;
+    try {
+      res.write(message);
+    } catch (_) {
+      connections.delete(res);
+    }
+  }
+};
+
 // Close every stream owned by a user — role change, password reset, deactivation,
 // deletion. The matching JWTs are already invalidated (token_version bump); this
 // tears down the open stream so it cannot keep emitting until the tab is closed.
@@ -125,6 +161,7 @@ module.exports = {
   addConnection,
   removeConnection,
   broadcast,
+  broadcastToClientWatchers,
   closeConnectionsForUser,
   closeConnectionsForJti,
   sweepRevokedConnections,
